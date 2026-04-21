@@ -159,7 +159,7 @@ func extractGenDecl(fset *token.FileSet, file *ast.File, pkg string, content []b
 				doc = groupDoc
 			}
 			for _, nm := range s.Names {
-				sig := string(d.Tok) + " " + nm.Name + typeText
+				sig := d.Tok.String() + " " + nm.Name + typeText
 				out = append(out, parser.Symbol{
 					Name:       nm.Name,
 					Qualified:  pkg + "." + nm.Name,

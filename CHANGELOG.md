@@ -6,7 +6,7 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [v1.0.0] — 2026-04-21
+## [v1.0.0] — 2026-04-22
 
 First stable release. Nine MCP tools, three transports, three languages.
 

@@ -90,6 +90,7 @@ func Default() Config {
 			"**/vendor/**",
 			"**/dist/**",
 			"**/build/**",
+			"**/testdata/**",
 			"**/*.generated.*",
 			"**/*.min.js",
 		},
