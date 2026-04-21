@@ -26,6 +26,7 @@ type Daemon struct {
 	Embedder embed.Embedder // required for search_semantic; may be Noop
 	Watcher  *watch.Watcher
 	Socket   string
+	RepoRoot string // absolute path; lexical search needs it to open files
 	Logger   Logger
 }
 
@@ -125,6 +126,12 @@ func (d *Daemon) handleConn(ctx context.Context, conn net.Conn) {
 	writeOK(conn, result)
 }
 
+// HandleIPC is the daemon dispatcher exposed to other transports (HTTP).
+// Keeps one source of truth for method routing.
+func (d *Daemon) HandleIPC(ctx context.Context, req ipc.Request) (any, error) {
+	return d.dispatch(ctx, req)
+}
+
 func (d *Daemon) dispatch(ctx context.Context, req ipc.Request) (any, error) {
 	switch req.Method {
 	case ipc.MethodPing:
@@ -171,6 +178,31 @@ func (d *Daemon) dispatch(ctx context.Context, req ipc.Request) (any, error) {
 		}
 		s := &query.Searcher{Reader: d.Reader, Embedder: d.Embedder}
 		return s.SearchSemantic(ctx, p.Query, p.K, p.Kind, p.PathContains)
+
+	case ipc.MethodSearchLexical:
+		var p ipc.SearchLexicalParams
+		if err := unmarshal(req.Params, &p); err != nil {
+			return nil, err
+		}
+		return d.Reader.SearchLexical(ctx, p.Pattern, p.PathContains, p.K, d.RepoRoot)
+
+	case ipc.MethodGetFileSummary:
+		var p ipc.GetFileSummaryParams
+		if err := unmarshal(req.Params, &p); err != nil {
+			return nil, err
+		}
+		return d.Reader.GetFileSummary(ctx, p.Path)
+
+	case ipc.MethodGetNeighborhood:
+		var p ipc.GetNeighborhoodParams
+		if err := unmarshal(req.Params, &p); err != nil {
+			return nil, err
+		}
+		dir := query.Direction(p.Direction)
+		if dir == "" {
+			dir = query.DirBoth
+		}
+		return d.Reader.GetNeighborhood(ctx, p.Target, p.Depth, dir)
 
 	default:
 		return nil, fmt.Errorf("unknown method %q", req.Method)

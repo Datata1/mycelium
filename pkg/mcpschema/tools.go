@@ -3,11 +3,10 @@ package mcpschema
 // ProtocolVersion is the MCP spec version we implement. Update when bumping.
 const ProtocolVersion = "2024-11-05"
 
-// ServerName and ServerVersion identify the binary to MCP clients.
-const (
-	ServerName    = "mycelium"
-	ServerVersion = "0.3.0-dev"
-)
+// ServerName identifies the binary to MCP clients. Version is injected at
+// build time via cmd/myco/main.go and passed in by the caller — keeping it
+// here would require ldflags on this package too.
+const ServerName = "mycelium"
 
 // Tool is the subset of the MCP tool-definition shape we emit. MCP clients
 // (Claude Code, Cursor) use this for tool discovery + input validation.
@@ -94,6 +93,64 @@ func Tools() []Tool {
 					},
 				},
 				"required": []string{"path"},
+			},
+		},
+		{
+			Name:        "search_lexical",
+			Description: "Ripgrep-style regex/substring search over indexed file content. Use for exact string matches ('error: cannot %s'), log messages, or anywhere semantic search would miss literals. Faster than semantic search and needs no embedder.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"pattern": map[string]any{
+						"type":        "string",
+						"description": "Go regexp. Plain-text searches should be escaped with regexp.QuoteMeta on the client, or passed as-is if the string has no regex meta-characters.",
+					},
+					"path_contains": map[string]any{
+						"type":        "string",
+						"description": "Restrict to files whose path contains this substring.",
+					},
+					"k": map[string]any{
+						"type":        "integer",
+						"description": "Max results (default 50).",
+					},
+				},
+				"required": []string{"pattern"},
+			},
+		},
+		{
+			Name:        "get_file_summary",
+			Description: "Structural summary of one file: exports, imports, LOC, symbol counts by kind. Fast orientation tool — read this before reading the file itself.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path": map[string]any{
+						"type":        "string",
+						"description": "Repo-relative path.",
+					},
+				},
+				"required": []string{"path"},
+			},
+		},
+		{
+			Name:        "get_neighborhood",
+			Description: "Local call graph around a symbol. Direction 'out' returns callees (what does this function call?), 'in' returns callers (who calls this?), 'both' unions both. Depth defaults to 2; clamped to 5.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"target": map[string]any{
+						"type":        "string",
+						"description": "Qualified name (preferred) or short name of the seed symbol.",
+					},
+					"depth": map[string]any{
+						"type":        "integer",
+						"description": "Traversal depth (default 2, max 5).",
+					},
+					"direction": map[string]any{
+						"type":        "string",
+						"description": "out | in | both (default both).",
+					},
+				},
+				"required": []string{"target"},
 			},
 		},
 		{

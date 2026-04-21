@@ -16,9 +16,10 @@ import (
 // call against the running daemon. This keeps the MCP process cheap and
 // short-lived (Claude Code spawns one per session).
 type Server struct {
-	In     io.Reader
-	Out    io.Writer
-	Client *ipc.Client
+	In      io.Reader
+	Out     io.Writer
+	Client  *ipc.Client
+	Version string // injected from cmd/myco main.version
 }
 
 // Run reads newline-delimited JSON-RPC from In, dispatches each request, and
@@ -56,6 +57,10 @@ func (s *Server) handle(ctx context.Context, enc *json.Encoder, req jsonrpcReque
 	notification := req.ID == nil
 	switch req.Method {
 	case "initialize":
+		v := s.Version
+		if v == "" {
+			v = "dev"
+		}
 		writeResult(enc, req.ID, map[string]any{
 			"protocolVersion": mcpschema.ProtocolVersion,
 			"capabilities": map[string]any{
@@ -63,7 +68,7 @@ func (s *Server) handle(ctx context.Context, enc *json.Encoder, req jsonrpcReque
 			},
 			"serverInfo": map[string]any{
 				"name":    mcpschema.ServerName,
-				"version": mcpschema.ServerVersion,
+				"version": v,
 			},
 		})
 	case "initialized", "notifications/initialized":
@@ -154,6 +159,24 @@ func mapToolToIPC(tool string, rawArgs json.RawMessage) (string, any, error) {
 			return "", nil, err
 		}
 		return ipc.MethodSearchSemantic, p, nil
+	case "search_lexical":
+		var p ipc.SearchLexicalParams
+		if err := unmarshalArgs(rawArgs, &p); err != nil {
+			return "", nil, err
+		}
+		return ipc.MethodSearchLexical, p, nil
+	case "get_file_summary":
+		var p ipc.GetFileSummaryParams
+		if err := unmarshalArgs(rawArgs, &p); err != nil {
+			return "", nil, err
+		}
+		return ipc.MethodGetFileSummary, p, nil
+	case "get_neighborhood":
+		var p ipc.GetNeighborhoodParams
+		if err := unmarshalArgs(rawArgs, &p); err != nil {
+			return "", nil, err
+		}
+		return ipc.MethodGetNeighborhood, p, nil
 	default:
 		return "", nil, fmt.Errorf("unknown tool: %s", tool)
 	}

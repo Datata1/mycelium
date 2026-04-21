@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
+	"sync"
 	"time"
 
 	"github.com/jdwiederstein/mycelium/internal/chunker"
@@ -53,6 +55,10 @@ type Report struct {
 
 // RunOnce walks, parses, and indexes every file the walker yields.
 // Errors per file are collected but do not abort the run.
+//
+// Parsing is CPU-bound (tree-sitter in particular), so we fan it across a
+// worker pool. SQLite writes serialize through a single writer goroutine;
+// one transaction per file keeps error isolation on partial failures.
 func (p *Pipeline) RunOnce(ctx context.Context) (Report, error) {
 	start := time.Now()
 	var rep Report
@@ -63,18 +69,94 @@ func (p *Pipeline) RunOnce(ctx context.Context) (Report, error) {
 	}
 	rep.FilesScanned = len(files)
 
-	for _, f := range files {
-		if ctx.Err() != nil {
-			return rep, ctx.Err()
+	// Small repos don't benefit from parallelism: the goroutine+channel
+	// overhead outweighs the gain when per-file parse time is sub-ms (pure
+	// Go via stdlib go/ast) and SQLite serializes writes. Kick in parallel
+	// only once there's enough work for it to pay off.
+	workers := 1
+	if len(files) >= 200 {
+		workers = runtime.GOMAXPROCS(0)
+		if workers > 8 {
+			workers = 8 // diminishing returns past 8 for most repos
 		}
-		prs := p.Registry.ForPath(f.RelPath)
-		if prs == nil {
+	}
+	if workers < 1 {
+		workers = 1
+	}
+
+	type job struct {
+		File   repo.File
+		Parser parser.Parser
+	}
+	type parsed struct {
+		File   repo.File
+		Parser parser.Parser
+		Result parser.ParseResult
+		Source []byte
+		Err    error
+	}
+
+	jobs := make(chan job, workers*2)
+	results := make(chan parsed, workers*2)
+
+	// Feeder: filter out unsupported files and push the rest to workers.
+	go func() {
+		defer close(jobs)
+		for _, f := range files {
+			prs := p.Registry.ForPath(f.RelPath)
+			if prs == nil {
+				results <- parsed{File: f, Err: errSkipped}
+				continue
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case jobs <- job{File: f, Parser: prs}:
+			}
+		}
+	}()
+
+	// Parser workers.
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobs {
+				content, err := os.ReadFile(j.File.AbsPath)
+				if err != nil {
+					results <- parsed{File: j.File, Parser: j.Parser, Err: err}
+					continue
+				}
+				res, err := j.Parser.Parse(ctx, j.File.RelPath, content)
+				results <- parsed{
+					File:   j.File,
+					Parser: j.Parser,
+					Result: res,
+					Source: content,
+					Err:    err,
+				}
+			}
+		}()
+	}
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Writer: serial DB writes, one transaction per file.
+	for r := range results {
+		if r.Err == errSkipped {
 			rep.FilesSkipped++
 			continue
 		}
-		changed, syms, refs, err := p.processFile(ctx, prs, f)
+		if r.Err != nil {
+			rep.Errors = append(rep.Errors, fmt.Errorf("%s: %w", r.File.RelPath, r.Err))
+			continue
+		}
+		changed, syms, refs, err := p.writeParsed(ctx, r.File, r.Parser, r.Result, r.Source)
 		if err != nil {
-			rep.Errors = append(rep.Errors, fmt.Errorf("%s: %w", f.RelPath, err))
+			rep.Errors = append(rep.Errors, fmt.Errorf("%s: %w", r.File.RelPath, err))
 			continue
 		}
 		if changed {
@@ -86,6 +168,10 @@ func (p *Pipeline) RunOnce(ctx context.Context) (Report, error) {
 	rep.Duration = time.Since(start)
 	return rep, nil
 }
+
+// errSkipped is an internal signal that a file had no parser; it never
+// leaves the RunOnce goroutine tree.
+var errSkipped = fmt.Errorf("skipped (no parser)")
 
 // HandleChange processes a single file change from the watcher. The relative
 // path is looked up against the registered parsers; if none supports it, the
@@ -122,7 +208,12 @@ func (p *Pipeline) processFile(ctx context.Context, prs parser.Parser, f repo.Fi
 	if err != nil {
 		return false, 0, 0, fmt.Errorf("parse: %w", err)
 	}
+	return p.writeParsed(ctx, f, prs, result, content)
+}
 
+// writeParsed is the DB-writing half of processFile, used both by single-file
+// update paths (watcher, hook) and the parallel RunOnce loop.
+func (p *Pipeline) writeParsed(ctx context.Context, f repo.File, prs parser.Parser, result parser.ParseResult, content []byte) (bool, int, int, error) {
 	db := p.Index.DB()
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {

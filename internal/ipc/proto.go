@@ -19,6 +19,9 @@ const (
 	MethodGetReferences  = "get_references"
 	MethodListFiles      = "list_files"
 	MethodGetFileOutline = "get_file_outline"
+	MethodGetFileSummary = "get_file_summary"
+	MethodGetNeighborhood = "get_neighborhood"
+	MethodSearchLexical  = "search_lexical"
 	MethodStats          = "stats"
 	MethodReindex        = "reindex"
 	MethodSearchSemantic = "search_semantic"
@@ -67,4 +70,20 @@ type SearchSemanticParams struct {
 	K            int    `json:"k,omitempty"`
 	Kind         string `json:"kind,omitempty"`
 	PathContains string `json:"path_contains,omitempty"`
+}
+
+type SearchLexicalParams struct {
+	Pattern      string `json:"pattern"`
+	PathContains string `json:"path_contains,omitempty"`
+	K            int    `json:"k,omitempty"`
+}
+
+type GetFileSummaryParams struct {
+	Path string `json:"path"`
+}
+
+type GetNeighborhoodParams struct {
+	Target    string `json:"target"`
+	Depth     int    `json:"depth,omitempty"`
+	Direction string `json:"direction,omitempty"` // out | in | both
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/jdwiederstein/mycelium/internal/daemon"
 	"github.com/jdwiederstein/mycelium/internal/embed"
 	"github.com/jdwiederstein/mycelium/internal/hook"
+	mychttp "github.com/jdwiederstein/mycelium/internal/http"
 	"github.com/jdwiederstein/mycelium/internal/index"
 	"github.com/jdwiederstein/mycelium/internal/ipc"
 	"github.com/jdwiederstein/mycelium/internal/mcp"
@@ -26,7 +27,9 @@ import (
 	"github.com/jdwiederstein/mycelium/internal/watch"
 )
 
-var version = "0.1.0-dev"
+// version is set at build time via -ldflags "-X main.version=v1.0.0".
+// Falls back to "dev" when built without ldflags (go run, plain go build).
+var version = "dev"
 
 func main() {
 	root := &cobra.Command{
@@ -189,11 +192,49 @@ func newQueryCmd() *cobra.Command {
 		},
 	}
 
+	grepCmd := &cobra.Command{
+		Use:   "grep <pattern>",
+		Short: "Ripgrep-style regex search across indexed files",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			k, _ := cmd.Flags().GetInt("k")
+			path, _ := cmd.Flags().GetString("path")
+			return runQueryLexical(args[0], path, k)
+		},
+	}
+	grepCmd.Flags().Int("k", 50, "max results")
+	grepCmd.Flags().String("path", "", "filter by path substring")
+
+	summaryCmd := &cobra.Command{
+		Use:   "summary <path>",
+		Short: "Structural summary of a single file",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runQuerySummary(args[0])
+		},
+	}
+
+	neighborCmd := &cobra.Command{
+		Use:   "neighbors <symbol>",
+		Short: "Local call graph around a symbol",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			depth, _ := cmd.Flags().GetInt("depth")
+			dir, _ := cmd.Flags().GetString("direction")
+			return runQueryNeighborhood(args[0], depth, dir)
+		},
+	}
+	neighborCmd.Flags().Int("depth", 2, "traversal depth (max 5)")
+	neighborCmd.Flags().String("direction", "both", "out | in | both")
+
 	cmd.AddCommand(
 		findCmd,
 		refsCmd,
 		filesCmd,
 		outlineCmd,
+		grepCmd,
+		summaryCmd,
+		neighborCmd,
 		func() *cobra.Command {
 			c := &cobra.Command{
 				Use:   "search <text>",
@@ -328,6 +369,115 @@ func runQueryFiles(nameContains, language string, limit int) error {
 	}
 	for _, h := range hits {
 		fmt.Printf("%s  [%s]  %d symbols  %d bytes\n", h.Path, h.Language, h.SymbolCount, h.SizeBytes)
+	}
+	return nil
+}
+
+func runQueryLexical(pattern, pathContains string, k int) error {
+	ctx := context.Background()
+	rc, err := loadRepoCtx()
+	if err != nil {
+		return err
+	}
+	var hits []query.LexicalHit
+	if c, ok := daemonClient(rc); ok {
+		if err := c.Call(ipc.MethodSearchLexical, ipc.SearchLexicalParams{Pattern: pattern, PathContains: pathContains, K: k}, &hits); err != nil {
+			return err
+		}
+	} else {
+		ix, err := index.Open(rc.Root + "/" + rc.Cfg.Index.Path)
+		if err != nil {
+			return err
+		}
+		defer ix.Close()
+		r := query.NewReader(ix.DB())
+		hits, err = r.SearchLexical(ctx, pattern, pathContains, k, rc.Root)
+		if err != nil {
+			return err
+		}
+	}
+	for _, h := range hits {
+		fmt.Printf("%s:%d  %s\n", h.Path, h.Line, truncate(h.Snippet, 160))
+	}
+	return nil
+}
+
+func runQuerySummary(path string) error {
+	ctx := context.Background()
+	rc, err := loadRepoCtx()
+	if err != nil {
+		return err
+	}
+	var s query.FileSummary
+	if c, ok := daemonClient(rc); ok {
+		if err := c.Call(ipc.MethodGetFileSummary, ipc.GetFileSummaryParams{Path: path}, &s); err != nil {
+			return err
+		}
+	} else {
+		ix, err := index.Open(rc.Root + "/" + rc.Cfg.Index.Path)
+		if err != nil {
+			return err
+		}
+		defer ix.Close()
+		r := query.NewReader(ix.DB())
+		s, err = r.GetFileSummary(ctx, path)
+		if err != nil {
+			return err
+		}
+	}
+	fmt.Printf("%s  [%s]  LOC=%d  symbols=%d\n", s.Path, s.Language, s.LOC, s.SymbolCount)
+	if len(s.ByKind) > 0 {
+		fmt.Print("  by kind:")
+		for k, n := range s.ByKind {
+			fmt.Printf(" %s=%d", k, n)
+		}
+		fmt.Println()
+	}
+	if len(s.Exports) > 0 {
+		fmt.Println("  exports:")
+		for _, e := range s.Exports {
+			fmt.Printf("    %s:%d  [%s]  %s\n", s.Path, e.StartLine, e.Kind, e.Qualified)
+		}
+	}
+	if len(s.Imports) > 0 {
+		fmt.Println("  imports:")
+		for _, im := range s.Imports {
+			fmt.Printf("    %s\n", im)
+		}
+	}
+	return nil
+}
+
+func runQueryNeighborhood(target string, depth int, direction string) error {
+	ctx := context.Background()
+	rc, err := loadRepoCtx()
+	if err != nil {
+		return err
+	}
+	var nb query.Neighborhood
+	if c, ok := daemonClient(rc); ok {
+		if err := c.Call(ipc.MethodGetNeighborhood, ipc.GetNeighborhoodParams{Target: target, Depth: depth, Direction: direction}, &nb); err != nil {
+			return err
+		}
+	} else {
+		ix, err := index.Open(rc.Root + "/" + rc.Cfg.Index.Path)
+		if err != nil {
+			return err
+		}
+		defer ix.Close()
+		r := query.NewReader(ix.DB())
+		nb, err = r.GetNeighborhood(ctx, target, depth, query.Direction(direction))
+		if err != nil {
+			return err
+		}
+	}
+	fmt.Printf("seed: %s  (%s:%d)\n", nb.Seed.Qualified, nb.Seed.Path, nb.Seed.StartLine)
+	for _, e := range nb.Edges {
+		arrow := "->"
+		if e.Direction == "in" {
+			arrow = "<-"
+		}
+		fmt.Printf("  d=%d  %s  %s  %s  (%s:%d)\n", e.Depth, e.FromName, arrow, e.ToName, e.SrcPath, e.SrcLine)
 	}
 	return nil
 }
@@ -668,7 +818,24 @@ func runDaemon(ctx context.Context) error {
 		Embedder: emb,
 		Watcher:  wat,
 		Socket:   rc.Root + "/" + rc.Cfg.Daemon.Socket,
+		RepoRoot: rc.Root,
 	}
+
+	// Start the HTTP transport alongside the unix socket. Disabled when
+	// config.daemon.http_port = 0.
+	if rc.Cfg.Daemon.HTTPPort > 0 {
+		httpSrv := &mychttp.Server{
+			Port:       rc.Cfg.Daemon.HTTPPort,
+			Dispatcher: d,
+			Logger:     func(f string, a ...any) { fmt.Fprintf(os.Stderr, "[http] "+f+"\n", a...) },
+		}
+		if err := httpSrv.Start(ctx); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "[daemon] http api on 127.0.0.1:%d\n", rc.Cfg.Daemon.HTTPPort)
+		defer httpSrv.Close()
+	}
+
 	return d.Run(ctx)
 }
 
@@ -687,7 +854,7 @@ func newMCPCmd() *cobra.Command {
 			if !client.IsReachable() {
 				return fmt.Errorf("daemon is not running at %s — start it with `myco daemon &`", rc.Root+"/"+rc.Cfg.Daemon.Socket)
 			}
-			srv := &mcp.Server{In: os.Stdin, Out: os.Stdout, Client: client}
+			srv := &mcp.Server{In: os.Stdin, Out: os.Stdout, Client: client, Version: version}
 			return srv.Run(ctx)
 		},
 	}

@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Builds and tests require cgo (tree-sitter + mattn/go-sqlite3) and the
+# sqlite_fts5 build tag. Linux and macOS are the two realistic dev targets.
+# Windows is exercised only by the release workflow.
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+
+      - name: go vet
+        env:
+          CGO_ENABLED: "1"
+        run: go vet -tags sqlite_fts5 ./...
+
+      - name: build
+        env:
+          CGO_ENABLED: "1"
+        run: go build -tags sqlite_fts5 ./...
+
+      - name: test
+        env:
+          CGO_ENABLED: "1"
+        run: go test -tags sqlite_fts5 -race -count=1 ./...

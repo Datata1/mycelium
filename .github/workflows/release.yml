@@ -1,0 +1,132 @@
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+# Cross-compiled cgo is painful. We run each target on a native runner so the
+# C toolchain and the tree-sitter grammars link cleanly:
+#
+#   linux/amd64 and linux/arm64 -> ubuntu-latest + cross toolchain
+#   darwin/amd64 and darwin/arm64 -> macos-latest (native arm64 runner)
+#   windows/amd64 -> windows-latest with MSYS2 gcc
+#
+# Linux arm64 cross-compile uses the aarch64-linux-gnu toolchain. A musl
+# static binary target can be added later if we find glibc portability
+# issues with release tarballs.
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            cc: gcc
+            suffix: linux-amd64
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+            cc: aarch64-linux-gnu-gcc
+            apt_packages: gcc-aarch64-linux-gnu
+            suffix: linux-arm64
+          - os: macos-latest
+            goos: darwin
+            goarch: amd64
+            cc: clang
+            suffix: darwin-amd64
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            cc: clang
+            suffix: darwin-arm64
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            cc: gcc
+            suffix: windows-amd64
+            ext: .exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+
+      - name: install cross toolchain (linux/arm64)
+        if: matrix.apt_packages != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.apt_packages }}
+
+      - name: setup msys2 (windows)
+        if: matrix.os == 'windows-latest'
+        uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          install: mingw-w64-x86_64-gcc
+
+      - name: build
+        env:
+          CGO_ENABLED: "1"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CC: ${{ matrix.cc }}
+        shell: bash
+        run: |
+          mkdir -p dist
+          OUT="dist/myco-${{ matrix.suffix }}${{ matrix.ext }}"
+          VERSION="${GITHUB_REF#refs/tags/}"
+          go build \
+            -tags sqlite_fts5 \
+            -trimpath \
+            -ldflags "-s -w -X main.version=${VERSION}" \
+            -o "$OUT" \
+            ./cmd/myco
+
+      - name: archive (unix)
+        if: matrix.os != 'windows-latest'
+        shell: bash
+        run: |
+          cd dist
+          tar -czf myco-${{ matrix.suffix }}.tar.gz myco-${{ matrix.suffix }}
+
+      - name: archive (windows)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          cd dist
+          7z a myco-${{ matrix.suffix }}.zip myco-${{ matrix.suffix }}.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: myco-${{ matrix.suffix }}
+          path: |
+            dist/myco-${{ matrix.suffix }}*.tar.gz
+            dist/myco-${{ matrix.suffix }}*.zip
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          gh release create "$VERSION" \
+            --title "$VERSION" \
+            --notes-file CHANGELOG.md \
+            dist/myco-*.tar.gz dist/myco-*.zip
