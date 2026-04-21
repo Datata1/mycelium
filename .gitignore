@@ -1,0 +1,18 @@
+# Mycelium local state (index + daemon socket + logs)
+.mycelium/
+
+# Build output
+/myco
+/dist/
+/bin/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Go
+*.test
+*.out
+coverage.*

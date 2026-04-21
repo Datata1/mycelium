@@ -1,0 +1,60 @@
+# Mycelium configuration.
+# Copy to `.mycelium.yml` in your repo root (or let `myco init` generate it).
+# Commit this file; the `.mycelium/` directory (index + socket) is gitignored.
+
+version: 1
+
+# Which languages to index. Adding a language requires a parser in internal/parser/.
+languages: [go, typescript, python]
+
+# Glob patterns for files to index. Evaluated relative to the repo root.
+include:
+  - "**/*.go"
+  - "src/**/*.{ts,tsx}"
+  - "**/*.py"
+
+# Patterns to exclude. .gitignore is always honored in addition to these.
+exclude:
+  - "**/node_modules/**"
+  - "**/vendor/**"
+  - "**/dist/**"
+  - "**/build/**"
+  - "**/*.generated.*"
+  - "**/*.min.js"
+
+# Embedder enables `search_semantic`. Default is `none`: symbol + lexical search still work.
+embedder:
+  provider: none              # none | ollama | voyage | openai
+  # model: nomic-embed-text
+  # dimension: 768
+  # endpoint: http://localhost:11434
+  # api_key_env: VOYAGE_API_KEY
+  batch_size: 16
+  max_concurrency: 2
+  # Circuit breaker: stop embedding if this many chunks are queued in a 60-second window.
+  rate_limit_chunks_per_minute: 2000
+
+# How source is split into embeddable chunks.
+chunking:
+  symbol_max_tokens: 1024     # oversized symbols are split; undersized are embedded whole
+  include_docstrings: true
+  file_fallback_window_lines: 50   # for files with no extracted symbols (e.g. SQL, MD)
+
+# fsnotify watcher tuning.
+watcher:
+  debounce_ms: 200            # per-file quiet window before processing a change
+  coalesce_ms: 2000           # batch window before flushing to the embedder
+
+# Daemon runtime.
+daemon:
+  socket: .mycelium/daemon.sock
+  http_port: 7777             # 0 to disable the HTTP API
+
+# Git integration. Only post-commit is supported.
+hooks:
+  post_commit: true
+
+# Index storage.
+index:
+  path: .mycelium/index.db
+  max_file_size_kb: 1024      # skip files larger than this (minified bundles, generated data)
