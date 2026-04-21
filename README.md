@@ -68,3 +68,4 @@ Requires Go 1.22+ and a C toolchain (`mattn/go-sqlite3` uses cgo; tree-sitter wi
 ## License
 
 TBD.
+# mycelium
