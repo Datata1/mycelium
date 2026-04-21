@@ -6,6 +6,35 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [v1.1.0] — 2026-04-22
+
+First milestone on the v2.0 roadmap ("Honest signals"). Adds health checks
+so later milestones can measure themselves against honest baselines.
+
+### Added
+
+- **`myco doctor`** subcommand with per-check Pass/Warn/Fail output and
+  conventional exit codes (0/1/2). `--json` flag for CI.
+- **`internal/doctor`** package — configurable thresholds, pluggable into
+  future MCP introspection.
+- **Extended `stats`** — `self_loop_count`, `unresolved_by_language`,
+  `total_refs_by_language`, `stale_chunks`, `embed_queue_depth`, DB size and
+  fragmentation, plus `UnresolvedRatio()` / `DBFragmentation()` helpers.
+- **Benchmark harness** — `GenerateSyntheticRepo()` emits deterministic
+  Go-only fixtures at arbitrary symbol counts. Benchmarks for initial index,
+  `FindSymbol`, and `GetNeighborhood` depth-2. Baselines at 10k symbols on
+  a Tiger Lake laptop: **2433 sym/sec**, **11.4 ms** point lookup, **3.8 ms**
+  neighborhood query.
+
+### Baselines captured
+
+Self-index of mycelium under provider=none:
+
+- 57 files · 387 symbols · 2045 refs
+- self_loop_count: **11** (Pillar A in v1.2 targets 0)
+- unresolved_ref_ratio: **72.8%** (Pillar A target <8% for Go)
+- db_fragmentation: 11.1%
+
 ## [v1.0.0] — 2026-04-22
 
 First stable release. Nine MCP tools, three transports, three languages.

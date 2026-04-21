@@ -320,18 +320,54 @@ func (r *Reader) GetFileOutline(ctx context.Context, path string) ([]FileOutline
 
 // Stats mirrors the write-side stats but lives here so all reads come from
 // a single package.
+// Stats exposes point-in-time counts + quality signals for the index.
+// Quality signals (self_loop_count, unresolved_by_language, stale_chunks)
+// were added in v1.1 so `myco doctor` and agents have honest numbers to
+// judge the index by before running expensive tools.
 type Stats struct {
-	Files    int            `json:"files"`
-	Symbols  int            `json:"symbols"`
-	Refs     int            `json:"refs"`
-	Resolved int            `json:"refs_resolved"`
-	ByKind   map[string]int `json:"by_kind"`
-	ByLang   map[string]int `json:"by_language"`
-	LastScan time.Time      `json:"last_scan"`
+	Files                int            `json:"files"`
+	Symbols              int            `json:"symbols"`
+	Refs                 int            `json:"refs"`
+	Resolved             int            `json:"refs_resolved"`
+	SelfLoopCount        int            `json:"self_loop_count"`
+	UnresolvedByLanguage map[string]int `json:"unresolved_by_language"`
+	TotalByLanguage      map[string]int `json:"total_refs_by_language"`
+	Chunks               int            `json:"chunks"`
+	ChunksEmbedded       int            `json:"chunks_embedded"`
+	StaleChunks          int            `json:"stale_chunks"` // chunks whose embed_model != current or null when embedder configured
+	EmbedQueueDepth      int            `json:"embed_queue_depth"`
+	ByKind               map[string]int `json:"by_kind"`
+	ByLang               map[string]int `json:"by_language"`
+	DBSizeBytes          int64          `json:"db_size_bytes"`
+	DBFreelistPages      int            `json:"db_freelist_pages"`
+	DBPageCount          int            `json:"db_page_count"`
+	LastScan             time.Time      `json:"last_scan"`
+}
+
+// UnresolvedRatio is the fraction of refs whose dst_symbol_id is NULL.
+// Agents use this to decide whether to trust graph-traversal results.
+func (s Stats) UnresolvedRatio() float64 {
+	if s.Refs == 0 {
+		return 0
+	}
+	return float64(s.Refs-s.Resolved) / float64(s.Refs)
+}
+
+// DBFragmentation is freelist_pages / page_count; a rough VACUUM signal.
+func (s Stats) DBFragmentation() float64 {
+	if s.DBPageCount == 0 {
+		return 0
+	}
+	return float64(s.DBFreelistPages) / float64(s.DBPageCount)
 }
 
 func (r *Reader) Stats(ctx context.Context) (Stats, error) {
-	s := Stats{ByKind: map[string]int{}, ByLang: map[string]int{}}
+	s := Stats{
+		ByKind:               map[string]int{},
+		ByLang:               map[string]int{},
+		UnresolvedByLanguage: map[string]int{},
+		TotalByLanguage:      map[string]int{},
+	}
 	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM files`).Scan(&s.Files); err != nil {
 		return s, err
 	}
@@ -344,7 +380,71 @@ func (r *Reader) Stats(ctx context.Context) (Stats, error) {
 	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM refs WHERE resolved = 1`).Scan(&s.Resolved); err != nil {
 		return s, err
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT kind, COUNT(*) FROM symbols GROUP BY kind`)
+	// Self-loops: refs where src and dst are the same symbol. These are
+	// resolution bugs, not real recursion — real recursion is a loop in the
+	// *call graph*, not a self-edge on the same ref row.
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM refs WHERE src_symbol_id IS NOT NULL AND src_symbol_id = dst_symbol_id`,
+	).Scan(&s.SelfLoopCount); err != nil {
+		return s, err
+	}
+	// Unresolved refs grouped by the source file's language. Tells us which
+	// parser/resolver is lagging (Pillar A targets will move these numbers).
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT f.language, COUNT(*)
+		FROM refs r JOIN files f ON f.id = r.src_file_id
+		WHERE r.resolved = 0
+		GROUP BY f.language`)
+	if err != nil {
+		return s, err
+	}
+	for rows.Next() {
+		var lang string
+		var n int
+		if err := rows.Scan(&lang, &n); err != nil {
+			rows.Close()
+			return s, err
+		}
+		s.UnresolvedByLanguage[lang] = n
+	}
+	rows.Close()
+
+	rows, err = r.db.QueryContext(ctx, `
+		SELECT f.language, COUNT(*)
+		FROM refs r JOIN files f ON f.id = r.src_file_id
+		GROUP BY f.language`)
+	if err != nil {
+		return s, err
+	}
+	for rows.Next() {
+		var lang string
+		var n int
+		if err := rows.Scan(&lang, &n); err != nil {
+			rows.Close()
+			return s, err
+		}
+		s.TotalByLanguage[lang] = n
+	}
+	rows.Close()
+
+	// Chunks + embed pipeline health. Stale = chunks that should have an
+	// embedding (the active embedder isn't none) but don't. Computed here
+	// as: total chunks - embedded chunks. The doctor layer reconciles with
+	// the configured provider to decide Pass vs Warn.
+	_ = r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM chunks`).Scan(&s.Chunks)
+	_ = r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL`).Scan(&s.ChunksEmbedded)
+	s.StaleChunks = s.Chunks - s.ChunksEmbedded
+	_ = r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM embed_queue`).Scan(&s.EmbedQueueDepth)
+
+	// SQLite page stats. freelist_count / page_count is a cheap
+	// fragmentation proxy that tells VACUUM whether it'd pay off.
+	_ = r.db.QueryRowContext(ctx, `PRAGMA freelist_count`).Scan(&s.DBFreelistPages)
+	_ = r.db.QueryRowContext(ctx, `PRAGMA page_count`).Scan(&s.DBPageCount)
+	var pageSize int
+	_ = r.db.QueryRowContext(ctx, `PRAGMA page_size`).Scan(&pageSize)
+	s.DBSizeBytes = int64(s.DBPageCount) * int64(pageSize)
+
+	rows, err = r.db.QueryContext(ctx, `SELECT kind, COUNT(*) FROM symbols GROUP BY kind`)
 	if err != nil {
 		return s, err
 	}

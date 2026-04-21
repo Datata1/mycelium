@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/jdwiederstein/mycelium/internal/config"
 	"github.com/jdwiederstein/mycelium/internal/daemon"
+	"github.com/jdwiederstein/mycelium/internal/doctor"
 	"github.com/jdwiederstein/mycelium/internal/embed"
 	"github.com/jdwiederstein/mycelium/internal/hook"
 	mychttp "github.com/jdwiederstein/mycelium/internal/http"
@@ -48,6 +50,7 @@ func main() {
 		newQueryCmd(),
 		newHookCmd(),
 		newStatsCmd(),
+		newDoctorCmd(),
 	)
 
 	if err := root.Execute(); err != nil {
@@ -597,7 +600,9 @@ func newStatsCmd() *cobra.Command {
 					return err
 				}
 			}
-			fmt.Printf("files=%d symbols=%d refs=%d resolved=%d last_scan=%s\n", s.Files, s.Symbols, s.Refs, s.Resolved, s.LastScan.Format("2006-01-02 15:04:05"))
+			fmt.Printf("files=%d symbols=%d refs=%d resolved=%d self_loops=%d unresolved_ratio=%.1f%% last_scan=%s\n",
+				s.Files, s.Symbols, s.Refs, s.Resolved, s.SelfLoopCount, s.UnresolvedRatio()*100,
+				s.LastScan.Format("2006-01-02 15:04:05"))
 			fmt.Println("by kind:")
 			for k, n := range s.ByKind {
 				fmt.Printf("  %s: %d\n", k, n)
@@ -606,9 +611,74 @@ func newStatsCmd() *cobra.Command {
 			for l, n := range s.ByLang {
 				fmt.Printf("  %s: %d\n", l, n)
 			}
+			if len(s.UnresolvedByLanguage) > 0 {
+				fmt.Println("unresolved refs by language:")
+				for l, n := range s.UnresolvedByLanguage {
+					fmt.Printf("  %s: %d / %d\n", l, n, s.TotalByLanguage[l])
+				}
+			}
 			return nil
 		},
 	}
+}
+
+func newDoctorCmd() *cobra.Command {
+	var jsonOutput bool
+	cmd := &cobra.Command{
+		Use:   "doctor",
+		Short: "Run health checks on the index; exit 0/1/2 on pass/warn/fail",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := context.Background()
+			rc, err := loadRepoCtx()
+			if err != nil {
+				return err
+			}
+			// `doctor` is a read-only check, so a direct DB open is fine
+			// whether or not the daemon is running (SQLite WAL allows
+			// concurrent readers).
+			ix, err := index.Open(rc.Root + "/" + rc.Cfg.Index.Path)
+			if err != nil {
+				return err
+			}
+			defer ix.Close()
+
+			r := query.NewReader(ix.DB())
+			rep, err := doctor.Run(ctx, r, rc.Cfg.Embedder.Provider, doctor.ThresholdsFromConfig(rc.Cfg))
+			if err != nil {
+				return err
+			}
+			if jsonOutput {
+				b, err := json.MarshalIndent(rep, "", "  ")
+				if err != nil {
+					return err
+				}
+				fmt.Println(string(b))
+			} else {
+				printDoctorReport(rep)
+			}
+			if code := rep.ExitCode(); code != 0 {
+				os.Exit(code)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "emit the full report as JSON (for CI)")
+	return cmd
+}
+
+func printDoctorReport(rep doctor.Report) {
+	for _, c := range rep.Checks {
+		marker := "  ok "
+		switch c.Level {
+		case doctor.LevelWarn:
+			marker = "warn"
+		case doctor.LevelFail:
+			marker = "FAIL"
+		}
+		fmt.Printf("[%s] %-24s %s\n", marker, c.Name, c.Message)
+	}
+	fmt.Printf("\nsummary: %d pass, %d warn, %d fail\n",
+		rep.Summary.Pass, rep.Summary.Warn, rep.Summary.Fail)
 }
 
 func newInitCmd() *cobra.Command {
