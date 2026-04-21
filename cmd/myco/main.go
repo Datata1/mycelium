@@ -4,16 +4,25 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
 	"github.com/jdwiederstein/mycelium/internal/config"
+	"github.com/jdwiederstein/mycelium/internal/daemon"
+	"github.com/jdwiederstein/mycelium/internal/hook"
 	"github.com/jdwiederstein/mycelium/internal/index"
+	"github.com/jdwiederstein/mycelium/internal/ipc"
+	"github.com/jdwiederstein/mycelium/internal/mcp"
 	"github.com/jdwiederstein/mycelium/internal/parser"
 	"github.com/jdwiederstein/mycelium/internal/parser/golang"
+	"github.com/jdwiederstein/mycelium/internal/parser/python"
+	"github.com/jdwiederstein/mycelium/internal/parser/typescript"
 	"github.com/jdwiederstein/mycelium/internal/pipeline"
 	"github.com/jdwiederstein/mycelium/internal/query"
 	"github.com/jdwiederstein/mycelium/internal/repo"
+	"github.com/jdwiederstein/mycelium/internal/watch"
 )
 
 var version = "0.1.0-dev"
@@ -92,7 +101,10 @@ func newIndexCmd() *cobra.Command {
 				switch lang {
 				case "go":
 					reg.Register(golang.New())
-				// typescript, python parsers land in v0.3
+				case "typescript":
+					reg.Register(typescript.New())
+				case "python":
+					reg.Register(python.New())
 				}
 			}
 
@@ -189,22 +201,39 @@ func newQueryCmd() *cobra.Command {
 	return cmd
 }
 
+// daemonClient returns (client, ok) if a daemon is reachable at the configured
+// socket. Callers that can fall back to a direct DB read should use this to
+// avoid double-opening SQLite when the daemon owns the file.
+func daemonClient(rc repoCtx) (*ipc.Client, bool) {
+	c := ipc.NewClient(rc.Root + "/" + rc.Cfg.Daemon.Socket)
+	if c.IsReachable() {
+		return c, true
+	}
+	return nil, false
+}
+
 func runQueryFind(name, kind string, limit int) error {
 	ctx := context.Background()
 	rc, err := loadRepoCtx()
 	if err != nil {
 		return err
 	}
-	ix, err := index.Open(rc.Root + "/" + rc.Cfg.Index.Path)
-	if err != nil {
-		return err
-	}
-	defer ix.Close()
-
-	r := query.NewReader(ix.DB())
-	hits, err := r.FindSymbol(ctx, name, kind, limit)
-	if err != nil {
-		return err
+	var hits []query.SymbolHit
+	if c, ok := daemonClient(rc); ok {
+		if err := c.Call(ipc.MethodFindSymbol, ipc.FindSymbolParams{Name: name, Kind: kind, Limit: limit}, &hits); err != nil {
+			return err
+		}
+	} else {
+		ix, err := index.Open(rc.Root + "/" + rc.Cfg.Index.Path)
+		if err != nil {
+			return err
+		}
+		defer ix.Close()
+		r := query.NewReader(ix.DB())
+		hits, err = r.FindSymbol(ctx, name, kind, limit)
+		if err != nil {
+			return err
+		}
 	}
 	if len(hits) == 0 {
 		fmt.Fprintln(os.Stderr, "no matches")
@@ -225,16 +254,22 @@ func runQueryRefs(target string, limit int) error {
 	if err != nil {
 		return err
 	}
-	ix, err := index.Open(rc.Root + "/" + rc.Cfg.Index.Path)
-	if err != nil {
-		return err
-	}
-	defer ix.Close()
-
-	r := query.NewReader(ix.DB())
-	hits, err := r.GetReferences(ctx, target, limit)
-	if err != nil {
-		return err
+	var hits []query.ReferenceHit
+	if c, ok := daemonClient(rc); ok {
+		if err := c.Call(ipc.MethodGetReferences, ipc.GetReferencesParams{Target: target, Limit: limit}, &hits); err != nil {
+			return err
+		}
+	} else {
+		ix, err := index.Open(rc.Root + "/" + rc.Cfg.Index.Path)
+		if err != nil {
+			return err
+		}
+		defer ix.Close()
+		r := query.NewReader(ix.DB())
+		hits, err = r.GetReferences(ctx, target, limit)
+		if err != nil {
+			return err
+		}
 	}
 	if len(hits) == 0 {
 		fmt.Fprintln(os.Stderr, "no references")
@@ -260,16 +295,22 @@ func runQueryFiles(nameContains, language string, limit int) error {
 	if err != nil {
 		return err
 	}
-	ix, err := index.Open(rc.Root + "/" + rc.Cfg.Index.Path)
-	if err != nil {
-		return err
-	}
-	defer ix.Close()
-
-	r := query.NewReader(ix.DB())
-	hits, err := r.ListFiles(ctx, language, nameContains, limit)
-	if err != nil {
-		return err
+	var hits []query.FileHit
+	if c, ok := daemonClient(rc); ok {
+		if err := c.Call(ipc.MethodListFiles, ipc.ListFilesParams{Language: language, NameContains: nameContains, Limit: limit}, &hits); err != nil {
+			return err
+		}
+	} else {
+		ix, err := index.Open(rc.Root + "/" + rc.Cfg.Index.Path)
+		if err != nil {
+			return err
+		}
+		defer ix.Close()
+		r := query.NewReader(ix.DB())
+		hits, err = r.ListFiles(ctx, language, nameContains, limit)
+		if err != nil {
+			return err
+		}
 	}
 	for _, h := range hits {
 		fmt.Printf("%s  [%s]  %d symbols  %d bytes\n", h.Path, h.Language, h.SymbolCount, h.SizeBytes)
@@ -283,16 +324,22 @@ func runQueryOutline(path string) error {
 	if err != nil {
 		return err
 	}
-	ix, err := index.Open(rc.Root + "/" + rc.Cfg.Index.Path)
-	if err != nil {
-		return err
-	}
-	defer ix.Close()
-
-	r := query.NewReader(ix.DB())
-	items, err := r.GetFileOutline(ctx, path)
-	if err != nil {
-		return err
+	var items []query.FileOutlineItem
+	if c, ok := daemonClient(rc); ok {
+		if err := c.Call(ipc.MethodGetFileOutline, ipc.GetFileOutlineParams{Path: path}, &items); err != nil {
+			return err
+		}
+	} else {
+		ix, err := index.Open(rc.Root + "/" + rc.Cfg.Index.Path)
+		if err != nil {
+			return err
+		}
+		defer ix.Close()
+		r := query.NewReader(ix.DB())
+		items, err = r.GetFileOutline(ctx, path)
+		if err != nil {
+			return err
+		}
 	}
 	if len(items) == 0 {
 		fmt.Fprintln(os.Stderr, "no symbols (is the path indexed?)")
@@ -331,10 +378,17 @@ func newStatsCmd() *cobra.Command {
 			}
 			defer ix.Close()
 
-			r := query.NewReader(ix.DB())
-			s, err := r.Stats(ctx)
-			if err != nil {
-				return err
+			var s query.Stats
+			if c, ok := daemonClient(rc); ok {
+				if err := c.Call(ipc.MethodStats, nil, &s); err != nil {
+					return err
+				}
+			} else {
+				r := query.NewReader(ix.DB())
+				s, err = r.Stats(ctx)
+				if err != nil {
+					return err
+				}
 			}
 			fmt.Printf("files=%d symbols=%d refs=%d resolved=%d last_scan=%s\n", s.Files, s.Symbols, s.Refs, s.Resolved, s.LastScan.Format("2006-01-02 15:04:05"))
 			fmt.Println("by kind:")
@@ -356,11 +410,129 @@ func newInitCmd() *cobra.Command {
 		Use:   "init",
 		Short: "Initialize mycelium in the current repo (writes .mycelium.yml, installs hook)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return errNotImplemented("init")
+			return runInit(mcpClient)
 		},
 	}
 	cmd.Flags().StringVar(&mcpClient, "mcp", "", "register the MCP server with a client: claude | cursor")
 	return cmd
+}
+
+func runInit(mcpClient string) error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	root, err := repo.DiscoverRoot(cwd)
+	if err != nil {
+		return err
+	}
+	cfgPath := root + "/" + config.DefaultPath
+
+	// 1. Write .mycelium.yml if absent.
+	if _, err := os.Stat(cfgPath); err == nil {
+		fmt.Printf("  %s already exists, keeping it\n", config.DefaultPath)
+	} else {
+		if err := config.WriteDefault(cfgPath); err != nil {
+			return err
+		}
+		fmt.Printf("  wrote %s\n", config.DefaultPath)
+	}
+
+	// 2. Ensure .mycelium/ is gitignored.
+	if err := ensureGitignoreEntry(root+"/.gitignore", ".mycelium/"); err != nil {
+		return err
+	}
+
+	// 3. Install post-commit hook.
+	installed, err := hook.InstallPostCommit(root)
+	if err != nil {
+		return err
+	}
+	if installed {
+		fmt.Println("  installed .git/hooks/post-commit")
+	} else {
+		fmt.Println("  skipped git hook (not a git repo)")
+	}
+
+	// 4. Optional MCP client registration.
+	if mcpClient != "" {
+		if err := registerMCPClient(mcpClient, root); err != nil {
+			fmt.Fprintf(os.Stderr, "  warning: could not register MCP client %q: %v\n", mcpClient, err)
+		}
+	}
+
+	fmt.Println()
+	fmt.Println("Next steps:")
+	fmt.Println("  1. Start the daemon:       myco daemon &")
+	fmt.Println("  2. Index the repo:         myco index   # (daemon also does this on start)")
+	fmt.Println("  3. Try a query:            myco query find <name>")
+	if mcpClient == "" {
+		fmt.Println("  4. Wire it into an agent:  myco init --mcp claude   (or --mcp cursor)")
+	}
+	return nil
+}
+
+func ensureGitignoreEntry(path, entry string) error {
+	existing, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	for _, line := range splitLines(string(existing)) {
+		if line == entry {
+			return nil
+		}
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if len(existing) > 0 && existing[len(existing)-1] != '\n' {
+		_, _ = f.WriteString("\n")
+	}
+	_, err = f.WriteString(entry + "\n")
+	if err == nil {
+		fmt.Printf("  added %q to .gitignore\n", entry)
+	}
+	return err
+}
+
+func splitLines(s string) []string {
+	var out []string
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			out = append(out, s[start:i])
+			start = i + 1
+		}
+	}
+	if start < len(s) {
+		out = append(out, s[start:])
+	}
+	return out
+}
+
+// registerMCPClient is intentionally conservative: Claude Code and Cursor
+// config locations vary by OS and are user-editable. v0.3 prints the snippet
+// the user should paste. A proper patcher lands in v0.4 once we've verified
+// the config shape stays stable.
+func registerMCPClient(which, root string) error {
+	binary, err := os.Executable()
+	if err != nil {
+		binary = "myco"
+	}
+	snippet := fmt.Sprintf(`{
+  "mcpServers": {
+    "mycelium": {
+      "command": "%s",
+      "args": ["mcp"],
+      "cwd": "%s"
+    }
+  }
+}`, binary, root)
+
+	fmt.Printf("\n  paste this into your %s MCP config:\n\n%s\n", which, snippet)
+	return nil
 }
 
 func newDaemonCmd() *cobra.Command {
@@ -368,9 +540,59 @@ func newDaemonCmd() *cobra.Command {
 		Use:   "daemon",
 		Short: "Run the long-lived indexer + query server for this repo",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return errNotImplemented("daemon")
+			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer cancel()
+			return runDaemon(ctx)
 		},
 	}
+}
+
+func runDaemon(ctx context.Context) error {
+	rc, err := loadRepoCtx()
+	if err != nil {
+		return err
+	}
+	ix, err := index.Open(rc.Root + "/" + rc.Cfg.Index.Path)
+	if err != nil {
+		return err
+	}
+	defer ix.Close()
+
+	reg := parser.NewRegistry()
+	for _, lang := range rc.Cfg.Languages {
+		switch lang {
+		case "go":
+			reg.Register(golang.New())
+		case "typescript":
+			reg.Register(typescript.New())
+		case "python":
+			reg.Register(python.New())
+		}
+	}
+
+	w := repo.NewWalker(rc.Root, rc.Cfg.Include, rc.Cfg.Exclude, rc.Cfg.Index.MaxFileSizeKB)
+	p := &pipeline.Pipeline{Index: ix, Registry: reg, Walker: w}
+
+	// Catch-up scan before accepting connections so the index reflects any
+	// changes that happened while the daemon was down.
+	if rep, err := p.RunOnce(ctx); err != nil {
+		return fmt.Errorf("catch-up scan: %w", err)
+	} else {
+		fmt.Fprintf(os.Stderr, "[daemon] catch-up: scanned=%d changed=%d duration=%s\n",
+			rep.FilesScanned, rep.FilesChanged, rep.Duration)
+	}
+
+	wat, err := watch.New(rc.Root, rc.Cfg.Include, rc.Cfg.Exclude, rc.Cfg.Index.MaxFileSizeKB, rc.Cfg.Watcher.DebounceMS)
+	if err != nil {
+		return err
+	}
+	d := &daemon.Daemon{
+		Pipeline: p,
+		Reader:   query.NewReader(ix.DB()),
+		Watcher:  wat,
+		Socket:   rc.Root + "/" + rc.Cfg.Daemon.Socket,
+	}
+	return d.Run(ctx)
 }
 
 func newMCPCmd() *cobra.Command {
@@ -378,7 +600,18 @@ func newMCPCmd() *cobra.Command {
 		Use:   "mcp",
 		Short: "Serve the MCP protocol over stdio (spawned by Claude Code, Cursor, etc.)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return errNotImplemented("mcp")
+			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer cancel()
+			rc, err := loadRepoCtx()
+			if err != nil {
+				return err
+			}
+			client := ipc.NewClient(rc.Root + "/" + rc.Cfg.Daemon.Socket)
+			if !client.IsReachable() {
+				return fmt.Errorf("daemon is not running at %s — start it with `myco daemon &`", rc.Root+"/"+rc.Cfg.Daemon.Socket)
+			}
+			srv := &mcp.Server{In: os.Stdin, Out: os.Stdout, Client: client}
+			return srv.Run(ctx)
 		},
 	}
 }
@@ -392,7 +625,13 @@ func newHookCmd() *cobra.Command {
 		Use:   "post-commit",
 		Short: "Reconcile the index after a commit (invoked by .git/hooks/post-commit)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return errNotImplemented("hook post-commit")
+			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer cancel()
+			rc, err := loadRepoCtx()
+			if err != nil {
+				return err
+			}
+			return hook.RunPostCommit(ctx, rc.Root+"/"+rc.Cfg.Daemon.Socket)
 		},
 	})
 	return cmd

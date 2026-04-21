@@ -112,13 +112,16 @@ func (w *Walker) excludeMatches(rel string) bool {
 	return false
 }
 
-// doublestarMatch implements a small subset of glob semantics that filepath.Match
+// DoublestarMatch implements a small subset of glob semantics that filepath.Match
 // lacks:
 //   - "**" matches any sequence of path segments, including zero.
 //   - Brace expansion: "{a,b}" -> "a" or "b" (single level, no nesting).
 //
-// This avoids a dependency on github.com/bmatcuk/doublestar for v0.1. Swap in
+// Exported so other packages (the watcher) can use the same matching rules.
+// Avoids a dependency on github.com/bmatcuk/doublestar for v0.2. Swap in
 // the full library if requirements grow.
+func DoublestarMatch(pattern, name string) bool { return doublestarMatch(pattern, name) }
+
 func doublestarMatch(pattern, name string) bool {
 	for _, expanded := range expandBraces(pattern) {
 		if matchSegments(expanded, name) {

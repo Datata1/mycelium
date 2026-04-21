@@ -86,17 +86,19 @@ CREATE TABLE refs (
     src_file_id   INTEGER NOT NULL REFERENCES files(id)   ON DELETE CASCADE,
     src_symbol_id INTEGER          REFERENCES symbols(id) ON DELETE CASCADE,
     dst_symbol_id INTEGER          REFERENCES symbols(id) ON DELETE SET NULL,
-    dst_name      TEXT    NOT NULL,
+    dst_name      TEXT    NOT NULL,                -- full textual target, e.g. "r.FindSymbol" or "fmt.Println"
+    dst_short     TEXT    NOT NULL,                -- last segment after final dot, e.g. "FindSymbol"
     kind          TEXT    NOT NULL,                -- call | import | type_ref | inherit
     line          INTEGER NOT NULL,
     col           INTEGER NOT NULL,
     resolved      INTEGER NOT NULL DEFAULT 0
 );
-CREATE INDEX idx_refs_src      ON refs(src_symbol_id);
-CREATE INDEX idx_refs_dst      ON refs(dst_symbol_id);
-CREATE INDEX idx_refs_dst_name ON refs(dst_name);
-CREATE INDEX idx_refs_file     ON refs(src_file_id);
-CREATE INDEX idx_refs_unres    ON refs(resolved) WHERE resolved = 0;
+CREATE INDEX idx_refs_src       ON refs(src_symbol_id);
+CREATE INDEX idx_refs_dst       ON refs(dst_symbol_id);
+CREATE INDEX idx_refs_dst_name  ON refs(dst_name);
+CREATE INDEX idx_refs_dst_short ON refs(dst_short);
+CREATE INDEX idx_refs_file      ON refs(src_file_id);
+CREATE INDEX idx_refs_unres     ON refs(resolved) WHERE resolved = 0;
 
 -- ----------------------------------------------------------------------------
 -- chunks: embeddable units. One per symbol, plus fallback window chunks for

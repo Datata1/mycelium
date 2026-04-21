@@ -152,8 +152,8 @@ func (ix *Index) ReplaceFileRefs(ctx context.Context, tx *sql.Tx, fileID int64, 
 		return nil
 	}
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO refs(src_file_id, src_symbol_id, dst_symbol_id, dst_name, kind, line, col, resolved)
-		VALUES(?, ?, NULL, ?, ?, ?, ?, 0)`)
+		INSERT INTO refs(src_file_id, src_symbol_id, dst_symbol_id, dst_name, dst_short, kind, line, col, resolved)
+		VALUES(?, ?, NULL, ?, ?, ?, ?, ?, 0)`)
 	if err != nil {
 		return fmt.Errorf("prepare insert ref: %w", err)
 	}
@@ -165,11 +165,23 @@ func (ix *Index) ReplaceFileRefs(ctx context.Context, tx *sql.Tx, fileID int64, 
 				srcID = id
 			}
 		}
-		if _, err := stmt.ExecContext(ctx, fileID, srcID, r.DstName, string(r.Kind), r.Line, r.Col); err != nil {
+		if _, err := stmt.ExecContext(ctx, fileID, srcID, r.DstName, shortName(r.DstName), string(r.Kind), r.Line, r.Col); err != nil {
 			return fmt.Errorf("insert ref: %w", err)
 		}
 	}
 	return nil
+}
+
+// shortName returns the segment after the final "." in a dotted name, or the
+// whole string if there is no dot. "r.FindSymbol" -> "FindSymbol";
+// "fmt.Println" -> "Println"; "Printf" -> "Printf".
+func shortName(dotted string) string {
+	for i := len(dotted) - 1; i >= 0; i-- {
+		if dotted[i] == '.' {
+			return dotted[i+1:]
+		}
+	}
+	return dotted
 }
 
 func nullString(s string) interface{} {

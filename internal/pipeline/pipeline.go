@@ -83,6 +83,32 @@ func (p *Pipeline) RunOnce(ctx context.Context) (Report, error) {
 	return rep, nil
 }
 
+// HandleChange processes a single file change from the watcher. The relative
+// path is looked up against the registered parsers; if none supports it, the
+// call is a no-op (returned changed=false). A removed file is handled by
+// deleting its row; cascades drop symbols/refs/chunks.
+func (p *Pipeline) HandleChange(ctx context.Context, relPath, absPath string, removed bool) (changed bool, err error) {
+	if removed {
+		db := p.Index.DB()
+		_, err := db.ExecContext(ctx, `DELETE FROM files WHERE path = ?`, relPath)
+		if err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	prs := p.Registry.ForPath(relPath)
+	if prs == nil {
+		return false, nil
+	}
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return false, err
+	}
+	f := repo.File{AbsPath: absPath, RelPath: relPath, SizeKB: int(info.Size() / 1024), MTimeNS: info.ModTime().UnixNano()}
+	ch, _, _, err := p.processFile(ctx, prs, f)
+	return ch, err
+}
+
 func (p *Pipeline) processFile(ctx context.Context, prs parser.Parser, f repo.File) (bool, int, int, error) {
 	content, err := os.ReadFile(f.AbsPath)
 	if err != nil {

@@ -34,15 +34,17 @@ func (ix *Index) ResolveRefs(ctx context.Context, tx *sql.Tx) (int64, error) {
 	}
 	nq, _ := res.RowsAffected()
 
-	// Unique short-name match.
+	// Unique short-name match on dst_short.
+	// Handles cases like "r.FindSymbol" (short=FindSymbol) when only one
+	// symbol named FindSymbol exists in the repo.
 	res, err = tx.ExecContext(ctx, `
 		UPDATE refs
 		SET dst_symbol_id = (
-		    SELECT id FROM symbols WHERE name = refs.dst_name LIMIT 1
+		    SELECT id FROM symbols WHERE name = refs.dst_short LIMIT 1
 		),
 		    resolved = 1
 		WHERE resolved = 0
-		  AND (SELECT COUNT(*) FROM symbols WHERE name = refs.dst_name) = 1`)
+		  AND (SELECT COUNT(*) FROM symbols WHERE name = refs.dst_short) = 1`)
 	if err != nil {
 		return 0, fmt.Errorf("resolve by short name: %w", err)
 	}

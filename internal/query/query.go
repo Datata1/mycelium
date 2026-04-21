@@ -137,9 +137,9 @@ func (r *Reader) GetReferences(ctx context.Context, target string, limit int) ([
 		}
 	}
 
-	// Textual-only fallback: refs with dst_name == target but unresolved.
-	// Useful when the target isn't defined in this repo (e.g. stdlib calls)
-	// or when resolution failed.
+	// Textual-only fallback: refs unresolved but whose dst_name or dst_short
+	// equals the target. Useful when the target isn't defined in this repo
+	// (e.g. stdlib calls) or when resolution was ambiguous.
 	remaining := limit - len(hits)
 	if remaining > 0 {
 		rows, err := r.db.QueryContext(ctx, `
@@ -149,9 +149,9 @@ func (r *Reader) GetReferences(ctx context.Context, target string, limit int) ([
 			FROM refs r
 			JOIN files f ON f.id = r.src_file_id
 			LEFT JOIN symbols ss ON ss.id = r.src_symbol_id
-			WHERE r.resolved = 0 AND r.dst_name = ?
+			WHERE r.resolved = 0 AND (r.dst_name = ? OR r.dst_short = ?)
 			ORDER BY f.path, r.line
-			LIMIT ?`, target, remaining)
+			LIMIT ?`, target, target, remaining)
 		if err != nil {
 			return nil, err
 		}
