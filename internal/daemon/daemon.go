@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jdwiederstein/mycelium/internal/embed"
 	"github.com/jdwiederstein/mycelium/internal/ipc"
 	"github.com/jdwiederstein/mycelium/internal/pipeline"
 	"github.com/jdwiederstein/mycelium/internal/query"
@@ -22,6 +23,7 @@ import (
 type Daemon struct {
 	Pipeline *pipeline.Pipeline
 	Reader   *query.Reader
+	Embedder embed.Embedder // required for search_semantic; may be Noop
 	Watcher  *watch.Watcher
 	Socket   string
 	Logger   Logger
@@ -161,6 +163,14 @@ func (d *Daemon) dispatch(ctx context.Context, req ipc.Request) (any, error) {
 
 	case ipc.MethodReindex:
 		return d.Pipeline.RunOnce(ctx)
+
+	case ipc.MethodSearchSemantic:
+		var p ipc.SearchSemanticParams
+		if err := unmarshal(req.Params, &p); err != nil {
+			return nil, err
+		}
+		s := &query.Searcher{Reader: d.Reader, Embedder: d.Embedder}
+		return s.SearchSemantic(ctx, p.Query, p.K, p.Kind, p.PathContains)
 
 	default:
 		return nil, fmt.Errorf("unknown method %q", req.Method)

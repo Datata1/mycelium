@@ -8,6 +8,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/jdwiederstein/mycelium/internal/chunker"
+	"github.com/jdwiederstein/mycelium/internal/embed"
 	"github.com/jdwiederstein/mycelium/internal/index"
 	"github.com/jdwiederstein/mycelium/internal/parser"
 	"github.com/jdwiederstein/mycelium/internal/repo"
@@ -19,6 +21,8 @@ type Pipeline struct {
 	Index    *index.Index
 	Registry *parser.Registry
 	Walker   *repo.Walker
+	Embedder embed.Embedder // Noop when the user hasn't configured a provider
+	ChunkerOpts chunker.Options
 	Logger   Logger
 }
 
@@ -152,6 +156,17 @@ func (p *Pipeline) processFile(ctx context.Context, prs parser.Parser, f repo.Fi
 	if _, err := p.Index.ResolveRefs(ctx, tx); err != nil {
 		return true, len(result.Symbols), len(result.References), err
 	}
+
+	// Chunking + embed queue. Skips quietly when the embedder is Noop.
+	chunks := chunker.FromSymbols(content, result.Symbols, p.ChunkerOpts)
+	embedderModel := "none"
+	if p.Embedder != nil {
+		embedderModel = p.Embedder.Model()
+	}
+	if _, err := p.Index.ReplaceFileChunks(ctx, tx, upsert.FileID, symIDs, chunks, embedderModel); err != nil {
+		return true, len(result.Symbols), len(result.References), err
+	}
+
 	if err := tx.Commit(); err != nil {
 		return true, len(result.Symbols), len(result.References), err
 	}

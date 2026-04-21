@@ -11,6 +11,7 @@ import (
 
 	"github.com/jdwiederstein/mycelium/internal/config"
 	"github.com/jdwiederstein/mycelium/internal/daemon"
+	"github.com/jdwiederstein/mycelium/internal/embed"
 	"github.com/jdwiederstein/mycelium/internal/hook"
 	"github.com/jdwiederstein/mycelium/internal/index"
 	"github.com/jdwiederstein/mycelium/internal/ipc"
@@ -109,7 +110,11 @@ func newIndexCmd() *cobra.Command {
 			}
 
 			w := repo.NewWalker(rc.Root, rc.Cfg.Include, rc.Cfg.Exclude, rc.Cfg.Index.MaxFileSizeKB)
-			p := &pipeline.Pipeline{Index: ix, Registry: reg, Walker: w}
+			emb, err := embed.New(rc.Cfg.Embedder)
+			if err != nil {
+				return err
+			}
+			p := &pipeline.Pipeline{Index: ix, Registry: reg, Walker: w, Embedder: emb}
 
 			rep, err := p.RunOnce(ctx)
 			if err != nil {
@@ -189,14 +194,23 @@ func newQueryCmd() *cobra.Command {
 		refsCmd,
 		filesCmd,
 		outlineCmd,
-		&cobra.Command{
-			Use:   "search <text>",
-			Short: "Semantic search (requires embedder)",
-			Args:  cobra.ExactArgs(1),
-			RunE: func(cmd *cobra.Command, args []string) error {
-				return errNotImplemented("query search")
-			},
-		},
+		func() *cobra.Command {
+			c := &cobra.Command{
+				Use:   "search <text>",
+				Short: "Semantic search (requires embedder configured in .mycelium.yml)",
+				Args:  cobra.ExactArgs(1),
+				RunE: func(cmd *cobra.Command, args []string) error {
+					k, _ := cmd.Flags().GetInt("k")
+					kind, _ := cmd.Flags().GetString("kind")
+					path, _ := cmd.Flags().GetString("path")
+					return runQuerySearch(args[0], k, kind, path)
+				},
+			}
+			c.Flags().Int("k", 10, "number of results")
+			c.Flags().String("kind", "", "filter by kind")
+			c.Flags().String("path", "", "filter by path substring")
+			return c
+		}(),
 	)
 	return cmd
 }
@@ -314,6 +328,49 @@ func runQueryFiles(nameContains, language string, limit int) error {
 	}
 	for _, h := range hits {
 		fmt.Printf("%s  [%s]  %d symbols  %d bytes\n", h.Path, h.Language, h.SymbolCount, h.SizeBytes)
+	}
+	return nil
+}
+
+func runQuerySearch(q string, k int, kind, pathContains string) error {
+	ctx := context.Background()
+	rc, err := loadRepoCtx()
+	if err != nil {
+		return err
+	}
+	var hits []query.SemanticHit
+	if c, ok := daemonClient(rc); ok {
+		if err := c.Call(ipc.MethodSearchSemantic, ipc.SearchSemanticParams{Query: q, K: k, Kind: kind, PathContains: pathContains}, &hits); err != nil {
+			return err
+		}
+	} else {
+		// Offline fallback: open the DB read-side ourselves. This can't happen
+		// if the daemon is running (SQLite WAL allows concurrent readers).
+		ix, err := index.Open(rc.Root + "/" + rc.Cfg.Index.Path)
+		if err != nil {
+			return err
+		}
+		defer ix.Close()
+		emb, err := embed.New(rc.Cfg.Embedder)
+		if err != nil {
+			return err
+		}
+		r := query.NewReader(ix.DB())
+		s := &query.Searcher{Reader: r, Embedder: emb}
+		hits, err = s.SearchSemantic(ctx, q, k, kind, pathContains)
+		if err != nil {
+			return err
+		}
+	}
+	if len(hits) == 0 {
+		fmt.Fprintln(os.Stderr, "no results (is the embedder configured and are chunks embedded yet?)")
+		return nil
+	}
+	for _, h := range hits {
+		fmt.Printf("%s:%d  score=%.3f  [%s]  %s\n", h.Path, h.StartLine, h.Score, h.Kind, h.Qualified)
+		if h.Signature != "" {
+			fmt.Printf("    %s\n", truncate(h.Signature, 120))
+		}
 	}
 	return nil
 }
@@ -571,7 +628,16 @@ func runDaemon(ctx context.Context) error {
 	}
 
 	w := repo.NewWalker(rc.Root, rc.Cfg.Include, rc.Cfg.Exclude, rc.Cfg.Index.MaxFileSizeKB)
-	p := &pipeline.Pipeline{Index: ix, Registry: reg, Walker: w}
+	emb, err := embed.New(rc.Cfg.Embedder)
+	if err != nil {
+		return err
+	}
+	// If the user switched embedder models, drop stale vectors so we don't
+	// mix dimensions. Cheap no-op when the model matches.
+	if err := ix.InvalidateEmbeddingsForModel(ctx, emb.Model()); err != nil {
+		return err
+	}
+	p := &pipeline.Pipeline{Index: ix, Registry: reg, Walker: w, Embedder: emb}
 
 	// Catch-up scan before accepting connections so the index reflects any
 	// changes that happened while the daemon was down.
@@ -586,9 +652,20 @@ func runDaemon(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
+	// Kick off the embed worker. With a Noop embedder this returns immediately.
+	worker := &pipeline.EmbedWorker{
+		Index:         ix,
+		Embedder:      emb,
+		BatchSize:     rc.Cfg.Embedder.BatchSize,
+		RatePerMinute: rc.Cfg.Embedder.RateLimitChunksPerMinute,
+	}
+	go worker.Run(ctx)
+
 	d := &daemon.Daemon{
 		Pipeline: p,
 		Reader:   query.NewReader(ix.DB()),
+		Embedder: emb,
 		Watcher:  wat,
 		Socket:   rc.Root + "/" + rc.Cfg.Daemon.Socket,
 	}

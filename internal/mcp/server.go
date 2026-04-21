@@ -148,6 +148,12 @@ func mapToolToIPC(tool string, rawArgs json.RawMessage) (string, any, error) {
 		return ipc.MethodGetFileOutline, p, nil
 	case "stats":
 		return ipc.MethodStats, nil, nil
+	case "search_semantic":
+		var p ipc.SearchSemanticParams
+		if err := unmarshalArgs(rawArgs, &p); err != nil {
+			return "", nil, err
+		}
+		return ipc.MethodSearchSemantic, p, nil
 	default:
 		return "", nil, fmt.Errorf("unknown tool: %s", tool)
 	}

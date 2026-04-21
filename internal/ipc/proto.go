@@ -21,6 +21,7 @@ const (
 	MethodGetFileOutline = "get_file_outline"
 	MethodStats          = "stats"
 	MethodReindex        = "reindex"
+	MethodSearchSemantic = "search_semantic"
 	MethodPing           = "ping"
 )
 
@@ -59,4 +60,11 @@ type ListFilesParams struct {
 
 type GetFileOutlineParams struct {
 	Path string `json:"path"`
+}
+
+type SearchSemanticParams struct {
+	Query        string `json:"query"`
+	K            int    `json:"k,omitempty"`
+	Kind         string `json:"kind,omitempty"`
+	PathContains string `json:"path_contains,omitempty"`
 }

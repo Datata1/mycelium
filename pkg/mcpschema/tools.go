@@ -97,6 +97,32 @@ func Tools() []Tool {
 			},
 		},
 		{
+			Name:        "search_semantic",
+			Description: "Semantic search over code chunks. Use for fuzzy intent queries ('function that parses dates', 'http handler for login') when you don't know the symbol name. Requires an embedder configured (otherwise returns an error).",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]any{
+						"type":        "string",
+						"description": "Natural-language description of what you're looking for.",
+					},
+					"k": map[string]any{
+						"type":        "integer",
+						"description": "Number of results to return (default 10).",
+					},
+					"kind": map[string]any{
+						"type":        "string",
+						"description": "Optional symbol kind filter.",
+					},
+					"path_contains": map[string]any{
+						"type":        "string",
+						"description": "Restrict to files whose path contains this substring.",
+					},
+				},
+				"required": []string{"query"},
+			},
+		},
+		{
 			Name:        "stats",
 			Description: "Index status: languages, symbol counts, refs, freshness. Useful for the agent to decide whether the index is trustworthy before running searches.",
 			InputSchema: map[string]any{
