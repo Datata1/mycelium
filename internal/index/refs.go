@@ -6,21 +6,26 @@ import (
 	"fmt"
 )
 
-// ResolveRefs fills dst_symbol_id on refs where a unique symbol with the
-// matching qualified-or-short name now exists. It is safe to call repeatedly;
-// only unresolved rows are touched.
+// ResolveRefs fills dst_symbol_id on refs where a qualified or (carefully)
+// short-named symbol exists. Safe to call repeatedly; only unresolved rows
+// are touched.
 //
-// Resolution strategy (v0.2, intentionally modest):
-//  1. Exact match on qualified name.
-//  2. Otherwise unique match on short name within the symbols table.
+// Resolution strategy (v1.2):
+//  1. Exact match on qualified name. Applies to ALL resolver versions —
+//     this is how type-resolved refs (v1) land against parser-produced
+//     symbols in the same shortpkg.Receiver.Method form.
+//  2. Unique short-name fallback — ONLY for resolver_version=0 rows.
+//     Type-resolved refs that the Go resolver deliberately left unresolved
+//     (builtins, external packages, calls whose receiver type was erased)
+//     must not get wishful-thinking short-name matches: that was the
+//     self-loop generator in v1.1 and earlier.
 //
-// Ambiguous names (multiple symbols share a short name) stay unresolved; the
-// textual dst_name still lets callers surface "textual-only" hits.
+// Ambiguous names (multiple symbols share a short name) stay unresolved;
+// the textual dst_name still surfaces "textual-only" hits to callers.
 //
-// This is an indexed update, not a scan — both join sides hit existing indexes
-// on refs(dst_name) and symbols(name/qualified).
+// Both passes are indexed updates, not scans.
 func (ix *Index) ResolveRefs(ctx context.Context, tx *sql.Tx) (int64, error) {
-	// Exact qualified match.
+	// Pass 1: exact qualified match. Applies regardless of resolver version.
 	res, err := tx.ExecContext(ctx, `
 		UPDATE refs
 		SET dst_symbol_id = (
@@ -34,9 +39,9 @@ func (ix *Index) ResolveRefs(ctx context.Context, tx *sql.Tx) (int64, error) {
 	}
 	nq, _ := res.RowsAffected()
 
-	// Unique short-name match on dst_short.
-	// Handles cases like "r.FindSymbol" (short=FindSymbol) when only one
-	// symbol named FindSymbol exists in the repo.
+	// Pass 2: unique short-name fallback — resolver_version=0 only.
+	// Keeps the v1.1 behavior for languages that don't yet have a
+	// type-aware resolver (TS, Python — both at 0 until v1.3).
 	res, err = tx.ExecContext(ctx, `
 		UPDATE refs
 		SET dst_symbol_id = (
@@ -44,6 +49,7 @@ func (ix *Index) ResolveRefs(ctx context.Context, tx *sql.Tx) (int64, error) {
 		),
 		    resolved = 1
 		WHERE resolved = 0
+		  AND resolver_version = 0
 		  AND (SELECT COUNT(*) FROM symbols WHERE name = refs.dst_short) = 1`)
 	if err != nil {
 		return 0, fmt.Errorf("resolve by short name: %w", err)

@@ -26,6 +26,7 @@ import (
 	"github.com/jdwiederstein/mycelium/internal/pipeline"
 	"github.com/jdwiederstein/mycelium/internal/query"
 	"github.com/jdwiederstein/mycelium/internal/repo"
+	goresolver "github.com/jdwiederstein/mycelium/internal/resolver/golang"
 	"github.com/jdwiederstein/mycelium/internal/watch"
 )
 
@@ -120,7 +121,8 @@ func newIndexCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			p := &pipeline.Pipeline{Index: ix, Registry: reg, Walker: w, Embedder: emb}
+			gores := loadGoResolver(rc.Root, rc.Cfg.Languages)
+			p := &pipeline.Pipeline{Index: ix, Registry: reg, Walker: w, Embedder: emb, GoResolver: gores}
 
 			rep, err := p.RunOnce(ctx)
 			if err != nil {
@@ -857,7 +859,8 @@ func runDaemon(ctx context.Context) error {
 	if err := ix.InvalidateEmbeddingsForModel(ctx, emb.Model()); err != nil {
 		return err
 	}
-	p := &pipeline.Pipeline{Index: ix, Registry: reg, Walker: w, Embedder: emb}
+	gores := loadGoResolver(rc.Root, rc.Cfg.Languages)
+	p := &pipeline.Pipeline{Index: ix, Registry: reg, Walker: w, Embedder: emb, GoResolver: gores}
 
 	// Catch-up scan before accepting connections so the index reflects any
 	// changes that happened while the daemon was down.
@@ -953,6 +956,35 @@ func newHookCmd() *cobra.Command {
 
 func errNotImplemented(name string) error {
 	return fmt.Errorf("%s: not yet implemented (pre-v0.1 scaffolding)", name)
+}
+
+// loadGoResolver builds and loads the v1.2 type-aware Go resolver. Returns
+// nil when Go isn't in the configured language list, or when the module
+// can't be loaded at all — the pipeline treats a nil resolver as "use
+// textual resolution only," which remains the v1.1 behavior. Transient
+// type-check errors are surfaced via `myco doctor` (each error counted in
+// LoadErrors()) without blocking indexing.
+func loadGoResolver(repoRoot string, languages []string) *goresolver.Resolver {
+	hasGo := false
+	for _, l := range languages {
+		if l == "go" {
+			hasGo = true
+			break
+		}
+	}
+	if !hasGo {
+		return nil
+	}
+	r := goresolver.New(repoRoot)
+	errCount, err := r.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[resolver] go-types unavailable: %v — falling back to textual resolution\n", err)
+		return nil
+	}
+	if errCount > 0 {
+		fmt.Fprintf(os.Stderr, "[resolver] go-types loaded with %d package errors (inspect via `myco doctor`)\n", errCount)
+	}
+	return r
 }
 
 func truncate(s string, max int) string {

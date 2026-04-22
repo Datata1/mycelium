@@ -15,6 +15,7 @@ import (
 	"github.com/jdwiederstein/mycelium/internal/index"
 	"github.com/jdwiederstein/mycelium/internal/parser"
 	"github.com/jdwiederstein/mycelium/internal/repo"
+	goresolver "github.com/jdwiederstein/mycelium/internal/resolver/golang"
 )
 
 // Pipeline orchestrates walk -> parse -> index. For v0.1 it runs as a one-shot
@@ -24,6 +25,10 @@ type Pipeline struct {
 	Registry *parser.Registry
 	Walker   *repo.Walker
 	Embedder embed.Embedder // Noop when the user hasn't configured a provider
+	// GoResolver is optional; when non-nil and Ready, Go refs are resolved
+	// with type info (v1.2 Pillar A). Nil resolver or Ready()==false means
+	// refs stay as textual output — the short-name SQL fallback still runs.
+	GoResolver *goresolver.Resolver
 	ChunkerOpts chunker.Options
 	Logger   Logger
 }
@@ -214,6 +219,13 @@ func (p *Pipeline) processFile(ctx context.Context, prs parser.Parser, f repo.Fi
 // writeParsed is the DB-writing half of processFile, used both by single-file
 // update paths (watcher, hook) and the parallel RunOnce loop.
 func (p *Pipeline) writeParsed(ctx context.Context, f repo.File, prs parser.Parser, result parser.ParseResult, content []byte) (bool, int, int, error) {
+	// v1.2: if a Go type resolver is wired up, let it rewrite call DstNames
+	// to fully-qualified form before the refs hit the DB. No-op for other
+	// languages or when the resolver failed to load the module.
+	if prs.Language() == "go" && p.GoResolver != nil && p.GoResolver.Ready() {
+		p.GoResolver.ResolveFile(f.AbsPath, &result)
+	}
+
 	db := p.Index.DB()
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {

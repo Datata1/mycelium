@@ -329,12 +329,20 @@ type Stats struct {
 	Symbols              int            `json:"symbols"`
 	Refs                 int            `json:"refs"`
 	Resolved             int            `json:"refs_resolved"`
-	SelfLoopCount        int            `json:"self_loop_count"`
+	// v1.2 refs breakdown — captures the three honest states.
+	// Invariant: Resolved + RefsExternalKnown + RefsTrulyUnresolved + <v0 short-name resolves>
+	// = NonImportRefs. Import refs are counted separately.
+	NonImportRefs        int            `json:"non_import_refs"`        // kind != 'import'
+	RefsTypeResolved     int            `json:"refs_type_resolved"`     // resolver_version >= 1
+	RefsExternalKnown    int            `json:"refs_external_known"`    // v1 + dst NULL (stdlib / deps)
+	RefsTrulyUnresolved  int            `json:"refs_truly_unresolved"`  // v0 + dst NULL + kind != import
+	SelfLoopCount        int            `json:"self_loop_count"`        // v0 self-loops (resolution bugs)
+	RecursionSelfLoops   int            `json:"recursion_self_loops"`   // v>=1 self-loops (real recursion)
 	UnresolvedByLanguage map[string]int `json:"unresolved_by_language"`
 	TotalByLanguage      map[string]int `json:"total_refs_by_language"`
 	Chunks               int            `json:"chunks"`
 	ChunksEmbedded       int            `json:"chunks_embedded"`
-	StaleChunks          int            `json:"stale_chunks"` // chunks whose embed_model != current or null when embedder configured
+	StaleChunks          int            `json:"stale_chunks"`
 	EmbedQueueDepth      int            `json:"embed_queue_depth"`
 	ByKind               map[string]int `json:"by_kind"`
 	ByLang               map[string]int `json:"by_language"`
@@ -344,13 +352,19 @@ type Stats struct {
 	LastScan             time.Time      `json:"last_scan"`
 }
 
-// UnresolvedRatio is the fraction of refs whose dst_symbol_id is NULL.
+// UnresolvedRatio is the fraction of *non-import* refs that no resolver
+// could place — neither the type-aware pass nor the short-name fallback.
+// Type-resolved external refs (e.g. fmt.Println) don't count as unresolved
+// even though their dst_symbol_id is NULL: we know exactly what they are,
+// we just don't index the target package.
+//
 // Agents use this to decide whether to trust graph-traversal results.
+// Lower is better; v1.2 target is <8% for Go.
 func (s Stats) UnresolvedRatio() float64 {
-	if s.Refs == 0 {
+	if s.NonImportRefs == 0 {
 		return 0
 	}
-	return float64(s.Refs-s.Resolved) / float64(s.Refs)
+	return float64(s.RefsTrulyUnresolved) / float64(s.NonImportRefs)
 }
 
 // DBFragmentation is freelist_pages / page_count; a rough VACUUM signal.
@@ -380,20 +394,44 @@ func (r *Reader) Stats(ctx context.Context) (Stats, error) {
 	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM refs WHERE resolved = 1`).Scan(&s.Resolved); err != nil {
 		return s, err
 	}
-	// Self-loops: refs where src and dst are the same symbol. These are
-	// resolution bugs, not real recursion — real recursion is a loop in the
-	// *call graph*, not a self-edge on the same ref row.
+	// Self-loops come in two flavors:
+	//   resolver_version=0: v1.1-style resolution artifact (ix.db.Close()
+	//     matching our Index.Close via unique short name). Target: 0.
+	//   resolver_version>=1: real recursion (callTargetName(x.X) genuinely
+	//     calls callTargetName). Informational; not a bug.
+	// SelfLoopCount tracks only the resolution-bug variant — the one the
+	// v1.2 type resolver was meant to kill.
 	if err := r.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM refs WHERE src_symbol_id IS NOT NULL AND src_symbol_id = dst_symbol_id`,
+		`SELECT COUNT(*) FROM refs
+		 WHERE src_symbol_id IS NOT NULL
+		   AND src_symbol_id = dst_symbol_id
+		   AND resolver_version = 0`,
 	).Scan(&s.SelfLoopCount); err != nil {
 		return s, err
 	}
-	// Unresolved refs grouped by the source file's language. Tells us which
-	// parser/resolver is lagging (Pillar A targets will move these numbers).
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM refs
+		 WHERE src_symbol_id IS NOT NULL
+		   AND src_symbol_id = dst_symbol_id
+		   AND resolver_version >= 1`,
+	).Scan(&s.RecursionSelfLoops); err != nil {
+		return s, err
+	}
+	// v1.2 refs breakdown — the honest quality signal lives here.
+	_ = r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM refs WHERE kind != 'import'`).Scan(&s.NonImportRefs)
+	_ = r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM refs WHERE resolver_version >= 1`).Scan(&s.RefsTypeResolved)
+	_ = r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM refs WHERE resolver_version >= 1 AND dst_symbol_id IS NULL`).Scan(&s.RefsExternalKnown)
+	_ = r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM refs
+		 WHERE kind != 'import'
+		   AND resolver_version = 0
+		   AND dst_symbol_id IS NULL`).Scan(&s.RefsTrulyUnresolved)
+
+	// Per-language unresolved — same definition (v0 + no dst + not import).
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT f.language, COUNT(*)
 		FROM refs r JOIN files f ON f.id = r.src_file_id
-		WHERE r.resolved = 0
+		WHERE r.kind != 'import' AND r.resolver_version = 0 AND r.dst_symbol_id IS NULL
 		GROUP BY f.language`)
 	if err != nil {
 		return s, err
@@ -409,9 +447,12 @@ func (r *Reader) Stats(ctx context.Context) (Stats, error) {
 	}
 	rows.Close()
 
+	// Per-language total of non-import refs — the denominator for
+	// unresolved_by_language in the doctor.
 	rows, err = r.db.QueryContext(ctx, `
 		SELECT f.language, COUNT(*)
 		FROM refs r JOIN files f ON f.id = r.src_file_id
+		WHERE r.kind != 'import'
 		GROUP BY f.language`)
 	if err != nil {
 		return s, err

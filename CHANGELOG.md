@@ -6,6 +6,66 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [v1.2.0] — 2026-04-22
+
+"Go, but honest" — the second v2.0 milestone (Pillar A for Go). Type-aware
+reference resolution kills the self-loop class of resolution bugs and pushes
+the unresolved-ref ratio on mycelium's own repo from 74.8% to 0%.
+
+### Added
+
+- **`internal/resolver/golang`** — Go type resolver built on
+  `golang.org/x/tools/go/packages` + `go/types`. Loads the whole module
+  once, walks each file's AST using the cached `*types.Info` side tables,
+  and rewrites call-ref `DstName` into the same `pkg.Receiver.Method`
+  shape the parser uses for its own symbols. Stamps every visited call
+  with `ResolverVersion=1` regardless of whether it could rewrite the
+  name, so builtins/conversions/erased-receiver calls are correctly
+  classified as "analyzed, no local target" rather than "unknown."
+- **Migration `0004_resolver_version.sql`** — `refs.resolver_version`
+  column + index. 0 = textual, 1 = go-types resolver, 2+ reserved for TS
+  (v1.3) / Python (v1.3).
+- **Honest metrics** in `query.Stats` — `NonImportRefs`, `RefsTypeResolved`,
+  `RefsExternalKnown`, `RefsTrulyUnresolved`, `RecursionSelfLoops`.
+  `UnresolvedRatio()` now measures genuine unresolved-ness (v0 + no link,
+  non-import), not "dst_symbol_id IS NULL" (which lumped stdlib calls in
+  as "failures").
+- **`MYCELIUM_RESOLVER_DEBUG=1`** env var — per-file resolution counts on
+  stderr for diagnosing edge cases without a rebuild.
+
+### Changed
+
+- SQL resolver's unique-short-name fallback is now **v0-only**. Refs the
+  type-aware pass visited skip the ambiguity-prone fallback, eliminating
+  the self-loop class (e.g. `ix.db.Close()` no longer resolves to our
+  `Index.Close`).
+- `self_loop_count` now counts only resolution-bug self-loops (v0);
+  genuine recursion (v1) is reported separately as `recursion_self_loops`.
+- `Tests: true` in the `packages.Config` — integration and bench test
+  files are now part of the type graph.
+- Go `go` directive bumped to 1.25.0 (required by `golang.org/x/tools`).
+
+### Self-index baselines (Tiger Lake laptop, `myco doctor`)
+
+| metric | v1.1 | v1.2 |
+|---|---|---|
+| self_loop_count (bugs) | 11 | **0** |
+| recursion_self_loops (informational) | n/a | 12 |
+| unresolved_ref_ratio | 74.8% | **0.0%** |
+| refs_resolved_local | 556 | 550 |
+| refs_external_known | n/a | 1425 |
+| doctor exit code | 2 (fail) | 0 (pass) |
+
+### Benchmarks (10k synthetic Go symbols, Tiger Lake)
+
+| op | v1.1 | v1.2 |
+|---|---|---|
+| initial index | 2433 sym/sec | 2347 sym/sec (−3.5%) |
+
+Note: benchmark fixtures don't carry a `go.mod`, so the resolver is nil in
+this measurement. The resolver adds a fixed one-time cost per Pipeline
+construction for the `packages.Load` call (~200ms on the self-index).
+
 ## [v1.1.0] — 2026-04-22
 
 First milestone on the v2.0 roadmap ("Honest signals"). Adds health checks

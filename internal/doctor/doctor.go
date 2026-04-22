@@ -132,11 +132,15 @@ func Run(ctx context.Context, r *query.Reader, embedderProvider string, th Thres
 		loopLevel = LevelWarn
 	}
 	add(Check{
-		Name:    "self_loop_count",
-		Level:   loopLevel,
-		Message: fmt.Sprintf("%d self-referential refs (Pillar A in v1.2 targets 0)", s.SelfLoopCount),
+		Name:  "self_loop_count",
+		Level: loopLevel,
+		Message: fmt.Sprintf(
+			"%d resolution-bug self-loops (target 0); %d real recursion self-loops (informational)",
+			s.SelfLoopCount, s.RecursionSelfLoops,
+		),
 		Detail: map[string]any{
-			"count": s.SelfLoopCount,
+			"resolution_bugs":  s.SelfLoopCount,
+			"real_recursion":   s.RecursionSelfLoops,
 		},
 	})
 
@@ -150,14 +154,19 @@ func Run(ctx context.Context, r *query.Reader, embedderProvider string, th Thres
 		ratioLevel = LevelWarn
 	}
 	add(Check{
-		Name:    "unresolved_ref_ratio",
-		Level:   ratioLevel,
-		Message: fmt.Sprintf("%.1f%% of refs are unresolved (%d/%d)", ratio*100, s.Refs-s.Resolved, s.Refs),
+		Name:  "unresolved_ref_ratio",
+		Level: ratioLevel,
+		Message: fmt.Sprintf(
+			"%.1f%% of non-import refs are genuinely unresolved (%d/%d); %d known-external",
+			ratio*100, s.RefsTrulyUnresolved, s.NonImportRefs, s.RefsExternalKnown,
+		),
 		Detail: map[string]any{
-			"ratio":                ratio,
-			"resolved":             s.Resolved,
-			"total":                s.Refs,
-			"unresolved_by_lang":   s.UnresolvedByLanguage,
+			"ratio":              ratio,
+			"resolved_local":     s.Resolved,
+			"external_known":     s.RefsExternalKnown,
+			"truly_unresolved":   s.RefsTrulyUnresolved,
+			"non_import_total":   s.NonImportRefs,
+			"unresolved_by_lang": s.UnresolvedByLanguage,
 		},
 	})
 

@@ -46,16 +46,24 @@ Enforce in review. Deviations need an explicit reason in CHANGELOG.
 
 - **v1.0 shipped** — 9 MCP tools, 3 transports, 3 languages (Go/TS/Python).
 - **v1.1 shipped** — `myco doctor`, extended `query.Stats`, benchmark harness.
-- **Active next: v1.2 "Go, but honest"** — Go type resolver via
-  `golang.org/x/tools/go/packages` + `go/types`. Hook point:
-  `internal/pipeline/pipeline.go::writeParsed`. New package to create:
-  `internal/resolver/golang/`. New migration: `0004_resolver_version.sql`.
+- **v1.2 shipped** — Go type resolver (`internal/resolver/golang/`). Self-index
+  now shows 0 resolution-bug self-loops and 0% truly-unresolved refs.
+- **Active next: v1.3 "TS and Python scope resolvers"** — scope-tracking
+  tree walkers for TypeScript (handles import bindings, class fields,
+  `this`-typed method calls) and Python (scope + import resolution).
+  Bumps `resolver_version` to 2 (TS) and 3 (Python). Target:
+  `unresolved_ref_ratio < 20%` on a mid-size TS repo, `< 15%` on Python.
+  Explicit non-goals for TS: generics resolution, conditional types,
+  declaration merging, ambient modules beyond `tsconfig.paths`.
 
-**Baselines v1.2 must beat** (from self-index on Tiger Lake laptop):
-- `self_loop_count`: 11 → **0**
-- `unresolved_ref_ratio`: 72.8% → **<8%** for Go
-- 10k-symbol benchmarks: 2433 sym/sec index, 11.4 ms FindSymbol, 3.8 ms
-  GetNeighborhood depth-2 (regressions block merge)
+**v1.2 baselines achieved (self-index, Tiger Lake laptop):**
+- `self_loop_count`: 11 → **0** ✓
+- `unresolved_ref_ratio` (non-import, v0+null): 74.8% → **0.0%** ✓
+- 550 refs resolved to local symbols; 1425 type-resolved external
+- 10k-symbol benchmark: 2347 sym/sec (−3.5% vs v1.1)
+
+When diagnosing v1.2 resolution issues, set `MYCELIUM_RESOLVER_DEBUG=1`
+for per-file visit/rewrite counts on stderr.
 
 ## Dogfooding — use mycelium to develop mycelium
 

@@ -152,8 +152,8 @@ func (ix *Index) ReplaceFileRefs(ctx context.Context, tx *sql.Tx, fileID int64, 
 		return nil
 	}
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO refs(src_file_id, src_symbol_id, dst_symbol_id, dst_name, dst_short, kind, line, col, resolved)
-		VALUES(?, ?, NULL, ?, ?, ?, ?, ?, 0)`)
+		INSERT INTO refs(src_file_id, src_symbol_id, dst_symbol_id, dst_name, dst_short, kind, line, col, resolved, resolver_version)
+		VALUES(?, ?, NULL, ?, ?, ?, ?, ?, 0, ?)`)
 	if err != nil {
 		return fmt.Errorf("prepare insert ref: %w", err)
 	}
@@ -165,7 +165,7 @@ func (ix *Index) ReplaceFileRefs(ctx context.Context, tx *sql.Tx, fileID int64, 
 				srcID = id
 			}
 		}
-		if _, err := stmt.ExecContext(ctx, fileID, srcID, r.DstName, shortName(r.DstName), string(r.Kind), r.Line, r.Col); err != nil {
+		if _, err := stmt.ExecContext(ctx, fileID, srcID, r.DstName, shortName(r.DstName), string(r.Kind), r.Line, r.Col, r.ResolverVersion); err != nil {
 			return fmt.Errorf("insert ref: %w", err)
 		}
 	}
