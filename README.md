@@ -1,27 +1,39 @@
-# mycelium
+<p align="center">
+  <img src="./assets/myco.png" width="280" alt="Mycelium Logo">
+</p>
 
-> A local, always-fresh repository knowledge base for AI coding agents.
-> Binary: `myco` · Storage: SQLite at `.mycelium/index.db` · Interfaces: MCP, HTTP, CLI
+<h1 align="center">Mycelium</h1>
 
-Mycelium parses your repo with Go/AST and tree-sitter, stores symbols,
-references, and (optionally) semantic embeddings in a single SQLite file, and
-serves that index to Claude Code, Cursor, and any other MCP client. A
-background daemon keeps the index within a few hundred milliseconds of what's
-on disk. No external services, no Docker.
+<p align="center">
+  <strong>A local, always-fresh repository knowledge base for AI coding agents.</strong><br>
+  <em>Stop wasting tokens. Give your agents instant, structural, and semantic context.</em>
+</p>
 
-See [CONTEXT.md](./CONTEXT.md) for the problem, goals, and non-goals,
-[CHANGELOG.md](./CHANGELOG.md) for version history, and
-[LIMITATIONS.md](./LIMITATIONS.md) for the honest list of what doesn't
-work yet and why.
+<p align="center">
+  <a href="https://github.com/Datata1/mycelium/releases"><img src="https://img.shields.io/github/v/release/Datata1/mycelium?style=flat-square&color=00FFCC" alt="Release"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Storage-SQLite-blue?style=flat-square" alt="SQLite"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Interface-MCP%20%7C%20HTTP%20%7C%20CLI-8A2BE2?style=flat-square" alt="Interfaces"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Status-v1.0%20Feature%20Complete-success?style=flat-square" alt="Status"></a>
+</p>
 
 ---
 
-## Why
+> **Binary:** `myco` &nbsp;&middot;&nbsp; **Storage:** SQLite at `.mycelium/index.db` &nbsp;&middot;&nbsp; **Interfaces:** MCP, HTTP, CLI
 
-AI coding agents waste tokens and tool calls re-discovering a repo's structure
-on every task. Ripgrep is blind to structure; full-text search misses
-semantics; whole-file reads blow context windows. Mycelium gives agents a
-structured, always-fresh index they can query precisely.
+Mycelium parses your repo with Go/AST and tree-sitter, stores symbols, references, and (optionally) semantic embeddings in a single SQLite file, and serves that index to **Claude Code, Cursor, and any other MCP client.** A background daemon keeps the index within a few hundred milliseconds of what's on disk. **No external services, no Docker.**
+
+See [CONTEXT.md](./CONTEXT.md) for the problem, goals, and non-goals, [CHANGELOG.md](./CHANGELOG.md) for version history, and [LIMITATIONS.md](./LIMITATIONS.md) for the honest list of what doesn't work yet and why.
+
+---
+
+## ⚡ Why Mycelium?
+
+AI coding agents waste tokens and tool calls re-discovering a repo's structure on every single task. 
+* **Ripgrep** is blind to structure.
+* **Full-text search** misses semantics.
+* **Whole-file reads** blow out your context windows. 
+
+**Mycelium** gives agents a structured, always-fresh index they can query precisely.
 
 ## Status
 
