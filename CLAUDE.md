@@ -4,8 +4,10 @@ Mycelium is a local repository knowledge base for AI coding agents. The binary
 is `myco`; storage is a single SQLite file at `.mycelium/index.db`; three
 transports (MCP stdio, unix socket, HTTP :7777 loopback) share one dispatcher.
 
-See `README.md` for user-facing docs, `CONTEXT.md` for the problem + goals, and
-`CHANGELOG.md` for version history. The active roadmap is the v2.0 plan at
+See `README.md` for user-facing docs, `CONTEXT.md` for the problem + goals,
+`LIMITATIONS.md` for what doesn't work today (read before proposing new
+features — the list covers most "could we…?" questions), and `CHANGELOG.md`
+for version history. The active roadmap is the v2.0 plan at
 `~/.claude/plans/1-everything-you-mentioned-indexed-duckling.md`.
 
 ## Build + run (required every session)

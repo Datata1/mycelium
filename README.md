@@ -9,8 +9,10 @@ serves that index to Claude Code, Cursor, and any other MCP client. A
 background daemon keeps the index within a few hundred milliseconds of what's
 on disk. No external services, no Docker.
 
-See [CONTEXT.md](./CONTEXT.md) for the problem, goals, and non-goals, and
-[CHANGELOG.md](./CHANGELOG.md) for version history.
+See [CONTEXT.md](./CONTEXT.md) for the problem, goals, and non-goals,
+[CHANGELOG.md](./CHANGELOG.md) for version history, and
+[LIMITATIONS.md](./LIMITATIONS.md) for the honest list of what doesn't
+work yet and why.
 
 ---
 

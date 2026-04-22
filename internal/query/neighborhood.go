@@ -42,11 +42,21 @@ type NeighborNode struct {
 }
 
 // Neighborhood is the result of a traversal.
+//
+// Notes carries non-fatal messages the caller should surface (e.g. depth
+// was silently clamped). Transports (CLI, MCP, HTTP) pass these through
+// verbatim so agents can reason about the result quality.
 type Neighborhood struct {
 	Seed  NeighborNode    `json:"seed"`
 	Nodes []NeighborNode  `json:"nodes"`
 	Edges []NeighborEdge  `json:"edges"`
+	Notes []string        `json:"notes,omitempty"`
 }
+
+// MaxNeighborhoodDepth is the hard ceiling a caller-visible note is emitted
+// for. See LIMITATIONS.md "get_neighborhood silently caps depth at 5" —
+// now "get_neighborhood caps depth at 5, surfaces a note."
+const MaxNeighborhoodDepth = 5
 
 // GetNeighborhood returns the local call graph around a symbol, up to the
 // given depth. This is the graph query the user was asking about: SQLite
@@ -55,11 +65,16 @@ type Neighborhood struct {
 // this is the exact function to swap for a dedicated graph backend (Kùzu).
 func (r *Reader) GetNeighborhood(ctx context.Context, target string, depth int, direction Direction) (Neighborhood, error) {
 	var result Neighborhood
+	requestedDepth := depth
 	if depth <= 0 {
 		depth = 2
 	}
-	if depth > 5 {
-		depth = 5 // hard ceiling keeps traversal bounded
+	if depth > MaxNeighborhoodDepth {
+		depth = MaxNeighborhoodDepth
+		result.Notes = append(result.Notes, fmt.Sprintf(
+			"depth clamped from %d to %d (see LIMITATIONS.md#graph-queries)",
+			requestedDepth, MaxNeighborhoodDepth,
+		))
 	}
 	if direction == "" {
 		direction = DirBoth
