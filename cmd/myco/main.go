@@ -164,11 +164,13 @@ func newQueryCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			kind, _ := cmd.Flags().GetString("kind")
 			limit, _ := cmd.Flags().GetInt("limit")
-			return runQueryFind(args[0], kind, limit)
+			project, _ := cmd.Flags().GetString("project")
+			return runQueryFind(args[0], kind, project, limit)
 		},
 	}
 	findCmd.Flags().String("kind", "", "filter by kind: function | method | type | interface | var | const")
 	findCmd.Flags().Int("limit", 20, "max results")
+	findCmd.Flags().String("project", "", "restrict to a workspace project (by name)")
 
 	refsCmd := &cobra.Command{
 		Use:   "refs <symbol>",
@@ -176,10 +178,12 @@ func newQueryCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			limit, _ := cmd.Flags().GetInt("limit")
-			return runQueryRefs(args[0], limit)
+			project, _ := cmd.Flags().GetString("project")
+			return runQueryRefs(args[0], project, limit)
 		},
 	}
 	refsCmd.Flags().Int("limit", 100, "max results")
+	refsCmd.Flags().String("project", "", "restrict to a workspace project (by name)")
 
 	filesCmd := &cobra.Command{
 		Use:   "files [name-contains]",
@@ -188,15 +192,17 @@ func newQueryCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			lang, _ := cmd.Flags().GetString("language")
 			limit, _ := cmd.Flags().GetInt("limit")
+			project, _ := cmd.Flags().GetString("project")
 			name := ""
 			if len(args) == 1 {
 				name = args[0]
 			}
-			return runQueryFiles(name, lang, limit)
+			return runQueryFiles(name, lang, project, limit)
 		},
 	}
 	filesCmd.Flags().String("language", "", "filter by language (go, typescript, python)")
 	filesCmd.Flags().Int("limit", 500, "max results")
+	filesCmd.Flags().String("project", "", "restrict to a workspace project (by name)")
 
 	outlineCmd := &cobra.Command{
 		Use:   "outline <path>",
@@ -214,11 +220,13 @@ func newQueryCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			k, _ := cmd.Flags().GetInt("k")
 			path, _ := cmd.Flags().GetString("path")
-			return runQueryLexical(args[0], path, k)
+			project, _ := cmd.Flags().GetString("project")
+			return runQueryLexical(args[0], path, project, k)
 		},
 	}
 	grepCmd.Flags().Int("k", 50, "max results")
 	grepCmd.Flags().String("path", "", "filter by path substring")
+	grepCmd.Flags().String("project", "", "restrict to a workspace project (by name)")
 
 	summaryCmd := &cobra.Command{
 		Use:   "summary <path>",
@@ -236,11 +244,13 @@ func newQueryCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			depth, _ := cmd.Flags().GetInt("depth")
 			dir, _ := cmd.Flags().GetString("direction")
-			return runQueryNeighborhood(args[0], depth, dir)
+			project, _ := cmd.Flags().GetString("project")
+			return runQueryNeighborhood(args[0], project, depth, dir)
 		},
 	}
 	neighborCmd.Flags().Int("depth", 2, "traversal depth (max 5)")
 	neighborCmd.Flags().String("direction", "both", "out | in | both")
+	neighborCmd.Flags().String("project", "", "restrict seed lookup to a workspace project (traversal remains global)")
 
 	cmd.AddCommand(
 		findCmd,
@@ -259,12 +269,14 @@ func newQueryCmd() *cobra.Command {
 					k, _ := cmd.Flags().GetInt("k")
 					kind, _ := cmd.Flags().GetString("kind")
 					path, _ := cmd.Flags().GetString("path")
-					return runQuerySearch(args[0], k, kind, path)
+					project, _ := cmd.Flags().GetString("project")
+					return runQuerySearch(args[0], k, kind, path, project)
 				},
 			}
 			c.Flags().Int("k", 10, "number of results")
 			c.Flags().String("kind", "", "filter by kind")
 			c.Flags().String("path", "", "filter by path substring")
+			c.Flags().String("project", "", "restrict to a workspace project (by name)")
 			return c
 		}(),
 	)
@@ -318,7 +330,7 @@ func runQueryFind(name, kind, project string, limit int) error {
 	return nil
 }
 
-func runQueryRefs(target string, limit int) error {
+func runQueryRefs(target, project string, limit int) error {
 	ctx := context.Background()
 	rc, err := loadRepoCtx()
 	if err != nil {
@@ -326,7 +338,7 @@ func runQueryRefs(target string, limit int) error {
 	}
 	var hits []query.ReferenceHit
 	if c, ok := daemonClient(rc); ok {
-		if err := c.Call(ipc.MethodGetReferences, ipc.GetReferencesParams{Target: target, Limit: limit}, &hits); err != nil {
+		if err := c.Call(ipc.MethodGetReferences, ipc.GetReferencesParams{Target: target, Project: project, Limit: limit}, &hits); err != nil {
 			return err
 		}
 	} else {
@@ -336,7 +348,7 @@ func runQueryRefs(target string, limit int) error {
 		}
 		defer ix.Close()
 		r := query.NewReader(ix.DB())
-		hits, err = r.GetReferences(ctx, target, limit)
+		hits, err = r.GetReferences(ctx, target, project, limit)
 		if err != nil {
 			return err
 		}
@@ -359,7 +371,7 @@ func runQueryRefs(target string, limit int) error {
 	return nil
 }
 
-func runQueryFiles(nameContains, language string, limit int) error {
+func runQueryFiles(nameContains, language, project string, limit int) error {
 	ctx := context.Background()
 	rc, err := loadRepoCtx()
 	if err != nil {
@@ -367,7 +379,7 @@ func runQueryFiles(nameContains, language string, limit int) error {
 	}
 	var hits []query.FileHit
 	if c, ok := daemonClient(rc); ok {
-		if err := c.Call(ipc.MethodListFiles, ipc.ListFilesParams{Language: language, NameContains: nameContains, Limit: limit}, &hits); err != nil {
+		if err := c.Call(ipc.MethodListFiles, ipc.ListFilesParams{Language: language, NameContains: nameContains, Project: project, Limit: limit}, &hits); err != nil {
 			return err
 		}
 	} else {
@@ -377,7 +389,7 @@ func runQueryFiles(nameContains, language string, limit int) error {
 		}
 		defer ix.Close()
 		r := query.NewReader(ix.DB())
-		hits, err = r.ListFiles(ctx, language, nameContains, limit)
+		hits, err = r.ListFiles(ctx, language, nameContains, project, limit)
 		if err != nil {
 			return err
 		}
@@ -388,7 +400,7 @@ func runQueryFiles(nameContains, language string, limit int) error {
 	return nil
 }
 
-func runQueryLexical(pattern, pathContains string, k int) error {
+func runQueryLexical(pattern, pathContains, project string, k int) error {
 	ctx := context.Background()
 	rc, err := loadRepoCtx()
 	if err != nil {
@@ -396,7 +408,7 @@ func runQueryLexical(pattern, pathContains string, k int) error {
 	}
 	var hits []query.LexicalHit
 	if c, ok := daemonClient(rc); ok {
-		if err := c.Call(ipc.MethodSearchLexical, ipc.SearchLexicalParams{Pattern: pattern, PathContains: pathContains, K: k}, &hits); err != nil {
+		if err := c.Call(ipc.MethodSearchLexical, ipc.SearchLexicalParams{Pattern: pattern, PathContains: pathContains, Project: project, K: k}, &hits); err != nil {
 			return err
 		}
 	} else {
@@ -406,7 +418,7 @@ func runQueryLexical(pattern, pathContains string, k int) error {
 		}
 		defer ix.Close()
 		r := query.NewReader(ix.DB())
-		hits, err = r.SearchLexical(ctx, pattern, pathContains, k, rc.Root)
+		hits, err = r.SearchLexical(ctx, pattern, pathContains, project, k, rc.Root)
 		if err != nil {
 			return err
 		}
@@ -463,7 +475,7 @@ func runQuerySummary(path string) error {
 	return nil
 }
 
-func runQueryNeighborhood(target string, depth int, direction string) error {
+func runQueryNeighborhood(target, project string, depth int, direction string) error {
 	ctx := context.Background()
 	rc, err := loadRepoCtx()
 	if err != nil {
@@ -471,7 +483,7 @@ func runQueryNeighborhood(target string, depth int, direction string) error {
 	}
 	var nb query.Neighborhood
 	if c, ok := daemonClient(rc); ok {
-		if err := c.Call(ipc.MethodGetNeighborhood, ipc.GetNeighborhoodParams{Target: target, Depth: depth, Direction: direction}, &nb); err != nil {
+		if err := c.Call(ipc.MethodGetNeighborhood, ipc.GetNeighborhoodParams{Target: target, Project: project, Depth: depth, Direction: direction}, &nb); err != nil {
 			return err
 		}
 	} else {
@@ -481,7 +493,7 @@ func runQueryNeighborhood(target string, depth int, direction string) error {
 		}
 		defer ix.Close()
 		r := query.NewReader(ix.DB())
-		nb, err = r.GetNeighborhood(ctx, target, depth, query.Direction(direction))
+		nb, err = r.GetNeighborhood(ctx, target, project, depth, query.Direction(direction))
 		if err != nil {
 			return err
 		}
@@ -500,7 +512,7 @@ func runQueryNeighborhood(target string, depth int, direction string) error {
 	return nil
 }
 
-func runQuerySearch(q string, k int, kind, pathContains string) error {
+func runQuerySearch(q string, k int, kind, pathContains, project string) error {
 	ctx := context.Background()
 	rc, err := loadRepoCtx()
 	if err != nil {
@@ -508,7 +520,7 @@ func runQuerySearch(q string, k int, kind, pathContains string) error {
 	}
 	var hits []query.SemanticHit
 	if c, ok := daemonClient(rc); ok {
-		if err := c.Call(ipc.MethodSearchSemantic, ipc.SearchSemanticParams{Query: q, K: k, Kind: kind, PathContains: pathContains}, &hits); err != nil {
+		if err := c.Call(ipc.MethodSearchSemantic, ipc.SearchSemanticParams{Query: q, K: k, Kind: kind, PathContains: pathContains, Project: project}, &hits); err != nil {
 			return err
 		}
 	} else {
@@ -531,7 +543,7 @@ func runQuerySearch(q string, k int, kind, pathContains string) error {
 			_ = ix.EnsureVSS(ctx, emb.Dimension())
 		}
 		s := &query.Searcher{Reader: r, Embedder: emb, VSSTable: ix.VSSTableName()}
-		hits, err = s.SearchSemantic(ctx, q, k, kind, pathContains)
+		hits, err = s.SearchSemantic(ctx, q, k, kind, pathContains, project)
 		if err != nil {
 			return err
 		}

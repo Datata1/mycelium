@@ -76,7 +76,7 @@ func benchSemanticAt(b *testing.B, chunks, dim int) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		hits, err := searcher.SearchSemantic(ctx, "bench query text", 10, "", "")
+		hits, err := searcher.SearchSemantic(ctx, "bench query text", 10, "", "", "")
 		if err != nil {
 			b.Fatalf("search: %v", err)
 		}

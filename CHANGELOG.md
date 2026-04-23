@@ -6,6 +6,61 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [v1.5.0] — 2026-04-23
+
+"Workspace mode" — the fifth v2.0 milestone (Pillar C). One daemon, one
+SQLite, N sub-projects under one worktree. Not cross-repo federation
+(that's v3): the unit of isolation is a directory inside the same repo,
+each with its own `languages` / `include` / `exclude` overrides.
+
+### Added
+
+- **Migration `0005_projects.sql`** — new `projects(id, name, root,
+  created_at)` table plus `files.project_id` FK with cascade delete. A
+  NULL `project_id` means the file belongs to the implicit root project
+  (v1.4 configs keep working untouched).
+- **`config.ProjectConfig`** — optional `projects:` list in
+  `.mycelium.yml`. Each entry has `name`, `root`, and optional
+  `languages`/`include`/`exclude` overrides. Embedder/chunking stay
+  inherited from the top level (one DB can't mix embedding dims).
+- **`internal/index/projects.go`** — `UpsertProject`, `PruneProjects`,
+  `ListProjects`. Idempotent upsert by name; prune drops rows no longer
+  in config (cascades remove their files + symbols + refs + chunks).
+- **`pipeline.Workspace`** — per-project walker + project_id. The
+  pipeline now accepts a `Workspaces []Workspace` slice; each walker
+  runs with its own roots/filters and every file it emits is tagged
+  with the owning project before hitting the writer. Legacy single-
+  `Walker` mode still works when `Workspaces` is empty.
+- **`Pipeline.FileProjectFor`** — longest-prefix resolver so fsnotify
+  events from the watcher can attribute a changed file back to its
+  project on the single-file update path.
+- **Query-side `project` parameter** — `FindSymbol`, `GetReferences`,
+  `ListFiles`, `SearchLexical`, `SearchSemantic`, `GetNeighborhood`
+  each accept an optional project name. A splicer (`projectScope`) adds
+  `AND f.project_id = ?` when set; unknown project names return zero
+  hits rather than silently falling back to unscoped (config bug
+  visibility). For `GetNeighborhood`, only the seed lookup is scoped —
+  traversal stays global so cross-project call graphs surface.
+- **IPC + MCP + CLI plumbing** — `Project` field added to every
+  params struct that touches files. MCP tool schemas advertise the
+  optional `project` input. CLI gains `--project <name>` on `myco query
+  find | refs | files | grep | search | neighbors`.
+- **Workspace integration test + fixture** at
+  `testdata/fixtures/workspace` (3 sub-projects: Go `api`, TS `web`,
+  Python `worker`) in `workspace_integration_test.go`. Verifies
+  per-project scoping on `find_symbol` and `list_files`, the
+  unknown-project zero-hit contract, and that every indexed file has a
+  non-null `project_id` pointing at the right row.
+
+### Notes
+
+- The vec0 fast path is skipped when a project filter is active — vec0
+  MATCH doesn't compose with arbitrary WHERE clauses. Brute-force
+  cosine handles project-scoped semantic search.
+- Embedder inheritance is intentional: a single SQLite DB can't mix
+  embedding dimensions cleanly, so per-project embedder overrides are
+  deliberately out of scope.
+
 ## [v1.4.0] — 2026-04-22
 
 "Semantic at scale" — the fourth v2.0 milestone (Pillar B). Adds optional

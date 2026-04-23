@@ -1,0 +1,37 @@
+version: 1
+languages: [go, typescript, python]
+include:
+  - "**/*.go"
+  - "**/*.ts"
+  - "**/*.py"
+exclude: []
+embedder:
+  provider: none
+chunking:
+  symbol_max_tokens: 1024
+  include_docstrings: true
+  file_fallback_window_lines: 50
+watcher:
+  debounce_ms: 200
+  coalesce_ms: 2000
+daemon:
+  socket: .mycelium/daemon.sock
+  http_port: 0
+hooks:
+  post_commit: false
+index:
+  path: .mycelium/index.db
+  max_file_size_kb: 1024
+projects:
+  - name: api
+    root: services/api
+    languages: [go]
+    include: ["**/*.go"]
+  - name: web
+    root: services/web
+    languages: [typescript]
+    include: ["**/*.ts"]
+  - name: worker
+    root: services/worker
+    languages: [python]
+    include: ["**/*.py"]

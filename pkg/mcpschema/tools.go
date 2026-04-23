@@ -38,6 +38,10 @@ func Tools() []Tool {
 						"type":        "integer",
 						"description": "Maximum number of hits (default 20).",
 					},
+					"project": map[string]any{
+						"type":        "string",
+						"description": "Optional workspace project name to scope the search to.",
+					},
 				},
 				"required": []string{"name"},
 			},
@@ -55,6 +59,10 @@ func Tools() []Tool {
 					"limit": map[string]any{
 						"type":        "integer",
 						"description": "Maximum number of hits (default 100).",
+					},
+					"project": map[string]any{
+						"type":        "string",
+						"description": "Optional workspace project name to scope the search to.",
 					},
 				},
 				"required": []string{"target"},
@@ -77,6 +85,10 @@ func Tools() []Tool {
 					"limit": map[string]any{
 						"type":        "integer",
 						"description": "Maximum number of files (default 500).",
+					},
+					"project": map[string]any{
+						"type":        "string",
+						"description": "Optional workspace project name to scope the search to.",
 					},
 				},
 			},
@@ -112,6 +124,10 @@ func Tools() []Tool {
 					"k": map[string]any{
 						"type":        "integer",
 						"description": "Max results (default 50).",
+					},
+					"project": map[string]any{
+						"type":        "string",
+						"description": "Optional workspace project name to scope the search to.",
 					},
 				},
 				"required": []string{"pattern"},
@@ -149,6 +165,10 @@ func Tools() []Tool {
 						"type":        "string",
 						"description": "out | in | both (default both).",
 					},
+					"project": map[string]any{
+						"type":        "string",
+						"description": "Optional workspace project — scopes the seed lookup only; traversal remains global so cross-project edges still surface.",
+					},
 				},
 				"required": []string{"target"},
 			},
@@ -174,6 +194,10 @@ func Tools() []Tool {
 					"path_contains": map[string]any{
 						"type":        "string",
 						"description": "Restrict to files whose path contains this substring.",
+					},
+					"project": map[string]any{
+						"type":        "string",
+						"description": "Optional workspace project name to scope the search to.",
 					},
 				},
 				"required": []string{"query"},

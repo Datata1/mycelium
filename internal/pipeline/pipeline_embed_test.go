@@ -99,7 +99,7 @@ func AuthenticateUser(email, password string) error {
 	}
 
 	searcher := &query.Searcher{Reader: reader, Embedder: fake}
-	hits, err := searcher.SearchSemantic(ctx, "validate a login attempt", 3, "", "")
+	hits, err := searcher.SearchSemantic(ctx, "validate a login attempt", 3, "", "", "")
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
