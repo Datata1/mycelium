@@ -25,6 +25,8 @@ import (
 	"github.com/jdwiederstein/mycelium/internal/pipeline"
 	"github.com/jdwiederstein/mycelium/internal/query"
 	"github.com/jdwiederstein/mycelium/internal/repo"
+	pyresolver "github.com/jdwiederstein/mycelium/internal/resolver/python"
+	tsresolver "github.com/jdwiederstein/mycelium/internal/resolver/typescript"
 )
 
 func TestIntegration_IndexAndQuery(t *testing.T) {
@@ -53,6 +55,13 @@ func TestIntegration_IndexAndQuery(t *testing.T) {
 		Registry: reg,
 		Walker:   walker,
 		Embedder: embed.Noop{},
+		// v1.3 resolvers wired in so the test exercises the scope
+		// walkers. Go resolver is skipped — the fixture has a bare
+		// main.go with no go.mod so `go/packages` can't type-check it.
+		Resolvers: map[string]pipeline.Resolver{
+			"typescript": tsresolver.New(),
+			"python":     pyresolver.New(),
+		},
 	}
 	rep, err := p.RunOnce(ctx)
 	if err != nil {
@@ -179,6 +188,62 @@ func TestIntegration_IndexAndQuery(t *testing.T) {
 		}
 		if !strings.Contains(hits[0].Path, "main.go") {
 			t.Errorf("expected hit in main.go; got %s", hits[0].Path)
+		}
+	})
+
+	t.Run("v1.3_ts_this_method_resolution", func(t *testing.T) {
+		// issueToken calls this.fingerprint — TS scope walker should
+		// resolve the call to auth.AuthService.fingerprint.
+		hits, err := reader.GetReferences(ctx, "auth.AuthService.fingerprint", 10)
+		if err != nil {
+			t.Fatalf("refs: %v", err)
+		}
+		found := false
+		for _, h := range hits {
+			if h.Resolved && strings.Contains(h.SrcPath, "auth.ts") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected resolved this.fingerprint call from auth.ts; got %+v", hits)
+		}
+	})
+
+	t.Run("v1.3_python_self_method_resolution", func(t *testing.T) {
+		// JobQueue.drain calls self.dequeue — Python scope walker should
+		// resolve the call to worker.JobQueue.dequeue.
+		hits, err := reader.GetReferences(ctx, "worker.JobQueue.dequeue", 10)
+		if err != nil {
+			t.Fatalf("refs: %v", err)
+		}
+		found := false
+		for _, h := range hits {
+			if h.Resolved && strings.Contains(h.SrcPath, "worker.py") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected resolved self.dequeue call from worker.py; got %+v", hits)
+		}
+	})
+
+	t.Run("v1.3_no_truly_unresolved_refs", func(t *testing.T) {
+		// With all three resolvers wired (minus Go, which needs a go.mod
+		// this fixture doesn't have), truly-unresolved should be zero
+		// across TS + Python — every call the resolver visits stamps
+		// ResolverVersion, even when it can't rewrite the name.
+		s, err := reader.Stats(ctx)
+		if err != nil {
+			t.Fatalf("stats: %v", err)
+		}
+		// Inspect per-language to ignore the Go fixture's isolated main.go.
+		if s.UnresolvedByLanguage["typescript"] != 0 {
+			t.Errorf("typescript unresolved: got %d, want 0", s.UnresolvedByLanguage["typescript"])
+		}
+		if s.UnresolvedByLanguage["python"] != 0 {
+			t.Errorf("python unresolved: got %d, want 0", s.UnresolvedByLanguage["python"])
 		}
 	})
 

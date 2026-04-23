@@ -68,6 +68,19 @@ func Unpack(b []byte, dim int) ([]float32, error) {
 	return v, nil
 }
 
+// UnpackInto is the alloc-free variant for hot loops. Caller provides a
+// preallocated []float32 of the right length; we fill it in place and
+// validate the byte slice width.
+func UnpackInto(b []byte, out []float32) error {
+	if len(b) != 4*len(out) {
+		return fmt.Errorf("embedding: expected %d bytes (dim=%d), got %d", 4*len(out), len(out), len(b))
+	}
+	for i := range out {
+		out[i] = math.Float32frombits(binary.LittleEndian.Uint32(b[i*4:]))
+	}
+	return nil
+}
+
 // Cosine returns the cosine similarity of two vectors. Returns 0 if either
 // vector is all-zero or the dimensions differ.
 func Cosine(a, b []float32) float32 {

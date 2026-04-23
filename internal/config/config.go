@@ -28,6 +28,25 @@ type Config struct {
 	Daemon    DaemonConfig   `yaml:"daemon"`
 	Hooks     HooksConfig    `yaml:"hooks"`
 	Index     IndexConfig    `yaml:"index"`
+	// Projects is the v1.5 workspace mode. When empty, the whole repo
+	// is one implicit "root project" indexed with the top-level
+	// Languages/Include/Exclude — backward compatible with v1.4.
+	// When non-empty, ONLY the listed sub-projects are indexed; the
+	// top-level include/exclude are unused. Each project inherits
+	// Embedder/Chunking/Watcher from the top level.
+	Projects []ProjectConfig `yaml:"projects"`
+}
+
+// ProjectConfig scopes indexing to a sub-directory of the repo with its
+// own include/exclude/languages. Embedder inheritance is intentional: a
+// single SQLite DB can't mix embedding dimensions cleanly, so the top-
+// level Embedder is the source of truth.
+type ProjectConfig struct {
+	Name      string   `yaml:"name"`
+	Root      string   `yaml:"root"`      // repo-relative
+	Languages []string `yaml:"languages"` // optional; defaults to top-level
+	Include   []string `yaml:"include"`
+	Exclude   []string `yaml:"exclude"`
 }
 
 type EmbedderConfig struct {
@@ -62,8 +81,19 @@ type HooksConfig struct {
 }
 
 type IndexConfig struct {
-	Path           string `yaml:"path"`
-	MaxFileSizeKB  int    `yaml:"max_file_size_kb"`
+	Path          string       `yaml:"path"`
+	MaxFileSizeKB int          `yaml:"max_file_size_kb"`
+	Vector        VectorConfig `yaml:"vector"`
+}
+
+// VectorConfig enables sqlite-vec integration (v1.4). When ExtensionPath is
+// empty, semantic search stays on the brute-force Go cosine path. When set
+// and the .so/.dylib/.dll loads successfully, we use the vec0 virtual
+// table for KNN lookups.
+type VectorConfig struct {
+	ExtensionPath string `yaml:"extension_path"` // e.g. /usr/local/lib/vec0.so, empty = disabled
+	AutoCreate    bool   `yaml:"auto_create"`    // create vss_chunks on daemon start if missing
+	KNNEFSearch   int    `yaml:"ef_search"`      // tuning for HNSW (reserved; vec0 current release is flat KNN)
 }
 
 var supportedLanguages = map[string]bool{
@@ -119,6 +149,10 @@ func Default() Config {
 		Index: IndexConfig{
 			Path:          DefaultIndexPath,
 			MaxFileSizeKB: 1024,
+			Vector: VectorConfig{
+				AutoCreate:  true, // create vss_chunks if extension loads
+				KNNEFSearch: 0,    // reserved for future HNSW tuning
+			},
 		},
 	}
 }
@@ -171,6 +205,27 @@ func (c Config) Validate() error {
 	}
 	if c.Index.Path == "" {
 		return fmt.Errorf("index.path: required")
+	}
+	// v1.5 workspace-mode validation. Names must be unique + non-empty;
+	// roots must be non-empty. We don't enforce that Root exists on disk
+	// — users may be generating projects from a template repo.
+	seen := map[string]bool{}
+	for i, p := range c.Projects {
+		if p.Name == "" {
+			return fmt.Errorf("projects[%d].name: required", i)
+		}
+		if p.Root == "" {
+			return fmt.Errorf("projects[%d].root: required (use \".\" for repo root)", i)
+		}
+		if seen[p.Name] {
+			return fmt.Errorf("projects[%d].name: duplicate %q", i, p.Name)
+		}
+		seen[p.Name] = true
+		for _, lang := range p.Languages {
+			if !supportedLanguages[lang] {
+				return fmt.Errorf("projects[%d].languages: %q is not supported", i, lang)
+			}
+		}
 	}
 	return nil
 }

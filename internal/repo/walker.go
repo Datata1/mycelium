@@ -20,11 +20,17 @@ type Walker struct {
 }
 
 // File is one result from the walker.
+//
+// ProjectID is 0 for files that don't belong to any explicit project
+// (the implicit "root project" when .mycelium.yml has no projects:
+// list) and the project row id otherwise. Caller fills it in after the
+// walk — the Walker itself is project-agnostic.
 type File struct {
-	AbsPath  string
-	RelPath  string // forward-slash, repo-relative
-	SizeKB   int
-	MTimeNS  int64
+	AbsPath   string
+	RelPath   string // forward-slash, repo-relative
+	SizeKB    int
+	MTimeNS   int64
+	ProjectID int64
 }
 
 func NewWalker(root string, include, exclude []string, maxFileSizeKB int) *Walker {

@@ -34,36 +34,45 @@ type SymbolHit struct {
 // FindSymbol returns symbols matching name (substring match for v0.2). FTS5
 // trigram lookup lands with the switch from LIKE to MATCH once we validate
 // the tokenizer across platforms.
-func (r *Reader) FindSymbol(ctx context.Context, name, kind string, limit int) ([]SymbolHit, error) {
+//
+// project, when non-empty, scopes results to a single workspace project
+// (v1.5). An unknown project name returns zero rows rather than falling
+// back to unscoped results — silent de-scoping would mislead agents.
+func (r *Reader) FindSymbol(ctx context.Context, name, kind, project string, limit int) ([]SymbolHit, error) {
 	if limit <= 0 {
 		limit = 20
+	}
+	scope, scopeArgs, err := r.projectScope(ctx, project)
+	if err != nil {
+		return nil, err
 	}
 	q := "%" + name + "%"
 	var (
 		rows *sql.Rows
-		err  error
 	)
 	if kind == "" {
+		args := append([]any{q, q}, scopeArgs...)
+		args = append(args, name, name+"%", limit)
 		rows, err = r.db.QueryContext(ctx, `
 			SELECT s.id, s.name, s.qualified, s.kind, f.path, s.start_line, s.end_line,
 			       COALESCE(s.signature, ''), COALESCE(s.docstring, '')
 			FROM symbols s JOIN files f ON f.id = s.file_id
-			WHERE s.name LIKE ? OR s.qualified LIKE ?
+			WHERE (s.name LIKE ? OR s.qualified LIKE ?)`+scope+`
 			ORDER BY
 			  CASE WHEN s.name = ? THEN 0
 			       WHEN s.name LIKE ? THEN 1 ELSE 2 END,
 			  length(s.qualified)
-			LIMIT ?`,
-			q, q, name, name+"%", limit)
+			LIMIT ?`, args...)
 	} else {
+		args := append([]any{q, q, kind}, scopeArgs...)
+		args = append(args, limit)
 		rows, err = r.db.QueryContext(ctx, `
 			SELECT s.id, s.name, s.qualified, s.kind, f.path, s.start_line, s.end_line,
 			       COALESCE(s.signature, ''), COALESCE(s.docstring, '')
 			FROM symbols s JOIN files f ON f.id = s.file_id
-			WHERE (s.name LIKE ? OR s.qualified LIKE ?) AND s.kind = ?
+			WHERE (s.name LIKE ? OR s.qualified LIKE ?) AND s.kind = ?`+scope+`
 			ORDER BY length(s.qualified)
-			LIMIT ?`,
-			q, q, kind, limit)
+			LIMIT ?`, args...)
 	}
 	if err != nil {
 		return nil, err
@@ -97,10 +106,15 @@ type ReferenceHit struct {
 }
 
 // GetReferences returns use-sites for a symbol. The target can be specified
-// by qualified name (preferred) or short name.
-func (r *Reader) GetReferences(ctx context.Context, target string, limit int) ([]ReferenceHit, error) {
+// by qualified name (preferred) or short name. project filters to a single
+// workspace project when non-empty.
+func (r *Reader) GetReferences(ctx context.Context, target, project string, limit int) ([]ReferenceHit, error) {
 	if limit <= 0 {
 		limit = 100
+	}
+	scope, scopeArgs, err := r.projectScope(ctx, project)
+	if err != nil {
+		return nil, err
 	}
 	// Resolve target -> symbol ids (may be >1 for ambiguous short names).
 	ids, err := r.symbolsByTarget(ctx, target)
@@ -113,10 +127,11 @@ func (r *Reader) GetReferences(ctx context.Context, target string, limit int) ([
 	if len(ids) > 0 {
 		placeholders := strings.Repeat("?,", len(ids))
 		placeholders = placeholders[:len(placeholders)-1]
-		args := make([]interface{}, 0, len(ids)+1)
+		args := make([]interface{}, 0, len(ids)+len(scopeArgs)+1)
 		for _, id := range ids {
 			args = append(args, id)
 		}
+		args = append(args, scopeArgs...)
 		args = append(args, limit)
 		rows, err := r.db.QueryContext(ctx, `
 			SELECT r.id, f.path, r.line, r.col,
@@ -125,7 +140,7 @@ func (r *Reader) GetReferences(ctx context.Context, target string, limit int) ([
 			FROM refs r
 			JOIN files f ON f.id = r.src_file_id
 			LEFT JOIN symbols ss ON ss.id = r.src_symbol_id
-			WHERE r.dst_symbol_id IN (`+placeholders+`)
+			WHERE r.dst_symbol_id IN (`+placeholders+`)`+scope+`
 			ORDER BY f.path, r.line
 			LIMIT ?`, args...)
 		if err != nil {
@@ -142,6 +157,9 @@ func (r *Reader) GetReferences(ctx context.Context, target string, limit int) ([
 	// (e.g. stdlib calls) or when resolution was ambiguous.
 	remaining := limit - len(hits)
 	if remaining > 0 {
+		args := []any{target, target}
+		args = append(args, scopeArgs...)
+		args = append(args, remaining)
 		rows, err := r.db.QueryContext(ctx, `
 			SELECT r.id, f.path, r.line, r.col,
 			       COALESCE(r.src_symbol_id, 0), COALESCE(ss.qualified, ''),
@@ -149,9 +167,9 @@ func (r *Reader) GetReferences(ctx context.Context, target string, limit int) ([
 			FROM refs r
 			JOIN files f ON f.id = r.src_file_id
 			LEFT JOIN symbols ss ON ss.id = r.src_symbol_id
-			WHERE r.resolved = 0 AND (r.dst_name = ? OR r.dst_short = ?)
+			WHERE r.resolved = 0 AND (r.dst_name = ? OR r.dst_short = ?)`+scope+`
 			ORDER BY f.path, r.line
-			LIMIT ?`, target, target, remaining)
+			LIMIT ?`, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -209,9 +227,13 @@ type FileHit struct {
 
 // ListFiles returns files matching an optional language filter and name
 // substring. Globs can be layered by the CLI if richer matching is needed.
-func (r *Reader) ListFiles(ctx context.Context, language, nameContains string, limit int) ([]FileHit, error) {
+func (r *Reader) ListFiles(ctx context.Context, language, nameContains, project string, limit int) ([]FileHit, error) {
 	if limit <= 0 {
 		limit = 500
+	}
+	scope, scopeArgs, err := r.projectScope(ctx, project)
+	if err != nil {
+		return nil, err
 	}
 	args := []interface{}{}
 	conds := []string{}
@@ -226,6 +248,15 @@ func (r *Reader) ListFiles(ctx context.Context, language, nameContains string, l
 	where := ""
 	if len(conds) > 0 {
 		where = "WHERE " + strings.Join(conds, " AND ")
+	}
+	if scope != "" {
+		if where == "" {
+			// Turn leading " AND " into "WHERE ".
+			where = "WHERE " + scope[len(" AND "):]
+		} else {
+			where += scope
+		}
+		args = append(args, scopeArgs...)
 	}
 	args = append(args, limit)
 	q := fmt.Sprintf(`

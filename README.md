@@ -208,6 +208,56 @@ ollama pull nomic-embed-text
 Without an embedder configured, `search_semantic` cleanly returns
 `embeddings_not_configured`. All other tools work unaffected.
 
+### Scaling with sqlite-vec (v1.4+)
+
+The default brute-force cosine search works but scans every embedding per
+query — fine below ~10k chunks, painful above. For larger repos install
+the [sqlite-vec](https://github.com/asg017/sqlite-vec) extension and point
+the config at it:
+
+```bash
+# Install: pick the right prebuilt .so/.dylib/.dll for your platform from
+#   https://github.com/asg017/sqlite-vec/releases
+# Example on Linux amd64:
+mkdir -p /usr/local/lib/mycelium
+cp vec0.so /usr/local/lib/mycelium/vec0.so
+
+# Edit .mycelium.yml:
+#   index:
+#     vector:
+#       extension_path: /usr/local/lib/mycelium/vec0.so
+#       auto_create: true
+
+# Restart the daemon — `vss_chunks` is created and backfilled on first run.
+```
+
+When the extension loads cleanly the daemon creates a `vss_chunks` virtual
+table, mirrors existing embeddings into it, and routes `search_semantic`
+through vec0's KNN path. If the extension is missing or mismatched, the
+daemon logs a warning and falls back to brute-force — your queries still
+work, just at the numbers below.
+
+### Benchmark — brute-force fallback
+
+Measured on an Intel i7-1165G7 laptop (Tiger Lake), 768-dim embeddings,
+random unit-norm vectors, `k=10`, cold cache avoided:
+
+| corpus | brute-force p50 |
+|---|---|
+| 10k chunks | ~114 ms |
+| 50k chunks | ~555 ms |
+| 100k chunks | ~1.10 s |
+
+Scaling is linear at about 11 µs per chunk per query. Above 50k chunks,
+install sqlite-vec. The full benchmark lives in
+`internal/query/semantic_bench_test.go` — run with:
+
+```bash
+go test -tags sqlite_fts5 -run=^$ \
+  -bench=BenchmarkSemanticSearch -benchtime=5x -count=3 \
+  ./internal/query/
+```
+
 ## CLI reference
 
 ```bash

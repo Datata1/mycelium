@@ -5,17 +5,32 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/jdwiederstein/mycelium/internal/embed"
 )
+
+// scoredID pairs a chunk id with its cosine score, used to shuttle top-k
+// results between the scan pass and the hydrate pass.
+type scoredID struct {
+	ID    int64
+	Score float32
+}
 
 // Searcher is an embedder-backed semantic search handle. It is created
 // per-query so the caller can pick up the current configured embedder
 // (the daemon may have swapped models). The Reader keeps no reference to
 // an Embedder to preserve the "query doesn't own state" boundary.
+//
+// VSSTable, when non-empty, names a sqlite-vec vec0 virtual table whose
+// rowids mirror chunks.id. When set, SearchSemantic issues a KNN query
+// against it and gets O(log n) lookup (with HNSW, once sqlite-vec ships
+// it; current vec0 is exact-flat but SIMD-accelerated, still much faster
+// than Go). Empty VSSTable falls back to the brute-force Go path.
 type Searcher struct {
 	Reader   *Reader
 	Embedder embed.Embedder
+	VSSTable string
 }
 
 // SemanticHit is a single result from a semantic search.
@@ -35,7 +50,11 @@ type SemanticHit struct {
 // SearchSemantic embeds the query text, then scans chunks.embedding doing
 // cosine similarity in Go. Brute-force O(n * d) is fine for repos with a
 // few tens of thousands of chunks; HNSW via sqlite-vec slots in later.
-func (s *Searcher) SearchSemantic(ctx context.Context, query string, k int, kind, pathContains string) ([]SemanticHit, error) {
+//
+// project (v1.5) scopes the candidate chunks to a single workspace.
+// When set, the vec0 fast path is skipped (vec0 KNN doesn't know about
+// our project filter); brute-force two-pass handles it correctly.
+func (s *Searcher) SearchSemantic(ctx context.Context, query string, k int, kind, pathContains, project string) ([]SemanticHit, error) {
 	if s.Embedder == nil {
 		return nil, embed.ErrNotConfigured
 	}
@@ -55,70 +74,209 @@ func (s *Searcher) SearchSemantic(ctx context.Context, query string, k int, kind
 	}
 	qv := qvecs[0]
 	dim := s.Embedder.Dimension()
+	qPacked := embed.Pack(qv)
 
-	rows, err := s.Reader.db.QueryContext(ctx, `
-		SELECT c.id, c.embedding, c.start_line, c.end_line, c.content,
+	// vec0 fast path. We only use it when every filter is empty so we
+	// can let the KNN query do the whole job. With filters (kind/path/
+	// project) we fall back to brute-force so we don't accidentally
+	// return <k results after post-hoc filtering.
+	if s.VSSTable != "" && kind == "" && pathContains == "" && project == "" {
+		if hits, ok, err := s.searchViaVSS(ctx, qPacked, k); err != nil {
+			return nil, err
+		} else if ok {
+			return hits, nil
+		}
+		// ok=false means the table doesn't exist for this dim or the
+		// query failed softly — drop to brute-force instead of erroring.
+	}
+
+	scope, scopeArgs, err := s.Reader.projectScope(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+
+	// Pass 1: scan only the vector columns to find the top-k by cosine.
+	// Pulling symbol/file metadata for every chunk (including content
+	// strings) dominated the query time — at 10k×768 that's ~30 MB of
+	// embedding plus untold bytes of content + path + signature per row.
+	// Restricting the scan to (id, embedding, kind/path when filtering)
+	// cuts the hot-loop allocation drastically.
+	// We always JOIN files now because project scope requires it. The
+	// kind/path filters are ANDed in conditionally. Avoids the
+	// combinatoric switch from v1.4 at a tiny query-plan cost.
+	scanSQL := `
+		SELECT c.id, c.embedding
+		FROM chunks c
+		JOIN files f ON f.id = c.file_id
+		LEFT JOIN symbols sym ON sym.id = c.symbol_id
+		WHERE c.embedding IS NOT NULL AND c.embed_model = ?`
+	scanArgs := []any{s.Embedder.Model()}
+	if kind != "" {
+		scanSQL += ` AND sym.kind = ?`
+		scanArgs = append(scanArgs, kind)
+	}
+	if pathContains != "" {
+		scanSQL += ` AND f.path LIKE ?`
+		scanArgs = append(scanArgs, "%"+pathContains+"%")
+	}
+	if scope != "" {
+		scanSQL += scope
+		scanArgs = append(scanArgs, scopeArgs...)
+	}
+	rows, err := s.Reader.db.QueryContext(ctx, scanSQL, scanArgs...)
+	if err != nil {
+		return nil, err
+	}
+
+	var top []scoredID
+	insert := func(sl []scoredID, x scoredID) []scoredID {
+		if len(sl) < k {
+			sl = append(sl, x)
+			sort.Slice(sl, func(i, j int) bool { return sl[i].Score > sl[j].Score })
+			return sl
+		}
+		if x.Score <= sl[len(sl)-1].Score {
+			return sl
+		}
+		sl[len(sl)-1] = x
+		sort.Slice(sl, func(i, j int) bool { return sl[i].Score > sl[j].Score })
+		return sl
+	}
+	// Reusable buffer to decode each embedding into — avoids 10k fresh
+	// allocations per scan.
+	buf := make([]float32, dim)
+	for rows.Next() {
+		var chunkID int64
+		var embBytes []byte
+		if err := rows.Scan(&chunkID, &embBytes); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if len(embBytes) != 4*dim {
+			continue // stale row from a model switch
+		}
+		if err := embed.UnpackInto(embBytes, buf); err != nil {
+			continue
+		}
+		top = insert(top, scoredID{ID: chunkID, Score: embed.Cosine(qv, buf)})
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(top) == 0 {
+		return nil, nil
+	}
+
+	// Pass 2: hydrate metadata + snippet only for the top-k.
+	return s.hydrateHits(ctx, top, k)
+}
+
+// hydrateHits turns (chunkID, score) pairs into full SemanticHit rows by
+// fetching the display fields in one query. Used by both the brute-force
+// and the vec0 paths.
+func (s *Searcher) hydrateHits(ctx context.Context, scored []scoredID, k int) ([]SemanticHit, error) {
+	if len(scored) == 0 {
+		return nil, nil
+	}
+	ids := make([]any, len(scored))
+	for i, sc := range scored {
+		ids[i] = sc.ID
+	}
+	placeholders := "?" + strings.Repeat(",?", len(scored)-1)
+	hydrateSQL := `
+		SELECT c.id, c.start_line, c.end_line, c.content,
 		       f.path, COALESCE(c.symbol_id, 0),
 		       COALESCE(sym.qualified, ''), COALESCE(sym.kind, ''), COALESCE(sym.signature, '')
 		FROM chunks c
 		JOIN files f ON f.id = c.file_id
 		LEFT JOIN symbols sym ON sym.id = c.symbol_id
-		WHERE c.embedding IS NOT NULL AND c.embed_model = ?`, s.Embedder.Model())
+		WHERE c.id IN (` + placeholders + `)`
+	rows, err := s.Reader.db.QueryContext(ctx, hydrateSQL, ids...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-
-	// Top-k with a simple min-heap-like structure: keep a sorted slice
-	// of size k and insert in order. For realistic k (<=50) this is
-	// cheaper than pulling in a heap abstraction.
-	var top []SemanticHit
+	byID := make(map[int64]SemanticHit, len(scored))
 	for rows.Next() {
-		var (
-			chunkID    int64
-			embBytes   []byte
-			startLine  int
-			endLine    int
-			content    string
-			path       string
-			symbolID   int64
-			qualified  string
-			kindRow    string
-			signature  string
-		)
-		if err := rows.Scan(&chunkID, &embBytes, &startLine, &endLine, &content, &path, &symbolID, &qualified, &kindRow, &signature); err != nil {
+		var h SemanticHit
+		var content string
+		if err := rows.Scan(&h.ChunkID, &h.StartLine, &h.EndLine, &content,
+			&h.Path, &h.SymbolID, &h.Qualified, &h.Kind, &h.Signature); err != nil {
 			return nil, err
 		}
-		if kind != "" && kindRow != kind {
-			continue
-		}
-		if pathContains != "" && !containsASCII(path, pathContains) {
-			continue
-		}
-		v, err := embed.Unpack(embBytes, dim)
-		if err != nil {
-			// Stale row — likely a model switch happened mid-query. Skip.
-			continue
-		}
-		score := embed.Cosine(qv, v)
-		hit := SemanticHit{
-			ChunkID:   chunkID,
-			Score:     score,
-			Path:      path,
-			StartLine: startLine,
-			EndLine:   endLine,
-			SymbolID:  symbolID,
-			Qualified: qualified,
-			Kind:      kindRow,
-			Signature: signature,
-			Snippet:   firstLines(content, 8),
-		}
-		top = insertTopK(top, hit, k)
+		h.Snippet = firstLines(content, 8)
+		byID[h.ChunkID] = h
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+	// Stitch scores back in score-descending order.
+	out := make([]SemanticHit, 0, len(scored))
+	for _, sc := range scored {
+		if h, ok := byID[sc.ID]; ok {
+			h.Score = sc.Score
+			out = append(out, h)
+		}
 	}
-	return top, nil
+	return out, rows.Err()
+}
+
+// searchViaVSS runs a KNN query against the sqlite-vec virtual table named
+// in s.VSSTable. Returns (hits, true, nil) on success, (nil, false, nil)
+// when the table isn't usable for the current embedder (wrong dim, missing),
+// (nil, false, err) on an actual error we don't want to swallow.
+//
+// vec0 returns `distance` (L2 by default) so we convert to cosine-ish by
+// noting that for unit-norm vectors, cosine_sim = 1 - (L2^2 / 2). Most
+// embedders return unit-norm; if yours doesn't, scores are still
+// monotonically correct for ranking but not comparable to the brute-force
+// path's cosine. This is documented in LIMITATIONS.md.
+func (s *Searcher) searchViaVSS(ctx context.Context, qPacked []byte, k int) ([]SemanticHit, bool, error) {
+	if s.VSSTable == "" {
+		return nil, false, nil
+	}
+	// KNN: the vec0 virtual table requires `embedding MATCH ? AND k = ?`
+	// in the WHERE and an ORDER BY distance. We select rowid (= chunks.id)
+	// plus distance, then join to chunks/files/symbols for the display fields.
+	knnSQL := fmt.Sprintf(`
+		WITH knn AS (
+		    SELECT rowid AS chunk_id, distance
+		    FROM %s
+		    WHERE embedding MATCH ? AND k = ?
+		)
+		SELECT c.id, c.start_line, c.end_line, c.content,
+		       f.path, COALESCE(c.symbol_id, 0),
+		       COALESCE(sym.qualified, ''), COALESCE(sym.kind, ''), COALESCE(sym.signature, ''),
+		       knn.distance
+		FROM knn
+		JOIN chunks c ON c.id = knn.chunk_id
+		JOIN files f ON f.id = c.file_id
+		LEFT JOIN symbols sym ON sym.id = c.symbol_id
+		ORDER BY knn.distance`, s.VSSTable)
+
+	rows, err := s.Reader.db.QueryContext(ctx, knnSQL, qPacked, k)
+	if err != nil {
+		// Most likely "no such table" when dim changed or extension reloaded.
+		// Signal a soft failure so the caller drops to brute-force.
+		return nil, false, nil
+	}
+	defer rows.Close()
+
+	var hits []SemanticHit
+	for rows.Next() {
+		var (
+			h       SemanticHit
+			content string
+			dist    float64
+		)
+		if err := rows.Scan(&h.ChunkID, &h.StartLine, &h.EndLine, &content,
+			&h.Path, &h.SymbolID, &h.Qualified, &h.Kind, &h.Signature, &dist); err != nil {
+			return nil, false, err
+		}
+		// L2 -> approximate cosine for unit vectors. Higher-is-better.
+		h.Score = float32(1.0 - (dist * dist / 2.0))
+		h.Snippet = firstLines(content, 8)
+		hits = append(hits, h)
+	}
+	return hits, true, rows.Err()
 }
 
 // insertTopK keeps the slice sorted descending by Score, bounded by k.

@@ -27,6 +27,10 @@ type Daemon struct {
 	Watcher  *watch.Watcher
 	Socket   string
 	RepoRoot string // absolute path; lexical search needs it to open files
+	// VSSTable is the sqlite-vec virtual table name (or "" when not
+	// configured). Plumbed into every Searcher the daemon creates so the
+	// KNN fast path can light up.
+	VSSTable string
 	Logger   Logger
 }
 
@@ -142,21 +146,21 @@ func (d *Daemon) dispatch(ctx context.Context, req ipc.Request) (any, error) {
 		if err := unmarshal(req.Params, &p); err != nil {
 			return nil, err
 		}
-		return d.Reader.FindSymbol(ctx, p.Name, p.Kind, p.Limit)
+		return d.Reader.FindSymbol(ctx, p.Name, p.Kind, p.Project, p.Limit)
 
 	case ipc.MethodGetReferences:
 		var p ipc.GetReferencesParams
 		if err := unmarshal(req.Params, &p); err != nil {
 			return nil, err
 		}
-		return d.Reader.GetReferences(ctx, p.Target, p.Limit)
+		return d.Reader.GetReferences(ctx, p.Target, p.Project, p.Limit)
 
 	case ipc.MethodListFiles:
 		var p ipc.ListFilesParams
 		if err := unmarshal(req.Params, &p); err != nil {
 			return nil, err
 		}
-		return d.Reader.ListFiles(ctx, p.Language, p.NameContains, p.Limit)
+		return d.Reader.ListFiles(ctx, p.Language, p.NameContains, p.Project, p.Limit)
 
 	case ipc.MethodGetFileOutline:
 		var p ipc.GetFileOutlineParams
@@ -176,15 +180,15 @@ func (d *Daemon) dispatch(ctx context.Context, req ipc.Request) (any, error) {
 		if err := unmarshal(req.Params, &p); err != nil {
 			return nil, err
 		}
-		s := &query.Searcher{Reader: d.Reader, Embedder: d.Embedder}
-		return s.SearchSemantic(ctx, p.Query, p.K, p.Kind, p.PathContains)
+		s := &query.Searcher{Reader: d.Reader, Embedder: d.Embedder, VSSTable: d.VSSTable}
+		return s.SearchSemantic(ctx, p.Query, p.K, p.Kind, p.PathContains, p.Project)
 
 	case ipc.MethodSearchLexical:
 		var p ipc.SearchLexicalParams
 		if err := unmarshal(req.Params, &p); err != nil {
 			return nil, err
 		}
-		return d.Reader.SearchLexical(ctx, p.Pattern, p.PathContains, p.K, d.RepoRoot)
+		return d.Reader.SearchLexical(ctx, p.Pattern, p.PathContains, p.Project, p.K, d.RepoRoot)
 
 	case ipc.MethodGetFileSummary:
 		var p ipc.GetFileSummaryParams
@@ -202,7 +206,7 @@ func (d *Daemon) dispatch(ctx context.Context, req ipc.Request) (any, error) {
 		if dir == "" {
 			dir = query.DirBoth
 		}
-		return d.Reader.GetNeighborhood(ctx, p.Target, p.Depth, dir)
+		return d.Reader.GetNeighborhood(ctx, p.Target, p.Project, p.Depth, dir)
 
 	default:
 		return nil, fmt.Errorf("unknown method %q", req.Method)

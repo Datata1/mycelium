@@ -19,15 +19,39 @@ import (
 type Index struct {
 	db   *sql.DB
 	path string
+	vss  vssState
 }
 
-// Open creates (or opens) the index file, ensures the parent directory exists,
-// and runs any pending migrations.
+// Open is the pre-v1.4 signature: open the index with the default driver
+// and no vector extension. Kept for backward compatibility with tests and
+// any external callers that don't need vec0.
 func Open(path string) (*Index, error) {
+	return OpenWithExtension(path, "")
+}
+
+// OpenWithExtension opens the index; when extPath is non-empty and points
+// at a loadable sqlite-vec shared library, subsequent connections have
+// the extension auto-loaded. A missing file or load failure degrades
+// gracefully — the Index still works, just without the vec0 fast path.
+func OpenWithExtension(path, extPath string) (*Index, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("mkdir index parent: %w", err)
 	}
-	db, err := sql.Open("sqlite3", path+"?_fk=on&_journal_mode=WAL&_busy_timeout=5000")
+	driverName := "sqlite3"
+	var vssEnabled bool
+	if extPath != "" {
+		name, err := registerDriverWithExt(extPath)
+		switch {
+		case err != nil:
+			// File missing / unstat-able. Log via stderr and continue
+			// without the extension — not fatal.
+			fmt.Fprintf(os.Stderr, "[vss] extension not loaded (%v); falling back to brute-force search\n", err)
+		case name != "":
+			driverName = name
+			vssEnabled = true
+		}
+	}
+	db, err := sql.Open(driverName, path+"?_fk=on&_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
@@ -35,11 +59,24 @@ func Open(path string) (*Index, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("ping sqlite: %w", err)
 	}
+	if vssEnabled {
+		if _, err := probeVecVersion(db); err != nil {
+			// Driver registered but vec_version() failed — likely a
+			// mismatched .so. Close, reopen on plain driver, warn.
+			fmt.Fprintf(os.Stderr, "[vss] vec_version probe failed (%v); falling back to brute-force search\n", err)
+			_ = db.Close()
+			db, err = sql.Open("sqlite3", path+"?_fk=on&_journal_mode=WAL&_busy_timeout=5000")
+			if err != nil {
+				return nil, err
+			}
+			vssEnabled = false
+		}
+	}
 	if err := applyMigrations(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
-	return &Index{db: db, path: path}, nil
+	return &Index{db: db, path: path, vss: vssState{enabled: vssEnabled}}, nil
 }
 
 func (ix *Index) Close() error { return ix.db.Close() }
@@ -59,16 +96,25 @@ type UpsertFileResult struct {
 
 // UpsertFile inserts or updates a file row if its content_hash changed.
 // Returns the row id and whether the file's content changed.
-func (ix *Index) UpsertFile(ctx context.Context, tx *sql.Tx, path, language string, sizeBytes int64, mtimeNS int64, contentHash, parseHash []byte) (UpsertFileResult, error) {
+//
+// projectID is NULL (pass 0) for root-project files and the project row
+// id when workspace mode is active. On a row that already exists, we
+// overwrite project_id — moving a project in config rehomes its files
+// without requiring a full reindex.
+func (ix *Index) UpsertFile(ctx context.Context, tx *sql.Tx, path, language string, sizeBytes int64, mtimeNS int64, contentHash, parseHash []byte, projectID int64) (UpsertFileResult, error) {
+	var proj any
+	if projectID > 0 {
+		proj = projectID
+	}
 	var id int64
 	var existingHash []byte
 	err := tx.QueryRowContext(ctx, `SELECT id, content_hash FROM files WHERE path = ?`, path).Scan(&id, &existingHash)
 	switch {
 	case err == sql.ErrNoRows:
 		res, insErr := tx.ExecContext(ctx, `
-			INSERT INTO files(path, language, size_bytes, mtime_ns, content_hash, parse_hash, last_indexed_at)
-			VALUES(?, ?, ?, ?, ?, ?, ?)`,
-			path, language, sizeBytes, mtimeNS, contentHash, parseHash, time.Now().Unix())
+			INSERT INTO files(path, language, size_bytes, mtime_ns, content_hash, parse_hash, last_indexed_at, project_id)
+			VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+			path, language, sizeBytes, mtimeNS, contentHash, parseHash, time.Now().Unix(), proj)
 		if insErr != nil {
 			return UpsertFileResult{}, fmt.Errorf("insert file: %w", insErr)
 		}
@@ -78,13 +124,18 @@ func (ix *Index) UpsertFile(ctx context.Context, tx *sql.Tx, path, language stri
 		return UpsertFileResult{}, fmt.Errorf("select file: %w", err)
 	}
 	if bytesEqual(existingHash, contentHash) {
+		// Even unchanged content can change project membership if the
+		// user restructured their workspace. Keep project_id current.
+		if _, err := tx.ExecContext(ctx, `UPDATE files SET project_id = ? WHERE id = ?`, proj, id); err != nil {
+			return UpsertFileResult{}, fmt.Errorf("update file project: %w", err)
+		}
 		return UpsertFileResult{FileID: id, Changed: false, WasPresent: true}, nil
 	}
 	_, err = tx.ExecContext(ctx, `
 		UPDATE files
-		SET language = ?, size_bytes = ?, mtime_ns = ?, content_hash = ?, parse_hash = ?, last_indexed_at = ?
+		SET language = ?, size_bytes = ?, mtime_ns = ?, content_hash = ?, parse_hash = ?, last_indexed_at = ?, project_id = ?
 		WHERE id = ?`,
-		language, sizeBytes, mtimeNS, contentHash, parseHash, time.Now().Unix(), id)
+		language, sizeBytes, mtimeNS, contentHash, parseHash, time.Now().Unix(), proj, id)
 	if err != nil {
 		return UpsertFileResult{}, fmt.Errorf("update file: %w", err)
 	}

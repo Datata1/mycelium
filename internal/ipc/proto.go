@@ -45,20 +45,23 @@ type Response struct {
 // in code review.
 
 type FindSymbolParams struct {
-	Name  string `json:"name"`
-	Kind  string `json:"kind,omitempty"`
-	Limit int    `json:"limit,omitempty"`
+	Name    string `json:"name"`
+	Kind    string `json:"kind,omitempty"`
+	Limit   int    `json:"limit,omitempty"`
+	Project string `json:"project,omitempty"` // v1.5 workspace scope
 }
 
 type GetReferencesParams struct {
-	Target string `json:"target"`
-	Limit  int    `json:"limit,omitempty"`
+	Target  string `json:"target"`
+	Limit   int    `json:"limit,omitempty"`
+	Project string `json:"project,omitempty"`
 }
 
 type ListFilesParams struct {
 	Language     string `json:"language,omitempty"`
 	NameContains string `json:"name_contains,omitempty"`
 	Limit        int    `json:"limit,omitempty"`
+	Project      string `json:"project,omitempty"`
 }
 
 type GetFileOutlineParams struct {
@@ -70,12 +73,14 @@ type SearchSemanticParams struct {
 	K            int    `json:"k,omitempty"`
 	Kind         string `json:"kind,omitempty"`
 	PathContains string `json:"path_contains,omitempty"`
+	Project      string `json:"project,omitempty"`
 }
 
 type SearchLexicalParams struct {
 	Pattern      string `json:"pattern"`
 	PathContains string `json:"path_contains,omitempty"`
 	K            int    `json:"k,omitempty"`
+	Project      string `json:"project,omitempty"`
 }
 
 type GetFileSummaryParams struct {
@@ -86,4 +91,5 @@ type GetNeighborhoodParams struct {
 	Target    string `json:"target"`
 	Depth     int    `json:"depth,omitempty"`
 	Direction string `json:"direction,omitempty"` // out | in | both
+	Project   string `json:"project,omitempty"`
 }

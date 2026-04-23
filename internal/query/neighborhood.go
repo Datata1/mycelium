@@ -63,7 +63,12 @@ const MaxNeighborhoodDepth = 5
 // recursive CTEs on the `refs` table handle it just fine for depth 2–3 at
 // 50k-symbol scale. If deeper traversals ever become the primary workload,
 // this is the exact function to swap for a dedicated graph backend (Kùzu).
-func (r *Reader) GetNeighborhood(ctx context.Context, target string, depth int, direction Direction) (Neighborhood, error) {
+func (r *Reader) GetNeighborhood(ctx context.Context, target, project string, depth int, direction Direction) (Neighborhood, error) {
+	// v1.5 workspace-mode note: `project` filters the *seed* lookup only.
+	// Once we've found the seed symbol, the recursive CTE walks refs
+	// across all projects — cross-project call graphs are exactly the
+	// thing workspace-mode users want surfaced. For strict isolation,
+	// pass project and the seed will refuse to resolve outside it.
 	var result Neighborhood
 	requestedDepth := depth
 	if depth <= 0 {
@@ -80,7 +85,7 @@ func (r *Reader) GetNeighborhood(ctx context.Context, target string, depth int, 
 		direction = DirBoth
 	}
 
-	seedID, err := r.resolveSeed(ctx, target)
+	seedID, err := r.resolveSeed(ctx, target, project)
 	if err != nil {
 		return result, err
 	}
@@ -214,19 +219,28 @@ func farSide(direction string, e NeighborEdge) (int64, string) {
 	return e.FromID, e.FromName
 }
 
-func (r *Reader) resolveSeed(ctx context.Context, target string) (int64, error) {
+func (r *Reader) resolveSeed(ctx context.Context, target, project string) (int64, error) {
 	if target == "" {
 		return 0, nil
 	}
+	scope, scopeArgs, err := r.projectScope(ctx, project)
+	if err != nil {
+		return 0, err
+	}
 	// Prefer qualified match, fall back to a unique short-name match.
+	// Both join through files to honor the optional project scope.
+	qualArgs := append([]any{target}, scopeArgs...)
 	var id int64
-	err := r.db.QueryRowContext(ctx,
-		`SELECT id FROM symbols WHERE qualified = ? LIMIT 1`, target).Scan(&id)
+	err = r.db.QueryRowContext(ctx,
+		`SELECT s.id FROM symbols s JOIN files f ON f.id = s.file_id
+		 WHERE s.qualified = ?`+scope+` LIMIT 1`, qualArgs...).Scan(&id)
 	if err == nil {
 		return id, nil
 	}
+	shortArgs := append([]any{target}, scopeArgs...)
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id FROM symbols WHERE name = ? LIMIT 2`, target)
+		`SELECT s.id FROM symbols s JOIN files f ON f.id = s.file_id
+		 WHERE s.name = ?`+scope+` LIMIT 2`, shortArgs...)
 	if err != nil {
 		return 0, err
 	}

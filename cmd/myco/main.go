@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sort"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -27,6 +28,8 @@ import (
 	"github.com/jdwiederstein/mycelium/internal/query"
 	"github.com/jdwiederstein/mycelium/internal/repo"
 	goresolver "github.com/jdwiederstein/mycelium/internal/resolver/golang"
+	pyresolver "github.com/jdwiederstein/mycelium/internal/resolver/python"
+	tsresolver "github.com/jdwiederstein/mycelium/internal/resolver/typescript"
 	"github.com/jdwiederstein/mycelium/internal/watch"
 )
 
@@ -98,7 +101,7 @@ func newIndexCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ix, err := index.Open(rc.Root + "/" + rc.Cfg.Index.Path)
+			ix, err := openIndex(rc)
 			if err != nil {
 				return err
 			}
@@ -121,8 +124,15 @@ func newIndexCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			gores := loadGoResolver(rc.Root, rc.Cfg.Languages)
-			p := &pipeline.Pipeline{Index: ix, Registry: reg, Walker: w, Embedder: emb, GoResolver: gores}
+			resolvers := loadResolvers(rc.Root, rc.Cfg.Languages)
+			wss, projFor, err := buildWorkspaces(ctx, rc, ix)
+			if err != nil {
+				return err
+			}
+			p := &pipeline.Pipeline{
+				Index: ix, Registry: reg, Walker: w, Embedder: emb,
+				Resolvers: resolvers, Workspaces: wss, FileProjectFor: projFor,
+			}
 
 			rep, err := p.RunOnce(ctx)
 			if err != nil {
@@ -272,7 +282,7 @@ func daemonClient(rc repoCtx) (*ipc.Client, bool) {
 	return nil, false
 }
 
-func runQueryFind(name, kind string, limit int) error {
+func runQueryFind(name, kind, project string, limit int) error {
 	ctx := context.Background()
 	rc, err := loadRepoCtx()
 	if err != nil {
@@ -280,17 +290,17 @@ func runQueryFind(name, kind string, limit int) error {
 	}
 	var hits []query.SymbolHit
 	if c, ok := daemonClient(rc); ok {
-		if err := c.Call(ipc.MethodFindSymbol, ipc.FindSymbolParams{Name: name, Kind: kind, Limit: limit}, &hits); err != nil {
+		if err := c.Call(ipc.MethodFindSymbol, ipc.FindSymbolParams{Name: name, Kind: kind, Project: project, Limit: limit}, &hits); err != nil {
 			return err
 		}
 	} else {
-		ix, err := index.Open(rc.Root + "/" + rc.Cfg.Index.Path)
+		ix, err := openIndex(rc)
 		if err != nil {
 			return err
 		}
 		defer ix.Close()
 		r := query.NewReader(ix.DB())
-		hits, err = r.FindSymbol(ctx, name, kind, limit)
+		hits, err = r.FindSymbol(ctx, name, kind, project, limit)
 		if err != nil {
 			return err
 		}
@@ -320,7 +330,7 @@ func runQueryRefs(target string, limit int) error {
 			return err
 		}
 	} else {
-		ix, err := index.Open(rc.Root + "/" + rc.Cfg.Index.Path)
+		ix, err := openIndex(rc)
 		if err != nil {
 			return err
 		}
@@ -361,7 +371,7 @@ func runQueryFiles(nameContains, language string, limit int) error {
 			return err
 		}
 	} else {
-		ix, err := index.Open(rc.Root + "/" + rc.Cfg.Index.Path)
+		ix, err := openIndex(rc)
 		if err != nil {
 			return err
 		}
@@ -390,7 +400,7 @@ func runQueryLexical(pattern, pathContains string, k int) error {
 			return err
 		}
 	} else {
-		ix, err := index.Open(rc.Root + "/" + rc.Cfg.Index.Path)
+		ix, err := openIndex(rc)
 		if err != nil {
 			return err
 		}
@@ -419,7 +429,7 @@ func runQuerySummary(path string) error {
 			return err
 		}
 	} else {
-		ix, err := index.Open(rc.Root + "/" + rc.Cfg.Index.Path)
+		ix, err := openIndex(rc)
 		if err != nil {
 			return err
 		}
@@ -465,7 +475,7 @@ func runQueryNeighborhood(target string, depth int, direction string) error {
 			return err
 		}
 	} else {
-		ix, err := index.Open(rc.Root + "/" + rc.Cfg.Index.Path)
+		ix, err := openIndex(rc)
 		if err != nil {
 			return err
 		}
@@ -475,6 +485,9 @@ func runQueryNeighborhood(target string, depth int, direction string) error {
 		if err != nil {
 			return err
 		}
+	}
+	for _, note := range nb.Notes {
+		fmt.Fprintf(os.Stderr, "note: %s\n", note)
 	}
 	fmt.Printf("seed: %s  (%s:%d)\n", nb.Seed.Qualified, nb.Seed.Path, nb.Seed.StartLine)
 	for _, e := range nb.Edges {
@@ -501,7 +514,7 @@ func runQuerySearch(q string, k int, kind, pathContains string) error {
 	} else {
 		// Offline fallback: open the DB read-side ourselves. This can't happen
 		// if the daemon is running (SQLite WAL allows concurrent readers).
-		ix, err := index.Open(rc.Root + "/" + rc.Cfg.Index.Path)
+		ix, err := openIndex(rc)
 		if err != nil {
 			return err
 		}
@@ -511,7 +524,13 @@ func runQuerySearch(q string, k int, kind, pathContains string) error {
 			return err
 		}
 		r := query.NewReader(ix.DB())
-		s := &query.Searcher{Reader: r, Embedder: emb}
+		// Ensure vec0 is ready for the offline path too, so `myco query
+		// search` without a running daemon still uses the fast path when
+		// the extension is configured.
+		if emb.Dimension() > 0 && rc.Cfg.Index.Vector.AutoCreate {
+			_ = ix.EnsureVSS(ctx, emb.Dimension())
+		}
+		s := &query.Searcher{Reader: r, Embedder: emb, VSSTable: ix.VSSTableName()}
 		hits, err = s.SearchSemantic(ctx, q, k, kind, pathContains)
 		if err != nil {
 			return err
@@ -542,7 +561,7 @@ func runQueryOutline(path string) error {
 			return err
 		}
 	} else {
-		ix, err := index.Open(rc.Root + "/" + rc.Cfg.Index.Path)
+		ix, err := openIndex(rc)
 		if err != nil {
 			return err
 		}
@@ -584,7 +603,7 @@ func newStatsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ix, err := index.Open(rc.Root + "/" + rc.Cfg.Index.Path)
+			ix, err := openIndex(rc)
 			if err != nil {
 				return err
 			}
@@ -638,7 +657,7 @@ func newDoctorCmd() *cobra.Command {
 			// `doctor` is a read-only check, so a direct DB open is fine
 			// whether or not the daemon is running (SQLite WAL allows
 			// concurrent readers).
-			ix, err := index.Open(rc.Root + "/" + rc.Cfg.Index.Path)
+			ix, err := openIndex(rc)
 			if err != nil {
 				return err
 			}
@@ -831,7 +850,7 @@ func runDaemon(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	ix, err := index.Open(rc.Root + "/" + rc.Cfg.Index.Path)
+	ix, err := openIndex(rc)
 	if err != nil {
 		return err
 	}
@@ -859,8 +878,23 @@ func runDaemon(ctx context.Context) error {
 	if err := ix.InvalidateEmbeddingsForModel(ctx, emb.Model()); err != nil {
 		return err
 	}
-	gores := loadGoResolver(rc.Root, rc.Cfg.Languages)
-	p := &pipeline.Pipeline{Index: ix, Registry: reg, Walker: w, Embedder: emb, GoResolver: gores}
+	resolvers := loadResolvers(rc.Root, rc.Cfg.Languages)
+	// v1.4: create the vec0 virtual table if sqlite-vec loaded. Safe no-op
+	// when the extension isn't configured; mirrors chunks.embedding so
+	// search_semantic can switch to the fast path transparently.
+	if emb.Dimension() > 0 && rc.Cfg.Index.Vector.AutoCreate {
+		if err := ix.EnsureVSS(ctx, emb.Dimension()); err != nil {
+			fmt.Fprintf(os.Stderr, "[vss] ensure vss_chunks: %v\n", err)
+		}
+	}
+	wss, projFor, err := buildWorkspaces(ctx, rc, ix)
+	if err != nil {
+		return err
+	}
+	p := &pipeline.Pipeline{
+		Index: ix, Registry: reg, Walker: w, Embedder: emb,
+		Resolvers: resolvers, Workspaces: wss, FileProjectFor: projFor,
+	}
 
 	// Catch-up scan before accepting connections so the index reflects any
 	// changes that happened while the daemon was down.
@@ -892,6 +926,7 @@ func runDaemon(ctx context.Context) error {
 		Watcher:  wat,
 		Socket:   rc.Root + "/" + rc.Cfg.Daemon.Socket,
 		RepoRoot: rc.Root,
+		VSSTable: ix.VSSTableName(),
 	}
 
 	// Start the HTTP transport alongside the unix socket. Disabled when
@@ -958,33 +993,98 @@ func errNotImplemented(name string) error {
 	return fmt.Errorf("%s: not yet implemented (pre-v0.1 scaffolding)", name)
 }
 
-// loadGoResolver builds and loads the v1.2 type-aware Go resolver. Returns
-// nil when Go isn't in the configured language list, or when the module
-// can't be loaded at all — the pipeline treats a nil resolver as "use
-// textual resolution only," which remains the v1.1 behavior. Transient
-// type-check errors are surfaced via `myco doctor` (each error counted in
-// LoadErrors()) without blocking indexing.
-func loadGoResolver(repoRoot string, languages []string) *goresolver.Resolver {
-	hasGo := false
+// openIndex opens the repo's SQLite index and applies the vector-extension
+// config. Callers don't need to care whether sqlite-vec loaded — the
+// returned Index transparently handles both fast and fallback paths.
+func openIndex(rc repoCtx) (*index.Index, error) {
+	return index.OpenWithExtension(rc.Root+"/"+rc.Cfg.Index.Path, rc.Cfg.Index.Vector.ExtensionPath)
+}
+
+// buildWorkspaces materializes the v1.5 per-project walkers from config
+// and upserts the matching projects-table rows. On a v1.4 config (no
+// projects: list) it returns nil — the pipeline falls back to its
+// legacy single-Walker path automatically. Projects not present in the
+// current config are pruned from the DB (cascade removes their files).
+func buildWorkspaces(ctx context.Context, rc repoCtx, ix *index.Index) ([]pipeline.Workspace, func(string) int64, error) {
+	if len(rc.Cfg.Projects) == 0 {
+		return nil, nil, nil
+	}
+	var (
+		workspaces []pipeline.Workspace
+		keep       []int64
+		// prefixes feeds the watcher-path prefix resolver. We sort by
+		// descending length so longest-prefix wins (so a project
+		// nested inside another gets the nested id).
+		prefixes []struct {
+			abs string
+			id  int64
+		}
+	)
+	for _, pc := range rc.Cfg.Projects {
+		id, err := ix.UpsertProject(ctx, pc.Name, pc.Root)
+		if err != nil {
+			return nil, nil, fmt.Errorf("project %s: %w", pc.Name, err)
+		}
+		keep = append(keep, id)
+		absRoot := rc.Root + "/" + pc.Root
+		include := pc.Include
+		if len(include) == 0 {
+			include = rc.Cfg.Include
+		}
+		exclude := pc.Exclude
+		if len(exclude) == 0 {
+			exclude = rc.Cfg.Exclude
+		}
+		w := repo.NewWalker(absRoot, include, exclude, rc.Cfg.Index.MaxFileSizeKB)
+		workspaces = append(workspaces, pipeline.Workspace{ProjectID: id, Walker: w})
+		prefixes = append(prefixes, struct {
+			abs string
+			id  int64
+		}{abs: absRoot, id: id})
+	}
+	if err := ix.PruneProjects(ctx, keep); err != nil {
+		return nil, nil, fmt.Errorf("prune projects: %w", err)
+	}
+	// Longest-prefix wins. Sorting once is cheap vs. sorting per event.
+	sort.Slice(prefixes, func(i, j int) bool { return len(prefixes[i].abs) > len(prefixes[j].abs) })
+	resolver := func(abs string) int64 {
+		for _, p := range prefixes {
+			if len(abs) >= len(p.abs) && abs[:len(p.abs)] == p.abs &&
+				(len(abs) == len(p.abs) || abs[len(p.abs)] == '/') {
+				return p.id
+			}
+		}
+		return 0
+	}
+	return workspaces, resolver, nil
+}
+
+// loadResolvers constructs one resolver per enabled language. Returns a map
+// the pipeline indexes into; languages without a resolver simply don't get
+// type-aware rewrites (textual-only fallback stays in place). Go needs an
+// up-front go/packages load; TS + Python are stateless and always ready.
+func loadResolvers(repoRoot string, languages []string) map[string]pipeline.Resolver {
+	out := map[string]pipeline.Resolver{}
 	for _, l := range languages {
-		if l == "go" {
-			hasGo = true
-			break
+		switch l {
+		case "go":
+			r := goresolver.New(repoRoot)
+			errCount, err := r.Load()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[resolver] go-types unavailable: %v — falling back to textual resolution\n", err)
+				continue
+			}
+			if errCount > 0 {
+				fmt.Fprintf(os.Stderr, "[resolver] go-types loaded with %d package errors (inspect via `myco doctor`)\n", errCount)
+			}
+			out["go"] = r
+		case "typescript":
+			out["typescript"] = tsresolver.New()
+		case "python":
+			out["python"] = pyresolver.New()
 		}
 	}
-	if !hasGo {
-		return nil
-	}
-	r := goresolver.New(repoRoot)
-	errCount, err := r.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[resolver] go-types unavailable: %v — falling back to textual resolution\n", err)
-		return nil
-	}
-	if errCount > 0 {
-		fmt.Fprintf(os.Stderr, "[resolver] go-types loaded with %d package errors (inspect via `myco doctor`)\n", errCount)
-	}
-	return r
+	return out
 }
 
 func truncate(s string, max int) string {

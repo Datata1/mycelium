@@ -18,19 +18,50 @@ import (
 	goresolver "github.com/jdwiederstein/mycelium/internal/resolver/golang"
 )
 
+// Resolver is any per-language ref resolver. v1.2 introduced the Go type
+// resolver; v1.3 adds TypeScript and Python scope walkers. Each takes a
+// ParseResult and rewrites its References in place, stamping every
+// visited call with its own ResolverVersion so SQL-level fallbacks know to
+// skip them.
+type Resolver interface {
+	ResolveFile(absPath string, pr *parser.ParseResult) (resolved, total int)
+	Ready() bool
+}
+
+// Workspace pairs a per-project walker with the matching projects-table
+// row. v1.5 pipelines iterate a slice of these instead of a single
+// Walker; the legacy Pipeline.Walker still works when Workspaces is empty.
+type Workspace struct {
+	ProjectID int64 // 0 = implicit root project; no projects table row
+	Walker    *repo.Walker
+}
+
 // Pipeline orchestrates walk -> parse -> index. For v0.1 it runs as a one-shot
 // over the whole repo; v0.2 wires this same code to the fsnotify watcher.
 type Pipeline struct {
 	Index    *index.Index
 	Registry *parser.Registry
-	Walker   *repo.Walker
-	Embedder embed.Embedder // Noop when the user hasn't configured a provider
-	// GoResolver is optional; when non-nil and Ready, Go refs are resolved
-	// with type info (v1.2 Pillar A). Nil resolver or Ready()==false means
-	// refs stay as textual output — the short-name SQL fallback still runs.
-	GoResolver *goresolver.Resolver
+	Walker   *repo.Walker // legacy single-root path; used only when Workspaces is empty
+	// Workspaces is the v1.5 multi-project path. When non-empty it
+	// replaces Walker entirely — each project is walked with its own
+	// root + filters and tagged with its project_id on index write.
+	Workspaces []Workspace
+	Embedder   embed.Embedder // Noop when the user hasn't configured a provider
+	// Resolvers is keyed by language ("go", "typescript", "python"). A
+	// missing entry means textual resolution only for that language.
+	Resolvers   map[string]Resolver
 	ChunkerOpts chunker.Options
-	Logger   Logger
+	Logger      Logger
+
+	// Deprecated: kept for legacy callers; prefer Resolvers["go"].
+	// Populated automatically when set for backward compatibility.
+	GoResolver *goresolver.Resolver
+
+	// v1.5 watcher-path support: when HandleChange fires on a changed
+	// file, we need to know which project it belongs to. fileProjectFor
+	// is populated once at pipeline construction (longest-root-prefix
+	// match) and consulted per event. nil for legacy single-project use.
+	FileProjectFor func(absPath string) int64
 }
 
 // Logger is a minimal dependency so callers can plug in whatever they have.
@@ -68,9 +99,30 @@ func (p *Pipeline) RunOnce(ctx context.Context) (Report, error) {
 	start := time.Now()
 	var rep Report
 
-	files, err := p.Walker.Walk()
-	if err != nil {
-		return rep, fmt.Errorf("walk: %w", err)
+	// Walk each workspace (v1.5) or fall back to the legacy single
+	// walker. Files get tagged with their project_id here so the
+	// downstream writer stays oblivious to workspace layout.
+	var files []repo.File
+	switch {
+	case len(p.Workspaces) > 0:
+		for _, ws := range p.Workspaces {
+			batch, err := ws.Walker.Walk()
+			if err != nil {
+				return rep, fmt.Errorf("walk project %d: %w", ws.ProjectID, err)
+			}
+			for i := range batch {
+				batch[i].ProjectID = ws.ProjectID
+			}
+			files = append(files, batch...)
+		}
+	case p.Walker != nil:
+		batch, err := p.Walker.Walk()
+		if err != nil {
+			return rep, fmt.Errorf("walk: %w", err)
+		}
+		files = batch
+	default:
+		return rep, fmt.Errorf("pipeline: neither Workspaces nor Walker configured")
 	}
 	rep.FilesScanned = len(files)
 
@@ -200,6 +252,9 @@ func (p *Pipeline) HandleChange(ctx context.Context, relPath, absPath string, re
 		return false, err
 	}
 	f := repo.File{AbsPath: absPath, RelPath: relPath, SizeKB: int(info.Size() / 1024), MTimeNS: info.ModTime().UnixNano()}
+	if p.FileProjectFor != nil {
+		f.ProjectID = p.FileProjectFor(absPath)
+	}
 	ch, _, _, err := p.processFile(ctx, prs, f)
 	return ch, err
 }
@@ -219,11 +274,11 @@ func (p *Pipeline) processFile(ctx context.Context, prs parser.Parser, f repo.Fi
 // writeParsed is the DB-writing half of processFile, used both by single-file
 // update paths (watcher, hook) and the parallel RunOnce loop.
 func (p *Pipeline) writeParsed(ctx context.Context, f repo.File, prs parser.Parser, result parser.ParseResult, content []byte) (bool, int, int, error) {
-	// v1.2: if a Go type resolver is wired up, let it rewrite call DstNames
-	// to fully-qualified form before the refs hit the DB. No-op for other
-	// languages or when the resolver failed to load the module.
-	if prs.Language() == "go" && p.GoResolver != nil && p.GoResolver.Ready() {
-		p.GoResolver.ResolveFile(f.AbsPath, &result)
+	// v1.2+: language-specific resolver rewrites call DstNames and stamps
+	// ResolverVersion before refs hit the DB. No-op when no resolver is
+	// registered for this language or when the resolver isn't ready.
+	if res := p.resolverFor(prs.Language()); res != nil && res.Ready() {
+		res.ResolveFile(f.AbsPath, &result)
 	}
 
 	db := p.Index.DB()
@@ -235,7 +290,7 @@ func (p *Pipeline) writeParsed(ctx context.Context, f repo.File, prs parser.Pars
 		_ = tx.Rollback()
 	}()
 
-	upsert, err := p.Index.UpsertFile(ctx, tx, f.RelPath, prs.Language(), int64(len(content)), f.MTimeNS, result.ContentHash, result.ParseHash)
+	upsert, err := p.Index.UpsertFile(ctx, tx, f.RelPath, prs.Language(), int64(len(content)), f.MTimeNS, result.ContentHash, result.ParseHash, f.ProjectID)
 	if err != nil {
 		return false, 0, 0, err
 	}
@@ -280,6 +335,18 @@ func (p *Pipeline) writeParsed(ctx context.Context, f repo.File, prs parser.Pars
 type NullLogger struct{}
 
 func (NullLogger) Printf(string, ...any) {}
+
+// resolverFor returns the resolver registered for lang, falling back to the
+// legacy GoResolver field so pre-v1.3 construction keeps working unchanged.
+func (p *Pipeline) resolverFor(lang string) Resolver {
+	if r, ok := p.Resolvers[lang]; ok {
+		return r
+	}
+	if lang == "go" && p.GoResolver != nil {
+		return p.GoResolver
+	}
+	return nil
+}
 
 // Ensure the sql package import is referenced so removing unused imports doesn't
 // silently drop the dep. The pipeline touches database transactions indirectly

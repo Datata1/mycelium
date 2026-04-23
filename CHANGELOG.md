@@ -6,6 +6,128 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [v1.4.0] — 2026-04-22
+
+"Semantic at scale" — the fourth v2.0 milestone (Pillar B). Adds optional
+[sqlite-vec](https://github.com/asg017/sqlite-vec) integration behind
+runtime feature detection. Brute-force Go cosine stays as the honest
+fallback; nothing breaks when the extension is missing.
+
+### Added
+
+- **`internal/index/vss.go`** — extension loader via a per-process named
+  driver + `ConnectHook` that auto-loads the library on every new DB
+  connection. `EnsureVSS(dim)` creates a `vss_chunks` virtual table
+  named by dimension and backfills rows from any pre-existing
+  `chunks.embedding`. `VSSAvailable()` and `VSSTableName()` let callers
+  branch at query time.
+- **`index.OpenWithExtension(path, extPath)`** — new opener that
+  transparently handles both the extension-loaded and fallback cases.
+  `index.Open(path)` keeps its pre-v1.4 behavior.
+- **Dual-write in `WriteEmbedding`** — every embedding lands in both
+  `chunks.embedding` (source of truth / fallback) and `vss_chunks`
+  (KNN index). Mirrored in one transaction; safe to lose either.
+- **`Searcher.VSSTable`** — opt-in fast path. When set and the user has
+  no kind/path filter, `SearchSemantic` issues `embedding MATCH ? AND
+  k = ?` against vec0 and skips the scan. Falls back softly on any
+  query error (e.g. table missing for a changed dim).
+- **Config** — `index.vector.extension_path`, `index.vector.auto_create`,
+  `index.vector.ef_search` (reserved for HNSW tuning when vec0 ships it).
+- **`embed.UnpackInto`** — alloc-free variant of `Unpack` used in the
+  brute-force hot loop. Avoids 100k `[]float32` allocations per query
+  at 100k-chunk scale.
+- **Two-pass brute-force search** — first pass scans only `(id,
+  embedding)` columns to find top-k; second pass hydrates the 10
+  winners with path/symbol/content. Eliminates ~30× the per-row I/O
+  vs v1.3. At 10k chunks this took latency from 166 ms → 114 ms.
+- **Semantic-search benchmark matrix** at
+  `internal/query/semantic_bench_test.go` — 10k / 50k / 100k / 768 dim
+  on brute-force. Numbers published in README.
+
+### Measured
+
+On an Intel i7-1165G7 (Tiger Lake), 768-dim, brute-force fallback, k=10:
+
+| corpus | p50 |
+|---|---|
+| 10k chunks | ~114 ms |
+| 50k chunks | ~555 ms |
+| 100k chunks | ~1.10 s |
+
+The plan's aspirational target was <50 ms at 100k via vec0 KNN. That
+requires the extension installed; the brute-force path is ~22× slower
+at 100k but still correct. The vec0 fast path is architecturally
+complete but *untested in this release* — validate on your machine with
+the install recipe in README.
+
+### Honest scope note
+
+The vec0 KNN code path in `Searcher.searchViaVSS` is written and
+compiles, and the dual-write + extension-loading plumbing is tested on
+the fallback path (no extension present in this dev env). We do not
+claim measured vec0 numbers until a contributor benchmarks with the
+extension loaded.
+
+## [v1.3.0] — 2026-04-22
+
+"TS and Python scope resolvers" — the third v2.0 milestone (Pillar A,
+completed for non-Go languages). Brings v0 textual refs up to the
+visited-and-stamped floor for TypeScript (`ResolverVersion=2`) and
+Python (`ResolverVersion=3`).
+
+### Added
+
+- **`internal/resolver/python`** — stateless per-file resolver. Handles
+  `import` / `from-import` bindings (including aliases), `self.method()`
+  and `cls.method()` inside classes, module-qualified calls like
+  `foo.bar()` via namespace-style imports. Every visited call is stamped
+  `ResolverVersion=3` so the SQL short-name fallback skips it.
+- **`internal/resolver/typescript`** — same shape for TS/TSX. Named
+  imports + aliased imports + default imports + `import * as ns`
+  namespace imports all resolve. `this.method()` inside classes resolves
+  to the class's own methods. Stamps `ResolverVersion=2`.
+- **`pipeline.Resolver` interface** + `Pipeline.Resolvers
+  map[string]Resolver` — replaces the per-resolver field pile. Legacy
+  `GoResolver` field still honored for backward compatibility.
+- **Three new integration-test cases** — `v1.3_ts_this_method_resolution`
+  (AuthService.issueToken → this.fingerprint lands as a resolved ref),
+  `v1.3_python_self_method_resolution` (JobQueue.drain → self.dequeue),
+  `v1.3_no_truly_unresolved_refs` (all TS + Python calls in the fixture
+  are visited and stamped).
+
+### Explicit non-goals (stays textual)
+
+- TS: generics, conditional types, declaration merging, ambient modules
+  beyond `tsconfig.paths`, arbitrary `obj.method()` that needs type
+  inference.
+- Python: `super()` chain resolution, `getattr(obj, 'm')(...)` dynamic
+  attribute access, type-based method dispatch.
+
+### Fixture additions
+
+- `testdata/fixtures/sample/src/auth.ts` grew `normalizeEmail`,
+  `issueToken`, `fingerprint` — together they exercise cross-module
+  imports, `this.`-calls, and cross-function linking within a class.
+- `testdata/fixtures/sample/py/worker.py` grew `drain` — exercises
+  `self.`-calls and param-typed calls we deliberately don't resolve.
+
+### Self-index unchanged
+
+The self-index already hit 0.0% unresolved in v1.2 (pure Go repo).
+v1.3 additions keep it there: 66 files, 454 symbols, 2488 refs, 0
+resolution-bug self-loops, 0 truly-unresolved non-import refs.
+
+## [Unreleased (v1.2 hotfixes)]
+
+- **`LIMITATIONS.md`** at repo root — single source of truth for what
+  doesn't work today, grouped by cause (resolution quality, graph queries,
+  indexing/scale, distribution, tooling surface). Linked from README and
+  CLAUDE.md. Edit on every milestone.
+- **Depth-clamp surfaces a note** — requesting `get_neighborhood` with
+  depth > 5 now returns a `notes` entry on the result explaining the
+  clamp and pointing at LIMITATIONS.md. Visible in the CLI (stderr),
+  HTTP, and MCP responses. Silent clamp was too easy to miss.
+
 ## [v1.2.0] — 2026-04-22
 
 "Go, but honest" — the second v2.0 milestone (Pillar A for Go). Type-aware

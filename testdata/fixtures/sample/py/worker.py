@@ -20,6 +20,15 @@ class JobQueue:
             return None
         return self._jobs.pop(0)
 
+    async def drain(self) -> int:
+        """Drain the queue synchronously. Exercises self.method() resolution."""
+        count = 0
+        while True:
+            job = await self.dequeue()  # -> worker.JobQueue.dequeue
+            if job is None:
+                return count
+            count += 1
+
 
 def start_worker(queue: JobQueue) -> None:
     """Start a worker loop that drains the given queue."""
@@ -27,6 +36,9 @@ def start_worker(queue: JobQueue) -> None:
 
 
 async def _run(queue: JobQueue) -> None:
+    # Exercises resolution of parameter-typed method calls. Since we
+    # don't do type inference, queue.drain stays as a textual ref.
+    _ = await queue.drain()
     while True:
         job = await queue.dequeue()
         if job is None:

@@ -26,7 +26,7 @@ type LexicalHit struct {
 // This scans files on disk rather than indexing content up-front, which keeps
 // the DB small. On a repo with ~1k files we easily finish in tens of ms with
 // parallel reads.
-func (r *Reader) SearchLexical(ctx context.Context, pattern, pathContains string, k int, repoRoot string) ([]LexicalHit, error) {
+func (r *Reader) SearchLexical(ctx context.Context, pattern, pathContains, project string, k int, repoRoot string) ([]LexicalHit, error) {
 	if k <= 0 {
 		k = 50
 	}
@@ -34,7 +34,7 @@ func (r *Reader) SearchLexical(ctx context.Context, pattern, pathContains string
 	if err != nil {
 		return nil, fmt.Errorf("compile pattern: %w", err)
 	}
-	paths, err := r.candidatePaths(ctx, pathContains)
+	paths, err := r.candidatePaths(ctx, pathContains, project)
 	if err != nil {
 		return nil, err
 	}
@@ -91,34 +91,37 @@ func (r *Reader) SearchLexical(ctx context.Context, pattern, pathContains string
 	return hits, nil
 }
 
-func (r *Reader) candidatePaths(ctx context.Context, pathContains string) ([]string, error) {
-	var rows = func() (*[]string, error) {
-		q := `SELECT path FROM files`
-		args := []any{}
-		if pathContains != "" {
-			q += ` WHERE path LIKE ?`
-			args = append(args, "%"+pathContains+"%")
-		}
-		rs, err := r.db.QueryContext(ctx, q, args...)
-		if err != nil {
-			return nil, err
-		}
-		defer rs.Close()
-		var out []string
-		for rs.Next() {
-			var p string
-			if err := rs.Scan(&p); err != nil {
-				return nil, err
-			}
-			out = append(out, p)
-		}
-		return &out, rs.Err()
-	}
-	out, err := rows()
+func (r *Reader) candidatePaths(ctx context.Context, pathContains, project string) ([]string, error) {
+	scope, scopeArgs, err := r.projectScope(ctx, project)
 	if err != nil {
 		return nil, err
 	}
-	return *out, nil
+	// candidatePaths builds its own SELECT so the scope clause needs a
+	// valid WHERE anchor; start with 1=1 and AND everything in.
+	q := `SELECT path FROM files f WHERE 1=1`
+	args := []any{}
+	if pathContains != "" {
+		q += ` AND path LIKE ?`
+		args = append(args, "%"+pathContains+"%")
+	}
+	if scope != "" {
+		q += scope
+		args = append(args, scopeArgs...)
+	}
+	rs, err := r.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rs.Close()
+	var out []string
+	for rs.Next() {
+		var p string
+		if err := rs.Scan(&p); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rs.Err()
 }
 
 func scanFile(ctx context.Context, abs, rel string, re *regexp.Regexp, out chan<- LexicalHit) error {

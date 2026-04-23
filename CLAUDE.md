@@ -50,13 +50,26 @@ Enforce in review. Deviations need an explicit reason in CHANGELOG.
 - **v1.1 shipped** — `myco doctor`, extended `query.Stats`, benchmark harness.
 - **v1.2 shipped** — Go type resolver (`internal/resolver/golang/`). Self-index
   now shows 0 resolution-bug self-loops and 0% truly-unresolved refs.
-- **Active next: v1.3 "TS and Python scope resolvers"** — scope-tracking
-  tree walkers for TypeScript (handles import bindings, class fields,
-  `this`-typed method calls) and Python (scope + import resolution).
-  Bumps `resolver_version` to 2 (TS) and 3 (Python). Target:
-  `unresolved_ref_ratio < 20%` on a mid-size TS repo, `< 15%` on Python.
-  Explicit non-goals for TS: generics resolution, conditional types,
-  declaration merging, ambient modules beyond `tsconfig.paths`.
+- **v1.3 shipped** — TS resolver (`internal/resolver/typescript/`,
+  ResolverVersion=2) and Python resolver (`internal/resolver/python/`,
+  ResolverVersion=3). Scope-tracking walkers on top of existing
+  tree-sitter output. Handle imports, `this.method()`, `self.method()`,
+  namespace imports, aliased imports. Pipeline now uses
+  `Resolvers map[string]Resolver` instead of separate fields per language.
+- **v1.4 shipped** — optional `sqlite-vec` integration via named driver +
+  ConnectHook (`internal/index/vss.go`). `Searcher.VSSTable` enables the
+  vec0 KNN fast path when the extension is loaded; brute-force Go cosine
+  is the honest fallback. Two-pass search (`embed.UnpackInto` hot loop +
+  top-k-only hydrate) brought 10k-chunk brute-force from 166 ms to
+  114 ms. Benchmark matrix in `internal/query/semantic_bench_test.go`:
+  10k / 50k / 100k at 768 dim = 114 / 555 / 1100 ms brute-force on Tiger
+  Lake. vec0 path is written and compiled but not measured in this
+  release (extension not installed in dev env).
+- **Active next: v1.5 "Workspace mode"** — `projects` table +
+  `files.project_id`, per-project config overrides under `projects:` in
+  `.mycelium.yml`, optional `project` filter on every MCP tool. One
+  daemon, one SQLite, N sub-projects in the same worktree. **Explicit
+  non-goal**: cross-repo federation (N worktrees, one graph) — that's v3.
 
 **v1.2 baselines achieved (self-index, Tiger Lake laptop):**
 - `self_loop_count`: 11 → **0** ✓

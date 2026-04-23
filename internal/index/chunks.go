@@ -80,7 +80,9 @@ func (ix *Index) ReplaceFileChunks(
 
 // WriteEmbedding stores a computed vector for a chunk and its content-hash
 // cache entry. Both updates happen in one transaction so a mid-write crash
-// leaves a consistent state.
+// leaves a consistent state. When sqlite-vec is loaded, the same
+// transaction also mirrors the vector into vss_chunks so KNN search sees
+// it immediately.
 func (ix *Index) WriteEmbedding(ctx context.Context, chunkID int64, contentHash, embedding []byte, model string) error {
 	tx, err := ix.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -98,6 +100,9 @@ func (ix *Index) WriteEmbedding(ctx context.Context, chunkID int64, contentHash,
 		 VALUES(?, ?, ?, ?)`,
 		contentHash, model, embedding, time.Now().Unix()); err != nil {
 		return fmt.Errorf("update embed_cache: %w", err)
+	}
+	if err := ix.upsertVSS(ctx, tx, chunkID, embedding); err != nil {
+		return fmt.Errorf("update vss_chunks: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM embed_queue WHERE chunk_id = ?`, chunkID); err != nil {

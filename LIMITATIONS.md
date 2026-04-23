@@ -28,7 +28,7 @@ to the v2.0 roadmap at `~/.claude/plans/1-everything-you-mentioned-indexed-duckl
 
 | Limitation | Cause | Status |
 |---|---|---|
-| Semantic search does O(n·d) brute-force cosine in Go | `sqlite-vec` not integrated | Planned **v1.4** — target p95 < 50 ms at 100k chunks |
+| Semantic search brute-force is slow past ~10k chunks | Pure-Go cosine scan; no SIMD | **Optional sqlite-vec integration shipped in v1.4** — install the extension + set `index.vector.extension_path` for the KNN fast path. Brute-force stays as fallback (works, just slow — see README benchmark table) |
 | Files with no extracted symbols (SQL, Markdown, config) get no embedding | `chunker.FromSymbols` is symbol-level only | Planned post-v1.4 — fallback window chunks |
 | Can't index multiple sub-projects with per-project config overrides | Flat `files` table, no `project_id` | Planned **v1.5** workspace mode |
 | No PR-scoped `--since <ref>` filter on queries | Not yet implemented | Planned **v1.6** |
