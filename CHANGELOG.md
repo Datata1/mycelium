@@ -6,6 +6,47 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [v2.0.0-rc1] — 2026-04-24
+
+First release candidate for v2.0 ("precision and scale"). No new
+functional changes since v1.7; this tag consolidates the v1.1 → v1.7
+series into a single release and gates the remaining v2.0 work.
+Per-milestone details remain in the sections below.
+
+### Delivered against the v2.0 acceptance criteria
+
+- **Type-aware references** for Go, TypeScript, Python. Self-index
+  reports `self_loop_count = 0`, `unresolved_ref_ratio = 0.0%`.
+  (v1.2, v1.3)
+- **Workspace mode**: one daemon, one SQLite, N sub-projects with
+  per-project config and optional `project` filter on every query
+  tool. (v1.5)
+- **Graph-native tools**: `impact_analysis`, `critical_path`. (v1.6)
+- **PR-scoped queries**: `--since <ref>` on five read methods. (v1.6)
+- **Doctor + quality signals**: `myco doctor` exits 0/1/2 on
+  pass/warn/fail with configurable thresholds. (v1.1, v1.2, v1.7)
+- **Watchman opt-in** behind `watcher.backend`. (v1.7)
+- **sqlite-vec integration** compiled in; brute-force fallback
+  measured. (v1.4)
+
+Architectural invariants from v1.0 are preserved: SQLite is still
+source of truth and query engine; `internal/query` is the sole
+reader; `internal/pipeline` is the sole writer; no new top-level
+processes; all schema changes are additive.
+
+### Known gaps before the final v2.0 tag
+
+- **sqlite-vec p95 unmeasured.** The vec0 code path compiles on
+  every release target but the "p95 < 50ms at 100k chunks"
+  benchmark from the roadmap has not been run on a machine with
+  the extension installed. Brute-force numbers on Tiger Lake
+  (768 dims): 114ms / 555ms / 1100ms at 10k / 50k / 100k.
+- **`libsqlite_vec.{so,dylib,dll}` not bundled** in the release
+  tarball. Users install `sqlite-vec` manually per the README.
+- **No 100k+ file monorepo validation.** `myco doctor`,
+  workspace mode, and the inotify-headroom check have only been
+  exercised against the self-index and the committed fixtures.
+
 ## [v1.7.0] — 2026-04-24
 
 "Watchman opt-in" — the seventh v2.0 milestone (Pillar G). Pluggable
