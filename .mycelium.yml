@@ -1,0 +1,48 @@
+# Mycelium configuration. Edit to suit your repo.
+# See https://github.com/jdwiederstein/mycelium for the full schema.
+version: 1
+languages:
+    - go
+    - typescript
+    - python
+include:
+    - '**/*.go'
+    - src/**/*.{ts,tsx}
+    - '**/*.py'
+exclude:
+    - '**/node_modules/**'
+    - '**/vendor/**'
+    - '**/dist/**'
+    - '**/build/**'
+    - '**/testdata/**'
+    - '**/*.generated.*'
+    - '**/*.min.js'
+embedder:
+    provider: none
+    model: ""
+    dimension: 0
+    endpoint: ""
+    api_key_env: ""
+    batch_size: 16
+    max_concurrency: 2
+    rate_limit_chunks_per_minute: 2000
+chunking:
+    symbol_max_tokens: 1024
+    include_docstrings: true
+    file_fallback_window_lines: 50
+watcher:
+    debounce_ms: 200
+    coalesce_ms: 2000
+daemon:
+    socket: .mycelium/daemon.sock
+    http_port: 7777
+hooks:
+    post_commit: true
+index:
+    path: .mycelium/index.db
+    max_file_size_kb: 1024
+    vector:
+        extension_path: ""
+        auto_create: true
+        ef_search: 0
+projects: []

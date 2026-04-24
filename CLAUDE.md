@@ -65,11 +65,20 @@ Enforce in review. Deviations need an explicit reason in CHANGELOG.
   10k / 50k / 100k at 768 dim = 114 / 555 / 1100 ms brute-force on Tiger
   Lake. vec0 path is written and compiled but not measured in this
   release (extension not installed in dev env).
-- **Active next: v1.5 "Workspace mode"** — `projects` table +
-  `files.project_id`, per-project config overrides under `projects:` in
-  `.mycelium.yml`, optional `project` filter on every MCP tool. One
-  daemon, one SQLite, N sub-projects in the same worktree. **Explicit
-  non-goal**: cross-repo federation (N worktrees, one graph) — that's v3.
+- **v1.5 shipped** — "Workspace mode." New `projects` table +
+  nullable `files.project_id` (migration `0005_projects.sql`), per-
+  project config overrides under `projects:` in `.mycelium.yml`,
+  optional `project` filter on every query tool and `--project` on the
+  CLI. Pipeline gains a `Workspaces []Workspace` slice with per-project
+  walkers plus a `FileProjectFor` longest-prefix resolver for watcher
+  events. Integration test + fixture at
+  `testdata/fixtures/workspace/` and `workspace_integration_test.go`.
+  **Explicit non-goal held**: cross-repo federation (N worktrees, one
+  graph) — still v3. Vec0 fast path skips when `project` is set (MATCH
+  doesn't compose with WHERE); brute-force handles scoped search.
+- **Active next: v1.6** — graph-query enrichment (`impact_analysis`,
+  `critical_path`), `get_neighborhood` perf revisit, PR-scoped `--since
+  <ref>` filter.
 
 **v1.2 baselines achieved (self-index, Tiger Lake laptop):**
 - `self_loop_count`: 11 → **0** ✓

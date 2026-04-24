@@ -42,6 +42,10 @@ func Tools() []Tool {
 						"type":        "string",
 						"description": "Optional workspace project name to scope the search to.",
 					},
+					"since": map[string]any{
+						"type":        "string",
+						"description": "Optional git ref. Restricts to files changed between <ref>...HEAD (v1.6).",
+					},
 				},
 				"required": []string{"name"},
 			},
@@ -63,6 +67,10 @@ func Tools() []Tool {
 					"project": map[string]any{
 						"type":        "string",
 						"description": "Optional workspace project name to scope the search to.",
+					},
+					"since": map[string]any{
+						"type":        "string",
+						"description": "Optional git ref. Restricts to files changed between <ref>...HEAD (v1.6).",
 					},
 				},
 				"required": []string{"target"},
@@ -89,6 +97,10 @@ func Tools() []Tool {
 					"project": map[string]any{
 						"type":        "string",
 						"description": "Optional workspace project name to scope the search to.",
+					},
+					"since": map[string]any{
+						"type":        "string",
+						"description": "Optional git ref. Restricts to files changed between <ref>...HEAD (v1.6).",
 					},
 				},
 			},
@@ -128,6 +140,10 @@ func Tools() []Tool {
 					"project": map[string]any{
 						"type":        "string",
 						"description": "Optional workspace project name to scope the search to.",
+					},
+					"since": map[string]any{
+						"type":        "string",
+						"description": "Optional git ref. Restricts to files changed between <ref>...HEAD (v1.6).",
 					},
 				},
 				"required": []string{"pattern"},
@@ -199,8 +215,72 @@ func Tools() []Tool {
 						"type":        "string",
 						"description": "Optional workspace project name to scope the search to.",
 					},
+					"since": map[string]any{
+						"type":        "string",
+						"description": "Optional git ref. Restricts to files changed between <ref>...HEAD (v1.6).",
+					},
 				},
 				"required": []string{"query"},
+			},
+		},
+		{
+			Name:        "impact_analysis",
+			Description: "Transitive inbound closure around a symbol, ranked by distance. Use to answer 'who's impacted if I change this?' or (with kind filter) 'what tests cover this?'. Returns a flat distance-sorted list; for the graph shape use get_neighborhood. Default depth 5, max 10.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"target": map[string]any{
+						"type":        "string",
+						"description": "Qualified name (preferred) or short name of the seed symbol.",
+					},
+					"kind": map[string]any{
+						"type":        "string",
+						"description": "Optional kind filter (e.g. 'method' or 'function') — narrows the reported callers.",
+					},
+					"depth": map[string]any{
+						"type":        "integer",
+						"description": "Traversal depth (default 5, max 10).",
+					},
+					"project": map[string]any{
+						"type":        "string",
+						"description": "Optional workspace project name to scope the reported caller set (traversal remains global).",
+					},
+					"since": map[string]any{
+						"type":        "string",
+						"description": "Optional git ref. Restricts reported callers to files changed between <ref>...HEAD.",
+					},
+				},
+				"required": []string{"target"},
+			},
+		},
+		{
+			Name:        "critical_path",
+			Description: "Up to k shortest outbound call paths from `from` to `to`. Bounded BFS over the refs graph; cycles prevented. Default k=5, max depth 8.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"from": map[string]any{
+						"type":        "string",
+						"description": "Qualified or short name of the source (caller) symbol.",
+					},
+					"to": map[string]any{
+						"type":        "string",
+						"description": "Qualified or short name of the target (callee) symbol.",
+					},
+					"depth": map[string]any{
+						"type":        "integer",
+						"description": "Max path length (default 8, max 8).",
+					},
+					"k": map[string]any{
+						"type":        "integer",
+						"description": "Max number of paths to return (default 5).",
+					},
+					"project": map[string]any{
+						"type":        "string",
+						"description": "Optional workspace project — scopes the two seed lookups only; traversal stays global.",
+					},
+				},
+				"required": []string{"from", "to"},
 			},
 		},
 		{

@@ -59,3 +59,28 @@ hooks:
 index:
   path: .mycelium/index.db
   max_file_size_kb: 1024      # skip files larger than this (minified bundles, generated data)
+
+# Workspace mode (v1.5+). Register sub-projects to make them
+# individually addressable via the `project` input on every query tool
+# (and `--project` on the CLI). Omit this list entirely for a
+# single-project repo — the top-level include/exclude then apply
+# everywhere and `project_id` on each file is NULL.
+#
+# Embedder + chunking always inherit from the top level: one SQLite
+# can't mix embedding dimensions. `languages`, `include`, and `exclude`
+# are per-project overrides that default to the top-level values when
+# omitted. Paths in `root` are relative to the repo root.
+#
+# projects:
+#   - name: api
+#     root: services/api
+#     languages: [go]
+#     include: ["**/*.go"]
+#   - name: web
+#     root: services/web
+#     languages: [typescript]
+#     include: ["**/*.ts", "**/*.tsx"]
+#   - name: worker
+#     root: services/worker
+#     languages: [python]
+#     include: ["**/*.py"]

@@ -15,6 +15,7 @@ import (
 	"github.com/jdwiederstein/mycelium/internal/daemon"
 	"github.com/jdwiederstein/mycelium/internal/doctor"
 	"github.com/jdwiederstein/mycelium/internal/embed"
+	"github.com/jdwiederstein/mycelium/internal/gitref"
 	"github.com/jdwiederstein/mycelium/internal/hook"
 	mychttp "github.com/jdwiederstein/mycelium/internal/http"
 	"github.com/jdwiederstein/mycelium/internal/index"
@@ -165,12 +166,14 @@ func newQueryCmd() *cobra.Command {
 			kind, _ := cmd.Flags().GetString("kind")
 			limit, _ := cmd.Flags().GetInt("limit")
 			project, _ := cmd.Flags().GetString("project")
-			return runQueryFind(args[0], kind, project, limit)
+			since, _ := cmd.Flags().GetString("since")
+			return runQueryFind(args[0], kind, project, since, limit)
 		},
 	}
 	findCmd.Flags().String("kind", "", "filter by kind: function | method | type | interface | var | const")
 	findCmd.Flags().Int("limit", 20, "max results")
 	findCmd.Flags().String("project", "", "restrict to a workspace project (by name)")
+	findCmd.Flags().String("since", "", "restrict to files changed between <ref>...HEAD")
 
 	refsCmd := &cobra.Command{
 		Use:   "refs <symbol>",
@@ -179,11 +182,13 @@ func newQueryCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			limit, _ := cmd.Flags().GetInt("limit")
 			project, _ := cmd.Flags().GetString("project")
-			return runQueryRefs(args[0], project, limit)
+			since, _ := cmd.Flags().GetString("since")
+			return runQueryRefs(args[0], project, since, limit)
 		},
 	}
 	refsCmd.Flags().Int("limit", 100, "max results")
 	refsCmd.Flags().String("project", "", "restrict to a workspace project (by name)")
+	refsCmd.Flags().String("since", "", "restrict to files changed between <ref>...HEAD")
 
 	filesCmd := &cobra.Command{
 		Use:   "files [name-contains]",
@@ -193,16 +198,18 @@ func newQueryCmd() *cobra.Command {
 			lang, _ := cmd.Flags().GetString("language")
 			limit, _ := cmd.Flags().GetInt("limit")
 			project, _ := cmd.Flags().GetString("project")
+			since, _ := cmd.Flags().GetString("since")
 			name := ""
 			if len(args) == 1 {
 				name = args[0]
 			}
-			return runQueryFiles(name, lang, project, limit)
+			return runQueryFiles(name, lang, project, since, limit)
 		},
 	}
 	filesCmd.Flags().String("language", "", "filter by language (go, typescript, python)")
 	filesCmd.Flags().Int("limit", 500, "max results")
 	filesCmd.Flags().String("project", "", "restrict to a workspace project (by name)")
+	filesCmd.Flags().String("since", "", "restrict to files changed between <ref>...HEAD")
 
 	outlineCmd := &cobra.Command{
 		Use:   "outline <path>",
@@ -221,12 +228,14 @@ func newQueryCmd() *cobra.Command {
 			k, _ := cmd.Flags().GetInt("k")
 			path, _ := cmd.Flags().GetString("path")
 			project, _ := cmd.Flags().GetString("project")
-			return runQueryLexical(args[0], path, project, k)
+			since, _ := cmd.Flags().GetString("since")
+			return runQueryLexical(args[0], path, project, since, k)
 		},
 	}
 	grepCmd.Flags().Int("k", 50, "max results")
 	grepCmd.Flags().String("path", "", "filter by path substring")
 	grepCmd.Flags().String("project", "", "restrict to a workspace project (by name)")
+	grepCmd.Flags().String("since", "", "restrict to files changed between <ref>...HEAD")
 
 	summaryCmd := &cobra.Command{
 		Use:   "summary <path>",
@@ -252,6 +261,38 @@ func newQueryCmd() *cobra.Command {
 	neighborCmd.Flags().String("direction", "both", "out | in | both")
 	neighborCmd.Flags().String("project", "", "restrict seed lookup to a workspace project (traversal remains global)")
 
+	impactCmd := &cobra.Command{
+		Use:   "impact <symbol>",
+		Short: "Transitive inbound closure around a symbol, ranked by distance (v1.6)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			kind, _ := cmd.Flags().GetString("kind")
+			depth, _ := cmd.Flags().GetInt("depth")
+			project, _ := cmd.Flags().GetString("project")
+			since, _ := cmd.Flags().GetString("since")
+			return runQueryImpact(args[0], kind, project, since, depth)
+		},
+	}
+	impactCmd.Flags().String("kind", "", "filter callers by kind (e.g. 'method', 'function')")
+	impactCmd.Flags().Int("depth", 5, "max traversal depth (max 10)")
+	impactCmd.Flags().String("project", "", "restrict reported callers to a workspace project")
+	impactCmd.Flags().String("since", "", "restrict reported callers to files changed between <ref>...HEAD")
+
+	pathCmd := &cobra.Command{
+		Use:   "path <from> <to>",
+		Short: "Shortest outbound call paths between two symbols (v1.6)",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			depth, _ := cmd.Flags().GetInt("depth")
+			k, _ := cmd.Flags().GetInt("k")
+			project, _ := cmd.Flags().GetString("project")
+			return runQueryCriticalPath(args[0], args[1], project, depth, k)
+		},
+	}
+	pathCmd.Flags().Int("depth", 8, "max path length (max 8)")
+	pathCmd.Flags().Int("k", 5, "max paths to return")
+	pathCmd.Flags().String("project", "", "restrict seed lookups to a workspace project (traversal remains global)")
+
 	cmd.AddCommand(
 		findCmd,
 		refsCmd,
@@ -260,6 +301,8 @@ func newQueryCmd() *cobra.Command {
 		grepCmd,
 		summaryCmd,
 		neighborCmd,
+		impactCmd,
+		pathCmd,
 		func() *cobra.Command {
 			c := &cobra.Command{
 				Use:   "search <text>",
@@ -270,13 +313,15 @@ func newQueryCmd() *cobra.Command {
 					kind, _ := cmd.Flags().GetString("kind")
 					path, _ := cmd.Flags().GetString("path")
 					project, _ := cmd.Flags().GetString("project")
-					return runQuerySearch(args[0], k, kind, path, project)
+					since, _ := cmd.Flags().GetString("since")
+					return runQuerySearch(args[0], k, kind, path, project, since)
 				},
 			}
 			c.Flags().Int("k", 10, "number of results")
 			c.Flags().String("kind", "", "filter by kind")
 			c.Flags().String("path", "", "filter by path substring")
 			c.Flags().String("project", "", "restrict to a workspace project (by name)")
+			c.Flags().String("since", "", "restrict to files changed between <ref>...HEAD")
 			return c
 		}(),
 	)
@@ -294,7 +339,18 @@ func daemonClient(rc repoCtx) (*ipc.Client, bool) {
 	return nil, false
 }
 
-func runQueryFind(name, kind, project string, limit int) error {
+// resolveCLISince turns the offline-path `--since <ref>` flag into the
+// resolved path list. Empty ref → nil (unscoped). Any git error
+// surfaces verbatim; the CLI prefers a loud failure over a silently
+// unfiltered result.
+func resolveCLISince(ctx context.Context, rc repoCtx, since string) ([]string, error) {
+	if since == "" {
+		return nil, nil
+	}
+	return gitref.ResolveSince(ctx, rc.Root, since)
+}
+
+func runQueryFind(name, kind, project, since string, limit int) error {
 	ctx := context.Background()
 	rc, err := loadRepoCtx()
 	if err != nil {
@@ -302,17 +358,21 @@ func runQueryFind(name, kind, project string, limit int) error {
 	}
 	var hits []query.SymbolHit
 	if c, ok := daemonClient(rc); ok {
-		if err := c.Call(ipc.MethodFindSymbol, ipc.FindSymbolParams{Name: name, Kind: kind, Project: project, Limit: limit}, &hits); err != nil {
+		if err := c.Call(ipc.MethodFindSymbol, ipc.FindSymbolParams{Name: name, Kind: kind, Project: project, Since: since, Limit: limit}, &hits); err != nil {
 			return err
 		}
 	} else {
+		paths, err := resolveCLISince(ctx, rc, since)
+		if err != nil {
+			return err
+		}
 		ix, err := openIndex(rc)
 		if err != nil {
 			return err
 		}
 		defer ix.Close()
 		r := query.NewReader(ix.DB())
-		hits, err = r.FindSymbol(ctx, name, kind, project, limit)
+		hits, err = r.FindSymbol(ctx, name, kind, project, limit, paths)
 		if err != nil {
 			return err
 		}
@@ -330,7 +390,7 @@ func runQueryFind(name, kind, project string, limit int) error {
 	return nil
 }
 
-func runQueryRefs(target, project string, limit int) error {
+func runQueryRefs(target, project, since string, limit int) error {
 	ctx := context.Background()
 	rc, err := loadRepoCtx()
 	if err != nil {
@@ -338,17 +398,21 @@ func runQueryRefs(target, project string, limit int) error {
 	}
 	var hits []query.ReferenceHit
 	if c, ok := daemonClient(rc); ok {
-		if err := c.Call(ipc.MethodGetReferences, ipc.GetReferencesParams{Target: target, Project: project, Limit: limit}, &hits); err != nil {
+		if err := c.Call(ipc.MethodGetReferences, ipc.GetReferencesParams{Target: target, Project: project, Since: since, Limit: limit}, &hits); err != nil {
 			return err
 		}
 	} else {
+		paths, err := resolveCLISince(ctx, rc, since)
+		if err != nil {
+			return err
+		}
 		ix, err := openIndex(rc)
 		if err != nil {
 			return err
 		}
 		defer ix.Close()
 		r := query.NewReader(ix.DB())
-		hits, err = r.GetReferences(ctx, target, project, limit)
+		hits, err = r.GetReferences(ctx, target, project, limit, paths)
 		if err != nil {
 			return err
 		}
@@ -371,7 +435,7 @@ func runQueryRefs(target, project string, limit int) error {
 	return nil
 }
 
-func runQueryFiles(nameContains, language, project string, limit int) error {
+func runQueryFiles(nameContains, language, project, since string, limit int) error {
 	ctx := context.Background()
 	rc, err := loadRepoCtx()
 	if err != nil {
@@ -379,17 +443,21 @@ func runQueryFiles(nameContains, language, project string, limit int) error {
 	}
 	var hits []query.FileHit
 	if c, ok := daemonClient(rc); ok {
-		if err := c.Call(ipc.MethodListFiles, ipc.ListFilesParams{Language: language, NameContains: nameContains, Project: project, Limit: limit}, &hits); err != nil {
+		if err := c.Call(ipc.MethodListFiles, ipc.ListFilesParams{Language: language, NameContains: nameContains, Project: project, Since: since, Limit: limit}, &hits); err != nil {
 			return err
 		}
 	} else {
+		paths, err := resolveCLISince(ctx, rc, since)
+		if err != nil {
+			return err
+		}
 		ix, err := openIndex(rc)
 		if err != nil {
 			return err
 		}
 		defer ix.Close()
 		r := query.NewReader(ix.DB())
-		hits, err = r.ListFiles(ctx, language, nameContains, project, limit)
+		hits, err = r.ListFiles(ctx, language, nameContains, project, limit, paths)
 		if err != nil {
 			return err
 		}
@@ -400,7 +468,7 @@ func runQueryFiles(nameContains, language, project string, limit int) error {
 	return nil
 }
 
-func runQueryLexical(pattern, pathContains, project string, k int) error {
+func runQueryLexical(pattern, pathContains, project, since string, k int) error {
 	ctx := context.Background()
 	rc, err := loadRepoCtx()
 	if err != nil {
@@ -408,17 +476,21 @@ func runQueryLexical(pattern, pathContains, project string, k int) error {
 	}
 	var hits []query.LexicalHit
 	if c, ok := daemonClient(rc); ok {
-		if err := c.Call(ipc.MethodSearchLexical, ipc.SearchLexicalParams{Pattern: pattern, PathContains: pathContains, Project: project, K: k}, &hits); err != nil {
+		if err := c.Call(ipc.MethodSearchLexical, ipc.SearchLexicalParams{Pattern: pattern, PathContains: pathContains, Project: project, Since: since, K: k}, &hits); err != nil {
 			return err
 		}
 	} else {
+		paths, err := resolveCLISince(ctx, rc, since)
+		if err != nil {
+			return err
+		}
 		ix, err := openIndex(rc)
 		if err != nil {
 			return err
 		}
 		defer ix.Close()
 		r := query.NewReader(ix.DB())
-		hits, err = r.SearchLexical(ctx, pattern, pathContains, project, k, rc.Root)
+		hits, err = r.SearchLexical(ctx, pattern, pathContains, project, k, rc.Root, paths)
 		if err != nil {
 			return err
 		}
@@ -512,7 +584,100 @@ func runQueryNeighborhood(target, project string, depth int, direction string) e
 	return nil
 }
 
-func runQuerySearch(q string, k int, kind, pathContains, project string) error {
+func runQueryImpact(target, kind, project, since string, depth int) error {
+	ctx := context.Background()
+	rc, err := loadRepoCtx()
+	if err != nil {
+		return err
+	}
+	var imp query.Impact
+	if c, ok := daemonClient(rc); ok {
+		if err := c.Call(ipc.MethodImpactAnalysis, ipc.ImpactAnalysisParams{Target: target, Kind: kind, Depth: depth, Project: project, Since: since}, &imp); err != nil {
+			return err
+		}
+	} else {
+		paths, err := resolveCLISince(ctx, rc, since)
+		if err != nil {
+			return err
+		}
+		ix, err := openIndex(rc)
+		if err != nil {
+			return err
+		}
+		defer ix.Close()
+		r := query.NewReader(ix.DB())
+		imp, err = r.ImpactAnalysis(ctx, target, kind, project, depth, paths)
+		if err != nil {
+			return err
+		}
+	}
+	for _, note := range imp.Notes {
+		fmt.Fprintf(os.Stderr, "note: %s\n", note)
+	}
+	fmt.Printf("seed: %s  (%s:%d)\n", imp.Seed.Qualified, imp.Seed.Path, imp.Seed.StartLine)
+	if len(imp.Hits) == 0 {
+		fmt.Fprintln(os.Stderr, "no callers found within depth")
+		return nil
+	}
+	for _, h := range imp.Hits {
+		fmt.Printf("  d=%d  [%s]  %s  (%s:%d)\n", h.Distance, h.Kind, h.Qualified, h.Path, h.StartLine)
+	}
+	return nil
+}
+
+func runQueryCriticalPath(from, to, project string, depth, k int) error {
+	ctx := context.Background()
+	rc, err := loadRepoCtx()
+	if err != nil {
+		return err
+	}
+	var cp query.CriticalPathResult
+	if c, ok := daemonClient(rc); ok {
+		if err := c.Call(ipc.MethodCriticalPath, ipc.CriticalPathParams{From: from, To: to, Depth: depth, K: k, Project: project}, &cp); err != nil {
+			return err
+		}
+	} else {
+		ix, err := openIndex(rc)
+		if err != nil {
+			return err
+		}
+		defer ix.Close()
+		r := query.NewReader(ix.DB())
+		cp, err = r.CriticalPath(ctx, from, to, project, depth, k)
+		if err != nil {
+			return err
+		}
+	}
+	for _, note := range cp.Notes {
+		fmt.Fprintf(os.Stderr, "note: %s\n", note)
+	}
+	fmt.Printf("from: %s  (%s:%d)\n", cp.From.Qualified, cp.From.Path, cp.From.StartLine)
+	fmt.Printf("to:   %s  (%s:%d)\n", cp.To.Qualified, cp.To.Path, cp.To.StartLine)
+	if len(cp.Paths) == 0 {
+		fmt.Fprintln(os.Stderr, "no path found within depth")
+		return nil
+	}
+	for i, path := range cp.Paths {
+		fmt.Printf("path %d (%d hop%s):\n", i+1, len(path)-1, plural(len(path)-1))
+		for j, v := range path {
+			prefix := "  "
+			if j > 0 {
+				prefix = "  -> "
+			}
+			fmt.Printf("%s%s  (%s:%d)\n", prefix, v.Qualified, v.Path, v.StartLine)
+		}
+	}
+	return nil
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
+func runQuerySearch(q string, k int, kind, pathContains, project, since string) error {
 	ctx := context.Background()
 	rc, err := loadRepoCtx()
 	if err != nil {
@@ -520,12 +685,16 @@ func runQuerySearch(q string, k int, kind, pathContains, project string) error {
 	}
 	var hits []query.SemanticHit
 	if c, ok := daemonClient(rc); ok {
-		if err := c.Call(ipc.MethodSearchSemantic, ipc.SearchSemanticParams{Query: q, K: k, Kind: kind, PathContains: pathContains, Project: project}, &hits); err != nil {
+		if err := c.Call(ipc.MethodSearchSemantic, ipc.SearchSemanticParams{Query: q, K: k, Kind: kind, PathContains: pathContains, Project: project, Since: since}, &hits); err != nil {
 			return err
 		}
 	} else {
 		// Offline fallback: open the DB read-side ourselves. This can't happen
 		// if the daemon is running (SQLite WAL allows concurrent readers).
+		paths, err := resolveCLISince(ctx, rc, since)
+		if err != nil {
+			return err
+		}
 		ix, err := openIndex(rc)
 		if err != nil {
 			return err
@@ -543,7 +712,7 @@ func runQuerySearch(q string, k int, kind, pathContains, project string) error {
 			_ = ix.EnsureVSS(ctx, emb.Dimension())
 		}
 		s := &query.Searcher{Reader: r, Embedder: emb, VSSTable: ix.VSSTableName()}
-		hits, err = s.SearchSemantic(ctx, q, k, kind, pathContains, project)
+		hits, err = s.SearchSemantic(ctx, q, k, kind, pathContains, project, paths)
 		if err != nil {
 			return err
 		}

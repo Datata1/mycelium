@@ -29,8 +29,9 @@ to the v2.0 roadmap at `~/.claude/plans/1-everything-you-mentioned-indexed-duckl
 | Limitation | Cause | Status |
 |---|---|---|
 | Semantic search brute-force is slow past ~10k chunks | Pure-Go cosine scan; no SIMD | **Optional sqlite-vec integration shipped in v1.4** — install the extension + set `index.vector.extension_path` for the KNN fast path. Brute-force stays as fallback (works, just slow — see README benchmark table) |
+| Project-scoped semantic search skips the vec0 fast path | `vec0 MATCH` doesn't compose with arbitrary `WHERE` clauses | By design in v1.5 — brute-force cosine handles the project filter; unfiltered semantic search keeps the vec0 path |
 | Files with no extracted symbols (SQL, Markdown, config) get no embedding | `chunker.FromSymbols` is symbol-level only | Planned post-v1.4 — fallback window chunks |
-| Can't index multiple sub-projects with per-project config overrides | Flat `files` table, no `project_id` | Planned **v1.5** workspace mode |
+| Can't index multiple sub-projects with per-project config overrides | Flat `files` table, no `project_id` | **Shipped in v1.5** — `projects:` list in `.mycelium.yml` plus an optional `project` filter on every query tool. One daemon, one SQLite, N sub-projects inside one worktree. Cross-repo federation (N worktrees → one graph) stays **v3** |
 | No PR-scoped `--since <ref>` filter on queries | Not yet implemented | Planned **v1.6** |
 | fsnotify hits inotify limits on 100k+ file repos (default `fs.inotify.max_user_watches = 8192`) | Linux kernel cap | Planned **v1.7** Watchman opt-in backend |
 | Editor atomic-save (vim, some VSCode setups) delivers CREATE+DELETE instead of MODIFY | fsnotify platform behavior | Partially mitigated by `embed_cache` + post-commit catch-up; untouched otherwise |
@@ -63,7 +64,7 @@ to the v2.0 roadmap at `~/.claude/plans/1-everything-you-mentioned-indexed-duckl
 | `refs.resolver_version` is set per-write; no lazy daemon-start re-resolution | Simplification for v1.2 | Planned if it becomes a pain |
 | Daemon restart required when switching resolver versions (changes affect new files only) | No re-resolution trigger | Future |
 | Index model-switch invalidates all embeddings (dimensions differ) | No per-model retention | By design |
-| `files.project_id` doesn't exist yet | Single-project schema | Planned **v1.5** |
+| `files.project_id` as a queryable scope | Single-project schema pre-v1.5 | **Shipped in v1.5** — nullable `project_id` on `files` with cascade delete; NULL = implicit root project, so v1.4 configs keep working |
 
 ## Things you might expect but we don't claim
 

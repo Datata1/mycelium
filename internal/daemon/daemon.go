@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jdwiederstein/mycelium/internal/embed"
+	"github.com/jdwiederstein/mycelium/internal/gitref"
 	"github.com/jdwiederstein/mycelium/internal/ipc"
 	"github.com/jdwiederstein/mycelium/internal/pipeline"
 	"github.com/jdwiederstein/mycelium/internal/query"
@@ -146,21 +147,33 @@ func (d *Daemon) dispatch(ctx context.Context, req ipc.Request) (any, error) {
 		if err := unmarshal(req.Params, &p); err != nil {
 			return nil, err
 		}
-		return d.Reader.FindSymbol(ctx, p.Name, p.Kind, p.Project, p.Limit)
+		paths, err := d.resolveSince(ctx, p.Since)
+		if err != nil {
+			return nil, err
+		}
+		return d.Reader.FindSymbol(ctx, p.Name, p.Kind, p.Project, p.Limit, paths)
 
 	case ipc.MethodGetReferences:
 		var p ipc.GetReferencesParams
 		if err := unmarshal(req.Params, &p); err != nil {
 			return nil, err
 		}
-		return d.Reader.GetReferences(ctx, p.Target, p.Project, p.Limit)
+		paths, err := d.resolveSince(ctx, p.Since)
+		if err != nil {
+			return nil, err
+		}
+		return d.Reader.GetReferences(ctx, p.Target, p.Project, p.Limit, paths)
 
 	case ipc.MethodListFiles:
 		var p ipc.ListFilesParams
 		if err := unmarshal(req.Params, &p); err != nil {
 			return nil, err
 		}
-		return d.Reader.ListFiles(ctx, p.Language, p.NameContains, p.Project, p.Limit)
+		paths, err := d.resolveSince(ctx, p.Since)
+		if err != nil {
+			return nil, err
+		}
+		return d.Reader.ListFiles(ctx, p.Language, p.NameContains, p.Project, p.Limit, paths)
 
 	case ipc.MethodGetFileOutline:
 		var p ipc.GetFileOutlineParams
@@ -180,15 +193,23 @@ func (d *Daemon) dispatch(ctx context.Context, req ipc.Request) (any, error) {
 		if err := unmarshal(req.Params, &p); err != nil {
 			return nil, err
 		}
+		paths, err := d.resolveSince(ctx, p.Since)
+		if err != nil {
+			return nil, err
+		}
 		s := &query.Searcher{Reader: d.Reader, Embedder: d.Embedder, VSSTable: d.VSSTable}
-		return s.SearchSemantic(ctx, p.Query, p.K, p.Kind, p.PathContains, p.Project)
+		return s.SearchSemantic(ctx, p.Query, p.K, p.Kind, p.PathContains, p.Project, paths)
 
 	case ipc.MethodSearchLexical:
 		var p ipc.SearchLexicalParams
 		if err := unmarshal(req.Params, &p); err != nil {
 			return nil, err
 		}
-		return d.Reader.SearchLexical(ctx, p.Pattern, p.PathContains, p.Project, p.K, d.RepoRoot)
+		paths, err := d.resolveSince(ctx, p.Since)
+		if err != nil {
+			return nil, err
+		}
+		return d.Reader.SearchLexical(ctx, p.Pattern, p.PathContains, p.Project, p.K, d.RepoRoot, paths)
 
 	case ipc.MethodGetFileSummary:
 		var p ipc.GetFileSummaryParams
@@ -208,9 +229,37 @@ func (d *Daemon) dispatch(ctx context.Context, req ipc.Request) (any, error) {
 		}
 		return d.Reader.GetNeighborhood(ctx, p.Target, p.Project, p.Depth, dir)
 
+	case ipc.MethodImpactAnalysis:
+		var p ipc.ImpactAnalysisParams
+		if err := unmarshal(req.Params, &p); err != nil {
+			return nil, err
+		}
+		paths, err := d.resolveSince(ctx, p.Since)
+		if err != nil {
+			return nil, err
+		}
+		return d.Reader.ImpactAnalysis(ctx, p.Target, p.Kind, p.Project, p.Depth, paths)
+
+	case ipc.MethodCriticalPath:
+		var p ipc.CriticalPathParams
+		if err := unmarshal(req.Params, &p); err != nil {
+			return nil, err
+		}
+		return d.Reader.CriticalPath(ctx, p.From, p.To, p.Project, p.Depth, p.K)
+
 	default:
 		return nil, fmt.Errorf("unknown method %q", req.Method)
 	}
+}
+
+// resolveSince turns the optional git-ref string into a resolved path
+// list. Empty ref -> nil (unscoped). Git errors surface to the caller
+// rather than silently becoming an empty filter.
+func (d *Daemon) resolveSince(ctx context.Context, ref string) ([]string, error) {
+	if ref == "" {
+		return nil, nil
+	}
+	return gitref.ResolveSince(ctx, d.RepoRoot, ref)
 }
 
 func unmarshal(raw json.RawMessage, out any) error {

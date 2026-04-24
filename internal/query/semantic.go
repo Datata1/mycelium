@@ -52,9 +52,10 @@ type SemanticHit struct {
 // few tens of thousands of chunks; HNSW via sqlite-vec slots in later.
 //
 // project (v1.5) scopes the candidate chunks to a single workspace.
-// When set, the vec0 fast path is skipped (vec0 KNN doesn't know about
-// our project filter); brute-force two-pass handles it correctly.
-func (s *Searcher) SearchSemantic(ctx context.Context, query string, k int, kind, pathContains, project string) ([]SemanticHit, error) {
+// pathsIn (v1.6) is the --since path filter. When either is set, the
+// vec0 fast path is skipped (vec0 KNN doesn't compose with arbitrary
+// WHERE clauses); brute-force two-pass handles both correctly.
+func (s *Searcher) SearchSemantic(ctx context.Context, query string, k int, kind, pathContains, project string, pathsIn []string) ([]SemanticHit, error) {
 	if s.Embedder == nil {
 		return nil, embed.ErrNotConfigured
 	}
@@ -78,9 +79,9 @@ func (s *Searcher) SearchSemantic(ctx context.Context, query string, k int, kind
 
 	// vec0 fast path. We only use it when every filter is empty so we
 	// can let the KNN query do the whole job. With filters (kind/path/
-	// project) we fall back to brute-force so we don't accidentally
+	// project/pathsIn) we fall back to brute-force so we don't accidentally
 	// return <k results after post-hoc filtering.
-	if s.VSSTable != "" && kind == "" && pathContains == "" && project == "" {
+	if s.VSSTable != "" && kind == "" && pathContains == "" && project == "" && pathsIn == nil {
 		if hits, ok, err := s.searchViaVSS(ctx, qPacked, k); err != nil {
 			return nil, err
 		} else if ok {
@@ -91,6 +92,10 @@ func (s *Searcher) SearchSemantic(ctx context.Context, query string, k int, kind
 	}
 
 	scope, scopeArgs, err := s.Reader.projectScope(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	pathClause, pathArgs, err := pathsInClause(pathsIn)
 	if err != nil {
 		return nil, err
 	}
@@ -122,6 +127,10 @@ func (s *Searcher) SearchSemantic(ctx context.Context, query string, k int, kind
 	if scope != "" {
 		scanSQL += scope
 		scanArgs = append(scanArgs, scopeArgs...)
+	}
+	if pathClause != "" {
+		scanSQL += pathClause
+		scanArgs = append(scanArgs, pathArgs...)
 	}
 	rows, err := s.Reader.db.QueryContext(ctx, scanSQL, scanArgs...)
 	if err != nil {

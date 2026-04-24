@@ -52,7 +52,7 @@ Holding the scope tight so v1.0 ships:
 
 - **Type-perfect cross-file resolution.** We build a best-effort symbol graph from tree-sitter, not an LSP-grade type resolver. Textual `dst_name` refs are kept alongside resolved ones so callers can see what's verified.
 - **LLM-generated summaries at index time.** Too slow, too costly, nondeterministic. v1.0 returns structural summaries only (exports, imports, LOC, top comment). LLM enrichment is a v1.1+ opt-in.
-- **Multi-repo / workspace mode.** One repo per index. Monorepos with many logical projects still work — the repo *is* the unit.
+- **Cross-repo federation.** One repo per index; sibling worktrees don't share a logical graph. (In-repo workspace mode — multiple sub-projects sharing one SQLite under one worktree — shipped in v1.5; federation across repos stays a non-goal and is tracked as v3.)
 - **Docker image.** fsnotify through a container bind mount is unreliable. We ship native binaries only.
 - **Hosted service.** Mycelium is a local tool. There is no cloud component.
 - **Pre-commit hooks.** Blocking commits for indexing is user-hostile. The post-commit hook is the only git integration.

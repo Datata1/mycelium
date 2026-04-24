@@ -26,7 +26,10 @@ type LexicalHit struct {
 // This scans files on disk rather than indexing content up-front, which keeps
 // the DB small. On a repo with ~1k files we easily finish in tens of ms with
 // parallel reads.
-func (r *Reader) SearchLexical(ctx context.Context, pattern, pathContains, project string, k int, repoRoot string) ([]LexicalHit, error) {
+//
+// pathsIn (v1.6) is the `--since` path filter. nil = unscoped; empty =
+// zero hits (no candidate files).
+func (r *Reader) SearchLexical(ctx context.Context, pattern, pathContains, project string, k int, repoRoot string, pathsIn []string) ([]LexicalHit, error) {
 	if k <= 0 {
 		k = 50
 	}
@@ -34,7 +37,7 @@ func (r *Reader) SearchLexical(ctx context.Context, pattern, pathContains, proje
 	if err != nil {
 		return nil, fmt.Errorf("compile pattern: %w", err)
 	}
-	paths, err := r.candidatePaths(ctx, pathContains, project)
+	paths, err := r.candidatePaths(ctx, pathContains, project, pathsIn)
 	if err != nil {
 		return nil, err
 	}
@@ -91,8 +94,12 @@ func (r *Reader) SearchLexical(ctx context.Context, pattern, pathContains, proje
 	return hits, nil
 }
 
-func (r *Reader) candidatePaths(ctx context.Context, pathContains, project string) ([]string, error) {
+func (r *Reader) candidatePaths(ctx context.Context, pathContains, project string, pathsIn []string) ([]string, error) {
 	scope, scopeArgs, err := r.projectScope(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	pathClause, pathArgs, err := pathsInClause(pathsIn)
 	if err != nil {
 		return nil, err
 	}
@@ -107,6 +114,10 @@ func (r *Reader) candidatePaths(ctx context.Context, pathContains, project strin
 	if scope != "" {
 		q += scope
 		args = append(args, scopeArgs...)
+	}
+	if pathClause != "" {
+		q += pathClause
+		args = append(args, pathArgs...)
 	}
 	rs, err := r.db.QueryContext(ctx, q, args...)
 	if err != nil {

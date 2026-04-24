@@ -177,6 +177,18 @@ func mapToolToIPC(tool string, rawArgs json.RawMessage) (string, any, error) {
 			return "", nil, err
 		}
 		return ipc.MethodGetNeighborhood, p, nil
+	case "impact_analysis":
+		var p ipc.ImpactAnalysisParams
+		if err := unmarshalArgs(rawArgs, &p); err != nil {
+			return "", nil, err
+		}
+		return ipc.MethodImpactAnalysis, p, nil
+	case "critical_path":
+		var p ipc.CriticalPathParams
+		if err := unmarshalArgs(rawArgs, &p); err != nil {
+			return "", nil, err
+		}
+		return ipc.MethodCriticalPath, p, nil
 	default:
 		return "", nil, fmt.Errorf("unknown tool: %s", tool)
 	}

@@ -13,7 +13,7 @@
   <a href="https://github.com/Datata1/mycelium/releases"><img src="https://img.shields.io/github/v/release/Datata1/mycelium?style=flat-square&color=00FFCC" alt="Release"></a>
   <a href="#"><img src="https://img.shields.io/badge/Storage-SQLite-blue?style=flat-square" alt="SQLite"></a>
   <a href="#"><img src="https://img.shields.io/badge/Interface-MCP%20%7C%20HTTP%20%7C%20CLI-8A2BE2?style=flat-square" alt="Interfaces"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Status-v1.0%20Feature%20Complete-success?style=flat-square" alt="Status"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Status-v1.5%20Workspace%20Mode-success?style=flat-square" alt="Status"></a>
 </p>
 
 ---
@@ -37,8 +37,11 @@ AI coding agents waste tokens and tool calls re-discovering a repo's structure o
 
 ## Status
 
-**v1.0** — feature-complete. Nine MCP tools, three transports, three
-languages (Go, TypeScript/TSX, Python).
+**v1.5** — workspace mode. One daemon, one SQLite, N sub-projects under
+one worktree. Builds on v1.0's nine MCP tools, three transports, three
+languages (Go, TypeScript/TSX, Python); v1.2/v1.3 type-aware resolvers
+for all three; and v1.4's optional sqlite-vec fast path. Cross-repo
+federation stays a non-goal (see [LIMITATIONS.md](./LIMITATIONS.md)).
 
 ## Install
 
@@ -62,7 +65,7 @@ Supported platforms: `linux/amd64`, `linux/arm64`, `darwin/amd64`,
 
 ### From source
 
-Requires Go 1.22+ and a C toolchain (tree-sitter uses cgo).
+Requires Go 1.25+ (for `golang.org/x/tools`) and a C toolchain (tree-sitter uses cgo).
 
 ```bash
 git clone https://github.com/jdwiederstein/mycelium
@@ -106,17 +109,22 @@ Same idea, but for `~/.cursor/mcp.json`.
 
 All tools return JSON; line/col positions are 1-based.
 
+Tools marked with `project?` accept an optional workspace project name
+(see [Workspace mode](#workspace-mode)). Unknown project names return
+zero hits rather than silently falling back to unscoped, so config typos
+surface immediately.
+
 | Tool | Purpose | Key inputs |
 |---|---|---|
-| `find_symbol` | Fuzzy/exact symbol lookup. | `name`, `kind?`, `limit?` |
+| `find_symbol` | Fuzzy/exact symbol lookup. | `name`, `kind?`, `limit?`, `project?` |
 | `get_definition` | Source span + snippet. | `symbol_id` or `qualified_name` |
-| `get_references` | Callers / importers / type uses; flags each hit as resolved vs textual. | `target`, `limit?` |
-| `search_semantic` | Vector search over code chunks (requires embedder). | `query`, `k?`, `kind?`, `path_contains?` |
-| `search_lexical` | Ripgrep-style regex over indexed files. | `pattern`, `path_contains?`, `k?` |
-| `list_files` | Indexed files with language tags. | `language?`, `name_contains?`, `limit?` |
+| `get_references` | Callers / importers / type uses; flags each hit as resolved vs textual. | `target`, `limit?`, `project?` |
+| `search_semantic` | Vector search over code chunks (requires embedder). | `query`, `k?`, `kind?`, `path_contains?`, `project?` |
+| `search_lexical` | Ripgrep-style regex over indexed files. | `pattern`, `path_contains?`, `k?`, `project?` |
+| `list_files` | Indexed files with language tags. | `language?`, `name_contains?`, `limit?`, `project?` |
 | `get_file_outline` | Hierarchical symbol tree for one file. | `path` |
 | `get_file_summary` | Structural summary (exports, imports, LOC). | `path` |
-| `get_neighborhood` | Local call graph around a symbol (recursive CTE on refs). | `target`, `depth?`, `direction?` |
+| `get_neighborhood` | Local call graph around a symbol (recursive CTE on refs). Seed lookup respects `project?`; traversal stays global so cross-project edges still surface. | `target`, `depth?`, `direction?`, `project?` |
 | `stats` | Languages, symbol counts, refs, freshness. | — |
 
 ## Architecture
@@ -188,6 +196,50 @@ index:
   max_file_size_kb: 1024
 ```
 
+## Workspace mode
+
+Monorepos with independent sub-projects (e.g. a Go API next to a TS
+frontend and a Python worker) can register each sub-project separately
+under one daemon. One SQLite file, one watcher, N logical scopes.
+
+```yaml
+# .mycelium.yml — top-level languages/include/exclude remain the
+# defaults; each entry under `projects:` can override them.
+projects:
+  - name: api
+    root: services/api
+    languages: [go]
+    include: ["**/*.go"]
+  - name: web
+    root: services/web
+    languages: [typescript]
+    include: ["**/*.ts", "**/*.tsx"]
+  - name: worker
+    root: services/worker
+    languages: [python]
+    include: ["**/*.py"]
+```
+
+Every query tool gains an optional `project` input (and `--project` on
+the CLI) that scopes results to one sub-project. `get_neighborhood`
+scopes only the seed lookup — traversal stays global so cross-project
+call edges still surface.
+
+```bash
+myco query find Handler --project api
+myco query files --project web
+```
+
+**Scope.** Workspace mode is about isolating sub-projects *inside one
+worktree*. Cross-repo federation (N worktrees sharing one logical graph)
+is an explicit v3 non-goal — the unit of isolation here is a directory,
+not a repository. The embedder is inherited from the top level because a
+single SQLite DB can't mix embedding dimensions.
+
+**Backwards compatibility.** Configs without a `projects:` list keep
+working untouched; `project_id` on the `files` table is nullable and
+NULL means "implicit root project."
+
 ## Enabling semantic search
 
 Semantic search requires an embedder. The simplest path is Ollama.
@@ -237,6 +289,11 @@ through vec0's KNN path. If the extension is missing or mismatched, the
 daemon logs a warning and falls back to brute-force — your queries still
 work, just at the numbers below.
 
+Note: the vec0 fast path is skipped when `search_semantic` is called with
+a `project` filter. vec0's `MATCH` operator doesn't compose with arbitrary
+`WHERE` clauses, so project-scoped semantic search falls back to brute-force
+cosine over that project's chunks. Unfiltered queries keep the fast path.
+
 ### Benchmark — brute-force fallback
 
 Measured on an Intel i7-1165G7 laptop (Tiger Lake), 768-dim embeddings,
@@ -267,14 +324,14 @@ myco mcp                              # MCP stdio (spawned by agents)
 myco index                            # one-shot full reindex (debug / CI)
 myco stats                            # index freshness + counts
 
-myco query find <name> [--kind K] [--limit N]
-myco query refs <symbol> [--limit N]
-myco query files [name-contains] [--language L] [--limit N]
+myco query find <name> [--kind K] [--limit N] [--project P]
+myco query refs <symbol> [--limit N] [--project P]
+myco query files [name-contains] [--language L] [--limit N] [--project P]
 myco query outline <path>
 myco query summary <path>
-myco query neighbors <symbol> [--depth N] [--direction out|in|both]
-myco query grep <regex> [--path P] [--k N]
-myco query search <text> [--k N] [--kind K] [--path P]
+myco query neighbors <symbol> [--depth N] [--direction out|in|both] [--project P]
+myco query grep <regex> [--path P] [--k N] [--project P]
+myco query search <text> [--k N] [--kind K] [--path P] [--project P]
 
 myco hook post-commit                 # run by .git/hooks/post-commit
 ```

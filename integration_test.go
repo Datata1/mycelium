@@ -92,7 +92,7 @@ func TestIntegration_IndexAndQuery(t *testing.T) {
 	})
 
 	t.Run("find_symbol", func(t *testing.T) {
-		hits, err := reader.FindSymbol(ctx, "AuthService", "", "", 10)
+		hits, err := reader.FindSymbol(ctx, "AuthService", "", "", 10, nil)
 		if err != nil {
 			t.Fatalf("find_symbol: %v", err)
 		}
@@ -102,7 +102,7 @@ func TestIntegration_IndexAndQuery(t *testing.T) {
 	})
 
 	t.Run("get_references_go", func(t *testing.T) {
-		hits, err := reader.GetReferences(ctx, "NewGreeter", "", 20)
+		hits, err := reader.GetReferences(ctx, "NewGreeter", "", 20, nil)
 		if err != nil {
 			t.Fatalf("get_references: %v", err)
 		}
@@ -122,7 +122,7 @@ func TestIntegration_IndexAndQuery(t *testing.T) {
 	})
 
 	t.Run("list_files", func(t *testing.T) {
-		files, err := reader.ListFiles(ctx, "", "", "", 100)
+		files, err := reader.ListFiles(ctx, "", "", "", 100, nil)
 		if err != nil {
 			t.Fatalf("list_files: %v", err)
 		}
@@ -179,7 +179,7 @@ func TestIntegration_IndexAndQuery(t *testing.T) {
 	})
 
 	t.Run("search_lexical", func(t *testing.T) {
-		hits, err := reader.SearchLexical(ctx, `Hola`, "", "", 10, dst)
+		hits, err := reader.SearchLexical(ctx, `Hola`, "", "", 10, dst, nil)
 		if err != nil {
 			t.Fatalf("lexical: %v", err)
 		}
@@ -194,7 +194,7 @@ func TestIntegration_IndexAndQuery(t *testing.T) {
 	t.Run("v1.3_ts_this_method_resolution", func(t *testing.T) {
 		// issueToken calls this.fingerprint — TS scope walker should
 		// resolve the call to auth.AuthService.fingerprint.
-		hits, err := reader.GetReferences(ctx, "auth.AuthService.fingerprint", "", 10)
+		hits, err := reader.GetReferences(ctx, "auth.AuthService.fingerprint", "", 10, nil)
 		if err != nil {
 			t.Fatalf("refs: %v", err)
 		}
@@ -213,7 +213,7 @@ func TestIntegration_IndexAndQuery(t *testing.T) {
 	t.Run("v1.3_python_self_method_resolution", func(t *testing.T) {
 		// JobQueue.drain calls self.dequeue — Python scope walker should
 		// resolve the call to worker.JobQueue.dequeue.
-		hits, err := reader.GetReferences(ctx, "worker.JobQueue.dequeue", "", 10)
+		hits, err := reader.GetReferences(ctx, "worker.JobQueue.dequeue", "", 10, nil)
 		if err != nil {
 			t.Fatalf("refs: %v", err)
 		}
@@ -249,7 +249,7 @@ func TestIntegration_IndexAndQuery(t *testing.T) {
 
 	t.Run("search_semantic_requires_embedder", func(t *testing.T) {
 		s := &query.Searcher{Reader: reader, Embedder: embed.Noop{}}
-		_, err := s.SearchSemantic(ctx, "any query", 5, "", "", "")
+		_, err := s.SearchSemantic(ctx, "any query", 5, "", "", "", nil)
 		if err != embed.ErrNotConfigured {
 			t.Errorf("expected ErrNotConfigured, got %v", err)
 		}
