@@ -6,6 +6,56 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [v1.7.0] — 2026-04-24
+
+"Watchman opt-in" — the seventh v2.0 milestone (Pillar G). Pluggable
+watcher backend so users on 100k+ file repos can escape the
+`fs.inotify.max_user_watches` ceiling without changing anything
+else about how mycelium runs.
+
+### Added
+
+- **`internal/watch/watchman/`** — minimal in-tree watchman client.
+  Talks JSON-over-unix-socket: `get-sockname`, `watch-project`,
+  `subscribe`, `unsubscribe`. Read pump demultiplexes command
+  responses vs subscription deliveries so one connection handles
+  both. `$MYCELIUM_WATCHMAN_SOCK` overrides sockname discovery for
+  container setups.
+- **Watcher backend selection.** New `watcher.backend` config field
+  (`"fsnotify"` default, `"watchman"` opt-in) plus
+  `myco daemon --watcher-backend <name>` CLI override. Unknown
+  values are a hard error; watchman unavailability falls back to
+  fsnotify with a stderr warning so the daemon still starts.
+- **`internal/watch` restructure.** Old monolithic `watch.go` split
+  into `watcher.go` (public `Watcher` interface + `Options`),
+  `common.go` (shared debounce/coalesce/filter wrapper), and
+  per-backend sources: `fsnotify.go`, `watchman.go`. Both backends
+  route through the same wrapper so behavior is identical — the
+  two honest-surface bugs the old struct had (unused
+  `MaxFileSizeKB`, unused `CoalesceMS`) are fixed once, not twice.
+- **`CoalesceMS`** is now wired. Bursts of debounced events within
+  a coalesce window flush as one batch to the output channel.
+- **Doctor: `inotify_headroom` check.** Linux-only. Counts repo
+  directories vs `/proc/sys/fs/inotify/max_user_watches` and warns
+  above 50%, fails above 90%. The warn message suggests either
+  switching to `watcher.backend: watchman` or raising the sysctl.
+
+### Changed
+
+- `watch.New` signature went from positional args to an `Options`
+  struct (source-incompatible; migrates cleanly — all call-sites
+  updated).
+- `daemon.Daemon.Watcher` is now `watch.Watcher` (interface) rather
+  than `*watch.Watcher` (struct pointer), matching the new backend
+  split.
+
+### Fixed
+
+- Shutdown race in the watcher's shared wrapper: coalesce/debounce
+  timers could fire `w.send` after the output channel closed. Pump
+  now owns every write to `out`; timers signal through internal
+  channels. `go test -race ./internal/watch/...` confirms.
+
 ## [v1.6.0] — 2026-04-24
 
 "Graph-native tools + PR scope" — the sixth v2.0 milestone (Pillars E

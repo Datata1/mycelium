@@ -25,7 +25,7 @@ type Daemon struct {
 	Pipeline *pipeline.Pipeline
 	Reader   *query.Reader
 	Embedder embed.Embedder // required for search_semantic; may be Noop
-	Watcher  *watch.Watcher
+	Watcher  watch.Watcher
 	Socket   string
 	RepoRoot string // absolute path; lexical search needs it to open files
 	// VSSTable is the sqlite-vec virtual table name (or "" when not

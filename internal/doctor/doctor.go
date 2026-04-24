@@ -68,6 +68,11 @@ type Thresholds struct {
 	FragmentFail   float64 // e.g. 0.50
 	StaleWarn      int     // chunks without embedding but embedder configured
 	StaleFail      int
+	// Inotify headroom (Linux only): ratio of repo dirs to the system's
+	// max_user_watches. Above InotifyWarn means the user is one big
+	// `git clone` away from fsnotify silently dropping watches.
+	InotifyWarn float64
+	InotifyFail float64
 }
 
 func DefaultThresholds() Thresholds {
@@ -80,13 +85,16 @@ func DefaultThresholds() Thresholds {
 		FragmentFail:   0.50,
 		StaleWarn:      1,
 		StaleFail:      1000,
+		InotifyWarn:    0.50,
+		InotifyFail:    0.90,
 	}
 }
 
 // Run assembles the report. Callers pass the reader, the active embedder
 // provider string (from config) so the stale-chunk check knows whether
-// embeddings are expected at all, and their preferred thresholds.
-func Run(ctx context.Context, r *query.Reader, embedderProvider string, th Thresholds) (Report, error) {
+// embeddings are expected at all, their preferred thresholds, and the
+// repo root (for the inotify headroom check; empty skips the check).
+func Run(ctx context.Context, r *query.Reader, embedderProvider string, th Thresholds, repoRoot string) (Report, error) {
 	s, err := r.Stats(ctx)
 	if err != nil {
 		return Report{}, fmt.Errorf("stats: %w", err)
@@ -249,6 +257,15 @@ func Run(ctx context.Context, r *query.Reader, embedderProvider string, th Thres
 			"size_bytes":    s.DBSizeBytes,
 		},
 	})
+
+	// Inotify headroom — Linux-only heuristic for "will fsnotify fail to
+	// register all my dirs?" Skipped on other OSes and when repoRoot is
+	// empty (e.g. tests running against a bare DB).
+	if repoRoot != "" {
+		if c := inotifyCheck(repoRoot, th); c != nil {
+			add(*c)
+		}
+	}
 
 	return rep, nil
 }

@@ -67,8 +67,9 @@ type ChunkingConfig struct {
 }
 
 type WatcherConfig struct {
-	DebounceMS int `yaml:"debounce_ms"`
-	CoalesceMS int `yaml:"coalesce_ms"`
+	Backend    string `yaml:"backend"` // "" / "fsnotify" (default) | "watchman" (v1.7)
+	DebounceMS int    `yaml:"debounce_ms"`
+	CoalesceMS int    `yaml:"coalesce_ms"`
 }
 
 type DaemonConfig struct {
@@ -202,6 +203,11 @@ func (c Config) Validate() error {
 	}
 	if c.Watcher.DebounceMS < 0 || c.Watcher.CoalesceMS < 0 {
 		return fmt.Errorf("watcher: debounce and coalesce must be >= 0")
+	}
+	switch c.Watcher.Backend {
+	case "", "fsnotify", "watchman":
+	default:
+		return fmt.Errorf("watcher.backend: unknown value %q (fsnotify | watchman)", c.Watcher.Backend)
 	}
 	if c.Index.Path == "" {
 		return fmt.Errorf("index.path: required")

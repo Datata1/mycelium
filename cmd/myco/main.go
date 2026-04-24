@@ -845,7 +845,7 @@ func newDoctorCmd() *cobra.Command {
 			defer ix.Close()
 
 			r := query.NewReader(ix.DB())
-			rep, err := doctor.Run(ctx, r, rc.Cfg.Embedder.Provider, doctor.ThresholdsFromConfig(rc.Cfg))
+			rep, err := doctor.Run(ctx, r, rc.Cfg.Embedder.Provider, doctor.ThresholdsFromConfig(rc.Cfg), rc.Root)
 			if err != nil {
 				return err
 			}
@@ -1015,18 +1015,22 @@ func registerMCPClient(which, root string) error {
 }
 
 func newDaemonCmd() *cobra.Command {
-	return &cobra.Command{
+	var backendOverride string
+	cmd := &cobra.Command{
 		Use:   "daemon",
 		Short: "Run the long-lived indexer + query server for this repo",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
-			return runDaemon(ctx)
+			return runDaemon(ctx, backendOverride)
 		},
 	}
+	cmd.Flags().StringVar(&backendOverride, "watcher-backend", "",
+		"override watcher backend (fsnotify | watchman); defaults to config")
+	return cmd
 }
 
-func runDaemon(ctx context.Context) error {
+func runDaemon(ctx context.Context, backendOverride string) error {
 	rc, err := loadRepoCtx()
 	if err != nil {
 		return err
@@ -1086,7 +1090,19 @@ func runDaemon(ctx context.Context) error {
 			rep.FilesScanned, rep.FilesChanged, rep.Duration)
 	}
 
-	wat, err := watch.New(rc.Root, rc.Cfg.Include, rc.Cfg.Exclude, rc.Cfg.Index.MaxFileSizeKB, rc.Cfg.Watcher.DebounceMS)
+	backend := rc.Cfg.Watcher.Backend
+	if backendOverride != "" {
+		backend = backendOverride
+	}
+	wat, err := watch.New(watch.Options{
+		Root:          rc.Root,
+		Include:       rc.Cfg.Include,
+		Exclude:       rc.Cfg.Exclude,
+		MaxFileSizeKB: rc.Cfg.Index.MaxFileSizeKB,
+		DebounceMS:    rc.Cfg.Watcher.DebounceMS,
+		CoalesceMS:    rc.Cfg.Watcher.CoalesceMS,
+		Backend:       backend,
+	})
 	if err != nil {
 		return err
 	}
