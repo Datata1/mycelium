@@ -6,6 +6,28 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **sqlite-vec extension entrypoint.** `LoadExtension` was being called
+  with an empty entry symbol, which makes SQLite derive the symbol name
+  from the filename (`vec0.so` → `sqlite3_vec0_init`). The shipped
+  library exports `sqlite3_vec_init` regardless of filename, so loading
+  failed with an empty `undefined symbol:` error. Now pass the explicit
+  entry in `internal/index/vss.go`.
+
+### Measured
+
+- **Semantic search benchmark matrix** — ran the full grid (10k /
+  50k / 100k chunks × 384 / 768 / 1536 dims × {brute-force, vec0})
+  on Tiger Lake. vec0 is a consistent 5-8× speedup over pure-Go
+  brute-force; absolute numbers land in README. Important finding:
+  at sqlite-vec v0.1.9 the vec0 path is SIMD-optimized *flat* scan,
+  not HNSW, so both paths scale linearly in the corpus. The
+  roadmap's "p95 < 50ms at 100k chunks" target is not met on
+  laptop-class CPU — vec0 at 100k/768 is 171 ms. The 50 ms
+  threshold holds up to ~50k/384 with vec0. Benchmark is
+  reproducible via `MYCELIUM_VEC_PATH=... go test -bench=...`.
+
 ## [v2.0.0-rc1] — 2026-04-24
 
 First release candidate for v2.0 ("precision and scale"). No new
@@ -36,16 +58,17 @@ processes; all schema changes are additive.
 
 ### Known gaps before the final v2.0 tag
 
-- **sqlite-vec p95 unmeasured.** The vec0 code path compiles on
-  every release target but the "p95 < 50ms at 100k chunks"
-  benchmark from the roadmap has not been run on a machine with
-  the extension installed. Brute-force numbers on Tiger Lake
-  (768 dims): 114ms / 555ms / 1100ms at 10k / 50k / 100k.
 - **`libsqlite_vec.{so,dylib,dll}` not bundled** in the release
   tarball. Users install `sqlite-vec` manually per the README.
 - **No 100k+ file monorepo validation.** `myco doctor`,
   workspace mode, and the inotify-headroom check have only been
   exercised against the self-index and the committed fixtures.
+- **Roadmap p95 target not met.** The "p95 < 50ms at 100k chunks"
+  metric from the v2.0 plan was aspirational against an HNSW-style
+  index; sqlite-vec v0.1.9 is flat SIMD scan so neither path hits
+  50 ms at 100k/768 on laptop-class CPU. Full matrix in the
+  benchmark table (see README). HNSW in sqlite-vec upstream is the
+  path forward; not gating v2.0 final.
 
 ## [v1.7.0] — 2026-04-24
 

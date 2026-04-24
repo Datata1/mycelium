@@ -355,24 +355,52 @@ a `project` filter. vec0's `MATCH` operator doesn't compose with arbitrary
 `WHERE` clauses, so project-scoped semantic search falls back to brute-force
 cosine over that project's chunks. Unfiltered queries keep the fast path.
 
-### Benchmark — brute-force fallback
+### Benchmark
 
-Measured on an Intel i7-1165G7 laptop (Tiger Lake), 768-dim embeddings,
-random unit-norm vectors, `k=10`, cold cache avoided:
+Measured on an Intel i7-1165G7 laptop (Tiger Lake, 4c/8t, 2.8 GHz),
+random unit-norm vectors, `k=10`, 3 iterations per cell, mean ns/op:
 
-| corpus | brute-force p50 |
-|---|---|
-| 10k chunks | ~114 ms |
-| 50k chunks | ~555 ms |
-| 100k chunks | ~1.10 s |
+| corpus | dim | brute-force | vec0    | speedup |
+|--------|-----|-------------|---------|---------|
+| 10k    | 384 |    72 ms    |  11 ms  |  6.6×   |
+| 10k    | 768 |   106 ms    |  19 ms  |  5.7×   |
+| 10k    | 1536|   193 ms    |  37 ms  |  5.2×   |
+| 50k    | 384 |   365 ms    |  45 ms  |  8.1×   |
+| 50k    | 768 |   552 ms    |  95 ms  |  5.8×   |
+| 50k    | 1536|  1078 ms    | 172 ms  |  6.3×   |
+| 100k   | 384 |   697 ms    |  89 ms  |  7.8×   |
+| 100k   | 768 |  1094 ms    | 171 ms  |  6.4×   |
+| 100k   | 1536|  2130 ms    | 345 ms  |  6.2×   |
 
-Scaling is linear at about 11 µs per chunk per query. Above 50k chunks,
-install sqlite-vec. The full benchmark lives in
-`internal/query/semantic_bench_test.go` — run with:
+**Reading the table.** Both paths scale linearly in the number of
+chunks. vec0 at v0.1.9 is SIMD-optimized flat scan in C — faster than
+the pure-Go cosine loop by a constant 5-8×, but not sub-linear. HNSW
+is on sqlite-vec's roadmap; when it lands, this table will look very
+different.
+
+**What this means for your repo:**
+
+- Below ~10k chunks: either path is fast enough.
+- 10k–50k chunks: install sqlite-vec and you get interactive latency
+  (<100 ms) across all practical embedding dimensions.
+- 50k–100k chunks: vec0 keeps you under ~350 ms even at 1536 dims;
+  brute-force is no longer interactive.
+- Above 100k: extrapolate linearly; treat vec0 as necessary, not
+  optional.
+
+The full benchmark lives in `internal/query/semantic_bench_test.go`.
+Reproduce with:
 
 ```bash
+# Brute-force only (no extension needed):
 go test -tags sqlite_fts5 -run=^$ \
-  -bench=BenchmarkSemanticSearch -benchtime=5x -count=3 \
+  -bench=BenchmarkSemanticSearch -benchtime=3x -count=1 \
+  ./internal/query/
+
+# Both paths (set MYCELIUM_VEC_PATH to your vec0.so / vec0.dylib / vec0.dll):
+MYCELIUM_VEC_PATH=/usr/local/lib/mycelium/vec0.so \
+go test -tags sqlite_fts5 -run=^$ \
+  -bench=BenchmarkSemanticSearch -benchtime=3x -count=1 \
   ./internal/query/
 ```
 

@@ -50,7 +50,11 @@ func registerDriverWithExt(extPath string) (string, error) {
 		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
 			// LoadExtension wraps enable_load_extension and disables it
 			// again on return, so we don't have to manage that lifecycle.
-			return conn.LoadExtension(extPath, "")
+			// The explicit entrypoint is needed because SQLite's default
+			// symbol-derivation uses the .so basename ("vec0" → looks for
+			// sqlite3_vec0_init), but the shipped library exports
+			// sqlite3_vec_init regardless of filename.
+			return conn.LoadExtension(extPath, "sqlite3_vec_init")
 		},
 	})
 	driverReg[extPath] = name

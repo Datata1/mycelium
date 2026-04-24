@@ -2,8 +2,10 @@ package query_test
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"math/rand"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -14,22 +16,23 @@ import (
 )
 
 // BenchmarkSemanticSearch measures end-to-end SearchSemantic latency at
-// increasing corpus sizes. The fixture directly INSERTs synthetic vectors
-// into the chunks table (skipping the whole parse + chunker + embed
-// pipeline) so we can control the shape precisely.
+// increasing corpus sizes and vector dimensions. The fixture directly
+// INSERTs synthetic vectors into the chunks table (skipping the whole
+// parse + chunker + embed pipeline) so we can control the shape precisely.
 //
-// Three knobs control the matrix:
+// Matrix:
 //   - Corpus size: 10k, 50k, 100k chunks
-//   - Vector dim: 768 (nomic-embed-text default)
-//   - Backend: brute-force (set via empty VSSTable) only; vec0 requires
-//     the extension and is benched separately in a helper script when
-//     the user has sqlite-vec installed.
+//   - Vector dim: 384, 768, 1536
+//   - Backend: brute-force Go cosine (always) + vec0 (when
+//     $MYCELIUM_VEC_PATH points at a loadable sqlite-vec shared
+//     library; skipped otherwise so CI without the extension stays green)
 //
 // Run:
-//   go test -tags sqlite_fts5 -run=^$ -bench=BenchmarkSemanticSearch \
+//   MYCELIUM_VEC_PATH=/path/to/vec0.so \
+//     go test -tags sqlite_fts5 -run=^$ -bench=BenchmarkSemanticSearch \
 //     -benchtime=5x -count=3 ./internal/query/
 func BenchmarkSemanticSearch(b *testing.B) {
-	cases := []struct {
+	sizes := []struct {
 		name   string
 		chunks int
 	}{
@@ -37,32 +40,52 @@ func BenchmarkSemanticSearch(b *testing.B) {
 		{"50k", 50_000},
 		{"100k", 100_000},
 	}
-	for _, c := range cases {
-		c := c
-		b.Run(c.name, func(b *testing.B) {
-			benchSemanticAt(b, c.chunks, 768)
-		})
+	dims := []int{384, 768, 1536}
+	extPath := os.Getenv("MYCELIUM_VEC_PATH")
+
+	for _, sz := range sizes {
+		for _, dim := range dims {
+			name := fmt.Sprintf("%s_%ddim/brute", sz.name, dim)
+			b.Run(name, func(b *testing.B) {
+				benchSemanticAt(b, sz.chunks, dim, "")
+			})
+			if extPath != "" {
+				name := fmt.Sprintf("%s_%ddim/vec0", sz.name, dim)
+				b.Run(name, func(b *testing.B) {
+					benchSemanticAt(b, sz.chunks, dim, extPath)
+				})
+			}
+		}
 	}
 }
 
-func benchSemanticAt(b *testing.B, chunks, dim int) {
+// benchSemanticAt populates a fresh index with `chunks` synthetic vectors
+// at the given dimension, then times SearchSemantic. When extPath is
+// non-empty the sqlite-vec extension is loaded and the vec0 fast path
+// is exercised; otherwise Searcher falls back to brute-force.
+func benchSemanticAt(b *testing.B, chunks, dim int, extPath string) {
 	b.Helper()
 	ctx := context.Background()
 	dir := b.TempDir()
 	dbPath := filepath.Join(dir, "index.db")
 
-	ix, err := index.Open(dbPath)
+	ix, err := index.OpenWithExtension(dbPath, extPath)
 	if err != nil {
 		b.Fatalf("open index: %v", err)
 	}
 	b.Cleanup(func() { _ = ix.Close() })
 
-	// Populate: one file row, one symbol row per chunk, one chunk row
-	// with a unit-norm random vector. The query vector below matches
-	// one specific chunk exactly so top-1 is deterministic — a good
-	// smoke check alongside the timing.
+	if extPath != "" {
+		if err := ix.EnsureVSS(ctx, dim); err != nil {
+			b.Fatalf("ensure vss: %v", err)
+		}
+		if !ix.VSSAvailable() {
+			b.Fatalf("vec0 unavailable after EnsureVSS — extension path wrong?")
+		}
+	}
+
 	fake := embed.NewFake(dim)
-	if err := populate(ctx, ix, chunks, dim); err != nil {
+	if err := populate(ctx, ix, chunks, dim, ix.VSSTableName()); err != nil {
 		b.Fatalf("populate: %v", err)
 	}
 
@@ -70,8 +93,7 @@ func benchSemanticAt(b *testing.B, chunks, dim int) {
 	searcher := &query.Searcher{
 		Reader:   reader,
 		Embedder: fake,
-		// VSSTable stays empty — this benchmark measures the
-		// brute-force floor.
+		VSSTable: ix.VSSTableName(), // "" falls back to brute-force
 	}
 
 	b.ResetTimer()
@@ -87,8 +109,9 @@ func benchSemanticAt(b *testing.B, chunks, dim int) {
 }
 
 // populate bulk-inserts N file/symbol/chunk rows with random unit-norm
-// embeddings. Used by the bench harness; not meant for production paths.
-func populate(ctx context.Context, ix *index.Index, n, dim int) error {
+// embeddings. When vssTable is non-empty the same vectors are mirrored
+// into the vec0 virtual table so the KNN path actually sees them.
+func populate(ctx context.Context, ix *index.Index, n, dim int, vssTable string) error {
 	db := ix.DB()
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -96,8 +119,6 @@ func populate(ctx context.Context, ix *index.Index, n, dim int) error {
 	}
 	defer tx.Rollback()
 
-	// Bulk-insert one file per 1000 chunks to keep file rows manageable.
-	// We re-use file_id rapidly; the field doesn't matter for search.
 	filesNeeded := (n + 999) / 1000
 	fileIDs := make([]int64, 0, filesNeeded)
 	for i := 0; i < filesNeeded; i++ {
@@ -111,7 +132,6 @@ func populate(ctx context.Context, ix *index.Index, n, dim int) error {
 		fileIDs = append(fileIDs, id)
 	}
 
-	// Symbols + chunks.
 	insertSym, err := tx.PrepareContext(ctx, `
 		INSERT INTO symbols(file_id, name, qualified, kind, start_line, start_col, end_line, end_col, symbol_hash)
 		VALUES(?, ?, ?, 'function', 1, 1, 5, 1, X'00')`)
@@ -127,7 +147,16 @@ func populate(ctx context.Context, ix *index.Index, n, dim int) error {
 	}
 	defer insertChunk.Close()
 
-	// Deterministic RNG so benchmarks are comparable across runs.
+	var insertVSS *sql.Stmt
+	if vssTable != "" {
+		insertVSS, err = tx.PrepareContext(ctx,
+			fmt.Sprintf(`INSERT INTO %s(rowid, embedding) VALUES(?, ?)`, vssTable))
+		if err != nil {
+			return err
+		}
+		defer insertVSS.Close()
+	}
+
 	r := rand.New(rand.NewSource(42))
 	for i := 0; i < n; i++ {
 		fileID := fileIDs[i/1000]
@@ -139,8 +168,15 @@ func populate(ctx context.Context, ix *index.Index, n, dim int) error {
 		}
 		symID, _ := res.LastInsertId()
 		packed := embed.Pack(randomUnit(r, dim))
-		if _, err := insertChunk.ExecContext(ctx, fileID, symID, packed); err != nil {
+		chunkRes, err := insertChunk.ExecContext(ctx, fileID, symID, packed)
+		if err != nil {
 			return err
+		}
+		if insertVSS != nil {
+			chunkID, _ := chunkRes.LastInsertId()
+			if _, err := insertVSS.ExecContext(ctx, chunkID, packed); err != nil {
+				return err
+			}
 		}
 	}
 	return tx.Commit()
@@ -164,7 +200,6 @@ func randomUnit(r *rand.Rand, dim int) []float32 {
 }
 
 func sqrt(x float64) float64 {
-	// Cheaper than pulling "math" for one call.
 	z := x / 2
 	for i := 0; i < 10; i++ {
 		z = (z + x/z) / 2
@@ -172,6 +207,4 @@ func sqrt(x float64) float64 {
 	return z
 }
 
-// Compile-time assertion we're actually using time; imports stay honest
-// if future benchmarks record wall clock rather than ReportMetric.
 var _ = time.Now
