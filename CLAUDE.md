@@ -76,9 +76,24 @@ Enforce in review. Deviations need an explicit reason in CHANGELOG.
   **Explicit non-goal held**: cross-repo federation (N worktrees, one
   graph) — still v3. Vec0 fast path skips when `project` is set (MATCH
   doesn't compose with WHERE); brute-force handles scoped search.
-- **Active next: v1.6** — graph-query enrichment (`impact_analysis`,
-  `critical_path`), `get_neighborhood` perf revisit, PR-scoped `--since
-  <ref>` filter.
+- **v1.6 shipped** — "Graph-native tools + PR scope." Two new MCP
+  tools: `impact_analysis` (flat, distance-ranked inbound closure,
+  optional `kind` filter; default depth 5, max 10) and `critical_path`
+  (bounded BFS over `refs` via SQL CTE + `instr()` cycle check; depth
+  ≤ 8, default k = 5). Both live in `internal/query/graph.go` and
+  reuse `resolveSeed` / `loadNode` from `neighborhood.go`.
+  `--since <ref>` filter plumbed through `find_symbol`,
+  `get_references`, `list_files`, `search_lexical`, `search_semantic`;
+  resolution happens at the transport boundary via
+  `internal/gitref.ResolveSince`, reader stays git-ignorant. Shared
+  splicer in `internal/query/paths.go` caps the path list at 500.
+  Integration tests at `graph_integration_test.go` +
+  `internal/gitref/resolve_test.go`. `get_neighborhood` perf revisit
+  was deliberately deferred (now tagged v1.7 / v3 in LIMITATIONS).
+  Vec0 fast path skips when `since` is set (same reason as v1.5).
+- **Active next: v1.7** — Watchman opt-in backend (Pillar G) per the
+  v2.0 roadmap, plus the deferred `get_neighborhood` perf revisit if
+  real-world metrics say it's worth it before the v3 GraphStore swap.
 
 **v1.2 baselines achieved (self-index, Tiger Lake laptop):**
 - `self_loop_count`: 11 → **0** ✓

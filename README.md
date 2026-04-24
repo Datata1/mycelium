@@ -13,7 +13,7 @@
   <a href="https://github.com/Datata1/mycelium/releases"><img src="https://img.shields.io/github/v/release/Datata1/mycelium?style=flat-square&color=00FFCC" alt="Release"></a>
   <a href="#"><img src="https://img.shields.io/badge/Storage-SQLite-blue?style=flat-square" alt="SQLite"></a>
   <a href="#"><img src="https://img.shields.io/badge/Interface-MCP%20%7C%20HTTP%20%7C%20CLI-8A2BE2?style=flat-square" alt="Interfaces"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Status-v1.5%20Workspace%20Mode-success?style=flat-square" alt="Status"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Status-v1.6%20Graph%20%26%20PR%20Scope-success?style=flat-square" alt="Status"></a>
 </p>
 
 ---
@@ -37,11 +37,13 @@ AI coding agents waste tokens and tool calls re-discovering a repo's structure o
 
 ## Status
 
-**v1.5** — workspace mode. One daemon, one SQLite, N sub-projects under
-one worktree. Builds on v1.0's nine MCP tools, three transports, three
-languages (Go, TypeScript/TSX, Python); v1.2/v1.3 type-aware resolvers
-for all three; and v1.4's optional sqlite-vec fast path. Cross-repo
-federation stays a non-goal (see [LIMITATIONS.md](./LIMITATIONS.md)).
+**v1.6** — graph-native tools + PR scope. Two new MCP tools
+(`impact_analysis`, `critical_path`) over the now-honest ref graph,
+plus a `--since <ref>` path filter on the read surface for PR-scoped
+queries. Builds on v1.5's workspace mode, v1.2/v1.3 type-aware
+resolvers for Go/TS/Python, and v1.4's optional sqlite-vec fast path.
+Cross-repo federation stays a v3 non-goal (see
+[LIMITATIONS.md](./LIMITATIONS.md)).
 
 ## Install
 
@@ -112,19 +114,23 @@ All tools return JSON; line/col positions are 1-based.
 Tools marked with `project?` accept an optional workspace project name
 (see [Workspace mode](#workspace-mode)). Unknown project names return
 zero hits rather than silently falling back to unscoped, so config typos
-surface immediately.
+surface immediately. Tools marked with `since?` accept a git ref and
+restrict results to files changed between `<ref>...HEAD` (see
+[PR-scoped queries](#pr-scoped-queries)).
 
 | Tool | Purpose | Key inputs |
 |---|---|---|
-| `find_symbol` | Fuzzy/exact symbol lookup. | `name`, `kind?`, `limit?`, `project?` |
+| `find_symbol` | Fuzzy/exact symbol lookup. | `name`, `kind?`, `limit?`, `project?`, `since?` |
 | `get_definition` | Source span + snippet. | `symbol_id` or `qualified_name` |
-| `get_references` | Callers / importers / type uses; flags each hit as resolved vs textual. | `target`, `limit?`, `project?` |
-| `search_semantic` | Vector search over code chunks (requires embedder). | `query`, `k?`, `kind?`, `path_contains?`, `project?` |
-| `search_lexical` | Ripgrep-style regex over indexed files. | `pattern`, `path_contains?`, `k?`, `project?` |
-| `list_files` | Indexed files with language tags. | `language?`, `name_contains?`, `limit?`, `project?` |
+| `get_references` | Callers / importers / type uses; flags each hit as resolved vs textual. | `target`, `limit?`, `project?`, `since?` |
+| `search_semantic` | Vector search over code chunks (requires embedder). | `query`, `k?`, `kind?`, `path_contains?`, `project?`, `since?` |
+| `search_lexical` | Ripgrep-style regex over indexed files. | `pattern`, `path_contains?`, `k?`, `project?`, `since?` |
+| `list_files` | Indexed files with language tags. | `language?`, `name_contains?`, `limit?`, `project?`, `since?` |
 | `get_file_outline` | Hierarchical symbol tree for one file. | `path` |
 | `get_file_summary` | Structural summary (exports, imports, LOC). | `path` |
 | `get_neighborhood` | Local call graph around a symbol (recursive CTE on refs). Seed lookup respects `project?`; traversal stays global so cross-project edges still surface. | `target`, `depth?`, `direction?`, `project?` |
+| `impact_analysis` | Transitive inbound closure ranked by distance (v1.6). For "who's impacted if I change this?" or (with `kind=method`) "what tests cover this?". | `target`, `kind?`, `depth?`, `project?`, `since?` |
+| `critical_path` | Up to `k` shortest outbound call paths from `from` to `to` (v1.6). Bounded BFS at depth ≤ 8. | `from`, `to`, `depth?`, `k?`, `project?` |
 | `stats` | Languages, symbol counts, refs, freshness. | — |
 
 ## Architecture
@@ -240,6 +246,61 @@ single SQLite DB can't mix embedding dimensions.
 working untouched; `project_id` on the `files` table is nullable and
 NULL means "implicit root project."
 
+## PR-scoped queries
+
+Reviewing a pull request? Pass `--since <ref>` (CLI) or `since` (MCP)
+to restrict any read to files changed between `<ref>...HEAD`. The
+daemon resolves this with `git diff --name-only` at request time — no
+caching, no schema change, just an additional `AND path IN (...)`
+clause on the query.
+
+```bash
+# Everything changed since main, scoped to this feature branch
+myco query files --since main
+myco query find Handler --since main
+myco query grep "TODO" --since origin/main
+myco query impact MyService --since HEAD~5 --kind method   # tests for recent changes
+```
+
+The three-dot form `<ref>...HEAD` is what `git` interprets under the
+hood — it asks for the symmetric diff against the merge-base so
+"files on my branch" stays correct after the base advances.
+
+Hard cap: PR diffs expanding to **>500 files** error out with a
+pointer to pick a tighter base ref. That's SQLite's 999-parameter
+limit biting first; at that scale the filter isn't carrying its
+weight anyway. `impact_analysis` and the five filtered read tools
+compose `since` with `project` naturally — both are additive `AND`
+clauses.
+
+### New graph tools
+
+Two traversals over the (now honest, post-v1.3) ref graph:
+
+```bash
+# Who's transitively impacted if I change this function?
+myco query impact AuthService.issueToken --depth 5
+
+# Only show test methods that cover it:
+myco query impact AuthService.issueToken --kind method
+
+# Is there a dependency chain between these two?
+myco query path cmd.main auth.normalizeEmail --k 3
+```
+
+- **`impact_analysis`** returns a flat list ranked by shortest distance
+  (1 = direct caller). Default depth 5, max 10. For the full graph
+  shape use `get_neighborhood` instead.
+- **`critical_path`** returns up to `k` shortest outbound paths,
+  bounded at depth ≤ 8. Cycles are rejected inside the SQL CTE via
+  `instr()` on the accumulated path column, so dense graphs don't
+  explode.
+
+Both compose with `project?`; `critical_path` scopes only the two seed
+lookups so paths through another project still surface.
+`impact_analysis` additionally respects `since?` so you can ask "who's
+affected in the files this PR touched?".
+
 ## Enabling semantic search
 
 Semantic search requires an embedder. The simplest path is Ollama.
@@ -324,14 +385,16 @@ myco mcp                              # MCP stdio (spawned by agents)
 myco index                            # one-shot full reindex (debug / CI)
 myco stats                            # index freshness + counts
 
-myco query find <name> [--kind K] [--limit N] [--project P]
-myco query refs <symbol> [--limit N] [--project P]
-myco query files [name-contains] [--language L] [--limit N] [--project P]
+myco query find <name> [--kind K] [--limit N] [--project P] [--since REF]
+myco query refs <symbol> [--limit N] [--project P] [--since REF]
+myco query files [name-contains] [--language L] [--limit N] [--project P] [--since REF]
 myco query outline <path>
 myco query summary <path>
 myco query neighbors <symbol> [--depth N] [--direction out|in|both] [--project P]
-myco query grep <regex> [--path P] [--k N] [--project P]
-myco query search <text> [--k N] [--kind K] [--path P] [--project P]
+myco query impact <symbol> [--kind K] [--depth N] [--project P] [--since REF]
+myco query path <from> <to> [--depth N] [--k N] [--project P]
+myco query grep <regex> [--path P] [--k N] [--project P] [--since REF]
+myco query search <text> [--k N] [--kind K] [--path P] [--project P] [--since REF]
 
 myco hook post-commit                 # run by .git/hooks/post-commit
 ```

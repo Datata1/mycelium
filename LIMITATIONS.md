@@ -18,9 +18,9 @@ to the v2.0 roadmap at `~/.claude/plans/1-everything-you-mentioned-indexed-duckl
 
 | Limitation | Cause | Status |
 |---|---|---|
-| `get_neighborhood` silently caps depth at 5 | Recursive CTE perf + exponential fan-out on dense graphs | Now surfaces a visible note; perf/backend revisit in **v1.6** / v3 |
-| No `impact_analysis` (transitive test coverage) | Not yet implemented | Planned **v1.6** |
-| No `critical_path` (shortest-path between two symbols) | Not yet implemented | Planned **v1.6** |
+| `get_neighborhood` silently caps depth at 5 | Recursive CTE perf + exponential fan-out on dense graphs | Now surfaces a visible note; perf/backend revisit deferred to v1.7 or the v3 GraphStore swap |
+| `impact_analysis` (transitive test coverage) | — | **Shipped in v1.6** — flat distance-ranked list with optional `kind` filter; composes with `project` / `since` |
+| `critical_path` (shortest-path between two symbols) | — | **Shipped in v1.6** — bounded BFS via SQL CTE, cycles prevented, depth ≤ 8 |
 | No cross-repo graph (sibling worktrees sharing one logical graph) | Single SQLite file per worktree; federation not designed | **Explicit v3** — not coming to v2 |
 | No `ask(question)` natural-language tool | Violates "no LLM at query time" | **Explicit non-goal** — the calling agent is already an LLM |
 
@@ -30,9 +30,10 @@ to the v2.0 roadmap at `~/.claude/plans/1-everything-you-mentioned-indexed-duckl
 |---|---|---|
 | Semantic search brute-force is slow past ~10k chunks | Pure-Go cosine scan; no SIMD | **Optional sqlite-vec integration shipped in v1.4** — install the extension + set `index.vector.extension_path` for the KNN fast path. Brute-force stays as fallback (works, just slow — see README benchmark table) |
 | Project-scoped semantic search skips the vec0 fast path | `vec0 MATCH` doesn't compose with arbitrary `WHERE` clauses | By design in v1.5 — brute-force cosine handles the project filter; unfiltered semantic search keeps the vec0 path |
+| `--since`-scoped semantic search skips the vec0 fast path | Same root cause: `vec0 MATCH` + path-IN filter don't compose | By design in v1.6 — brute-force handles the PR-scoped case; unscoped semantic queries keep the vec0 path |
 | Files with no extracted symbols (SQL, Markdown, config) get no embedding | `chunker.FromSymbols` is symbol-level only | Planned post-v1.4 — fallback window chunks |
 | Can't index multiple sub-projects with per-project config overrides | Flat `files` table, no `project_id` | **Shipped in v1.5** — `projects:` list in `.mycelium.yml` plus an optional `project` filter on every query tool. One daemon, one SQLite, N sub-projects inside one worktree. Cross-repo federation (N worktrees → one graph) stays **v3** |
-| No PR-scoped `--since <ref>` filter on queries | Not yet implemented | Planned **v1.6** |
+| PR-scoped `--since <ref>` filter on queries | — | **Shipped in v1.6** — resolved via `git diff --name-only <ref>...HEAD` at the transport boundary. Hard-capped at 500 changed files (SQLite 999-param limit); beyond that, the user is told to pick a tighter base ref rather than silently truncate |
 | fsnotify hits inotify limits on 100k+ file repos (default `fs.inotify.max_user_watches = 8192`) | Linux kernel cap | Planned **v1.7** Watchman opt-in backend |
 | Editor atomic-save (vim, some VSCode setups) delivers CREATE+DELETE instead of MODIFY | fsnotify platform behavior | Partially mitigated by `embed_cache` + post-commit catch-up; untouched otherwise |
 

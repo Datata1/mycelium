@@ -6,6 +6,104 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [v1.6.0] — 2026-04-24
+
+"Graph-native tools + PR scope" — the sixth v2.0 milestone (Pillars E
++ F). Two new graph traversals that become cheap once v1.2/v1.3's
+type-aware resolvers landed, plus a `--since <ref>` path filter on the
+existing read surface for PR-scoped queries.
+
+### Added
+
+- **`impact_analysis(symbol)`** — new MCP tool and CLI `myco query
+  impact`. Returns the transitive inbound closure around a symbol as
+  a flat list ranked by distance (1 = direct caller). Optional `kind`
+  filter narrows the reported set (typical use: `kind=method` to find
+  test methods covering the target). Default depth 5, hard ceiling
+  10. Composes with `project` and `since` — they scope the *reported*
+  callers, not the walk, so cross-file / cross-project chains still
+  surface.
+- **`critical_path(from, to)`** — new MCP tool and CLI `myco query
+  path`. Returns up to `k` shortest outbound call paths. Bounded BFS
+  at depth ≤ 8 via a single recursive CTE; cycles prevented by the
+  SQLite `instr()` idiom on a comma-delimited accumulated path
+  column. Hydrates the distinct vertices in one second-pass query to
+  avoid the N+1 fan-out. Default k = 5.
+- **`--since <ref>` filter** on `find_symbol`, `get_references`,
+  `list_files`, `search_lexical`, `search_semantic`. Resolved via
+  `git -C <root> diff --name-only <ref>...HEAD` at the transport
+  boundary (daemon RPC handler and CLI offline fallback), then passed
+  to the reader as `pathsIn []string`. Three-dot form uses the merge-
+  base so "files on my branch" stays correct after the base advances.
+- **`internal/gitref/`** — thin helper (`ResolveSince`) that runs the
+  `git diff` with a 5s timeout and surfaces stderr verbatim on
+  failure. Returns a non-nil empty slice when the ref has no diff
+  against HEAD so the reader's zero-row sentinel distinguishes "no
+  changes" from "no filter."
+- **`internal/query/graph.go`** — `ImpactAnalysis`, `CriticalPath`,
+  `ImpactHit`, `Impact`, `PathVertex`, `CriticalPathResult`. Reuses
+  `resolveSeed` and `loadNode` from `neighborhood.go`.
+- **`internal/query/paths.go`** — shared `pathsInClause` splicer
+  renders the `AND f.path IN (?, ?, ...)` WHERE fragment used across
+  the five filtered methods. Caps the path list at **500 entries**
+  (SQLite's 999-parameter limit) and returns a clear error when a PR
+  diff expands beyond that — the correct fix is a tighter base ref.
+- **Reader signature change** (additive, source-incompatible) — five
+  methods gained a final `pathsIn []string` argument:
+  - `FindSymbol(ctx, name, kind, project, limit, pathsIn)`
+  - `GetReferences(ctx, target, project, limit, pathsIn)`
+  - `ListFiles(ctx, language, nameContains, project, limit, pathsIn)`
+  - `SearchLexical(ctx, pattern, pathContains, project, k, repoRoot, pathsIn)`
+  - `Searcher.SearchSemantic(ctx, query, k, kind, pathContains, project, pathsIn)`
+
+  `pathsIn = nil` is "unscoped"; `pathsIn = []string{}` is an
+  explicit zero-row sentinel. Existing callers pass `nil` to preserve
+  prior behavior. An options-struct refactor was considered and
+  rejected for mid-release API churn.
+- **MCP tool schemas** — two new tool entries (`impact_analysis`,
+  `critical_path`), plus a `since` input on `find_symbol`,
+  `get_references`, `list_files`, `search_lexical`,
+  `search_semantic`. MCP server dispatch in `internal/mcp/server.go`
+  routes the two new tools.
+- **CLI subcommands** — `myco query impact <symbol>` and `myco query
+  path <from> <to>`. `--since <ref>` added to `find`, `refs`, `files`,
+  `grep`, `search`. Offline fallback path runs `gitref.ResolveSince`
+  locally so `--since` works even without the daemon.
+- **Integration tests** at `graph_integration_test.go`:
+  - `TestIntegration_ImpactAnalysis` — seeds on `auth.normalizeEmail`
+    and asserts `auth.AuthService.fingerprint` at distance 1 and
+    `auth.AuthService.issueToken` at distance 2. Subtests for the
+    kind-filter narrowing and the depth-clamp note.
+  - `TestIntegration_CriticalPath` — asserts the path `issueToken →
+    fingerprint → normalizeEmail` surfaces.
+  - `TestIntegration_PathsInFilter` — exercises the reader-level
+    filter (no git process) across three cases: matching file,
+    non-matching file, empty-slice sentinel.
+- **`internal/gitref/resolve_test.go`** — temp-git-repo tests covering
+  the happy path (two-commit diff), empty ref (error), unknown ref
+  (error), and the no-changes case (non-nil empty slice).
+
+### Notes
+
+- `vec0` KNN fast path is skipped when `search_semantic` is called
+  with a `project` filter (v1.5) **or** a `since` filter (v1.6) —
+  `vec0 MATCH` doesn't compose with arbitrary `WHERE` clauses.
+  Brute-force cosine handles scoped semantic search.
+- `impact_analysis` is intentionally not a superset of
+  `get_neighborhood(direction=in)`. The shapes serve different
+  workflows: graph (nodes + edges) vs. flat distance-ranked list; 2
+  vs. 5 default depth; 5 vs. 10 max; no kind filter vs. yes.
+- Cross-repo federation (N worktrees, one graph) remains a v3
+  non-goal.
+
+### Verification
+
+Integration suite green on `TestIntegration_IndexAndQuery`,
+`TestIntegration_WorkspaceMode`, `TestIntegration_ImpactAnalysis`,
+`TestIntegration_CriticalPath`, `TestIntegration_PathsInFilter`, plus
+all four `internal/gitref` cases. `go vet -tags sqlite_fts5 ./...`
+clean. No schema changes, no migration.
+
 ## [v1.5.0] — 2026-04-23
 
 "Workspace mode" — the fifth v2.0 milestone (Pillar C). One daemon, one
