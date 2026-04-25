@@ -267,6 +267,25 @@ func Run(ctx context.Context, r *query.Reader, embedderProvider string, th Thres
 		}
 	}
 
+	// v2.1: interface-implementer linkage signal. Pure informational —
+	// always pass — but the count tells the user whether RefInherit
+	// edges are populated. Zero is suspicious on a Go repo with
+	// interfaces but isn't a hard fail; the resolver may simply not be
+	// loaded on the user's machine. Linked to Chinthareddy 2026's
+	// interface-consumer expansion via `get_neighborhood`.
+	add(Check{
+		Name:  "interface_expansion_coverage",
+		Level: LevelPass,
+		Message: fmt.Sprintf(
+			"%d concrete types linked to interfaces via %d RefInherit edges",
+			s.InterfaceConcreteTypes, s.InterfaceImplementsRefs,
+		),
+		Detail: map[string]any{
+			"concrete_types": s.InterfaceConcreteTypes,
+			"inherit_refs":   s.InterfaceImplementsRefs,
+		},
+	})
+
 	return rep, nil
 }
 

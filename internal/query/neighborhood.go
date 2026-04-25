@@ -100,27 +100,167 @@ func (r *Reader) GetNeighborhood(ctx context.Context, target, project string, de
 	result.Seed = seed
 	result.Nodes = []NeighborNode{seed}
 
-	visited := map[int64]int{seedID: 0}
-
-	switch direction {
-	case DirOut, DirBoth:
-		edges, nodes, err := r.traverseOutbound(ctx, seedID, depth, visited)
-		if err != nil {
-			return result, err
-		}
-		result.Edges = append(result.Edges, edges...)
-		result.Nodes = append(result.Nodes, nodes...)
+	// v2.1: interface-consumer expansion (Chinthareddy 2026 §6.4). When the
+	// seed is a concrete type/method, also seed the corresponding interface
+	// symbol so callers reaching through the interface surface; and the
+	// reverse for interface seeds. The expansion siblings share depth 0
+	// with the original seed so they don't inflate distances.
+	expansion, err := r.expandSeedViaInheritance(ctx, seed)
+	if err != nil {
+		return result, err
 	}
-	switch direction {
-	case DirIn, DirBoth:
-		edges, nodes, err := r.traverseInbound(ctx, seedID, depth, visited)
-		if err != nil {
-			return result, err
+	visited := map[int64]int{seedID: 0}
+	for _, exp := range expansion {
+		if _, ok := visited[exp.ID]; ok {
+			continue
 		}
-		result.Edges = append(result.Edges, edges...)
-		result.Nodes = append(result.Nodes, nodes...)
+		visited[exp.ID] = 0
+		exp.Depth = 0
+		result.Nodes = append(result.Nodes, exp)
+	}
+	if len(expansion) > 0 {
+		names := make([]string, 0, len(expansion))
+		for _, e := range expansion {
+			names = append(names, e.Qualified)
+		}
+		result.Notes = append(result.Notes, fmt.Sprintf(
+			"interface-consumer expansion added %d sibling seed(s): %s",
+			len(expansion), strings.Join(names, ", "),
+		))
+	}
+
+	allSeeds := append([]int64{seedID}, idsOf(expansion)...)
+	for _, s := range allSeeds {
+		switch direction {
+		case DirOut, DirBoth:
+			edges, nodes, err := r.traverseOutbound(ctx, s, depth, visited)
+			if err != nil {
+				return result, err
+			}
+			result.Edges = append(result.Edges, edges...)
+			result.Nodes = append(result.Nodes, nodes...)
+		}
+		switch direction {
+		case DirIn, DirBoth:
+			edges, nodes, err := r.traverseInbound(ctx, s, depth, visited)
+			if err != nil {
+				return result, err
+			}
+			result.Edges = append(result.Edges, edges...)
+			result.Nodes = append(result.Nodes, nodes...)
+		}
 	}
 	return result, nil
+}
+
+func idsOf(nodes []NeighborNode) []int64 {
+	out := make([]int64, len(nodes))
+	for i, n := range nodes {
+		out[i] = n.ID
+	}
+	return out
+}
+
+// expandSeedViaInheritance returns the set of "equivalent" seed nodes for
+// interface-consumer expansion: given a concrete type, include the
+// interfaces it implements; given an interface, include all concrete
+// impls; for methods, include same-named methods on the interface
+// counterpart. Empty slice when seed is unrelated to any inheritance.
+//
+// Reads `refs` rows with kind='inherit' (emitted by the Go resolver's
+// EmitInheritance pass).
+func (r *Reader) expandSeedViaInheritance(ctx context.Context, seed NeighborNode) ([]NeighborNode, error) {
+	switch seed.Kind {
+	case "type", "class", "interface":
+		return r.expandTypeSeed(ctx, seed)
+	case "method":
+		return r.expandMethodSeed(ctx, seed)
+	}
+	return nil, nil
+}
+
+func (r *Reader) expandTypeSeed(ctx context.Context, seed NeighborNode) ([]NeighborNode, error) {
+	// Forward: seed is concrete; pick up interfaces it implements.
+	// Reverse: seed is interface; pick up its impls.
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT DISTINCT r.dst_symbol_id
+		FROM refs r
+		JOIN symbols s ON s.id = r.src_symbol_id
+		WHERE r.kind = 'inherit' AND s.qualified = ? AND r.dst_symbol_id IS NOT NULL
+		UNION
+		SELECT DISTINCT r.src_symbol_id
+		FROM refs r
+		JOIN symbols s ON s.id = r.dst_symbol_id
+		WHERE r.kind = 'inherit' AND s.qualified = ? AND r.src_symbol_id IS NOT NULL`,
+		seed.Qualified, seed.Qualified)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []NeighborNode
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		if id == seed.ID {
+			continue
+		}
+		nd, err := r.loadNode(ctx, id)
+		if err != nil {
+			continue
+		}
+		out = append(out, nd)
+	}
+	return out, rows.Err()
+}
+
+func (r *Reader) expandMethodSeed(ctx context.Context, seed NeighborNode) ([]NeighborNode, error) {
+	idx := strings.LastIndex(seed.Qualified, ".")
+	if idx < 0 {
+		return nil, nil
+	}
+	parent := seed.Qualified[:idx]
+	method := seed.Qualified[idx+1:]
+	// Forward: parent is concrete; find interface counterparts and look up
+	// the same-named method on each.
+	// Reverse: parent is interface; find concrete impls and look up the
+	// same-named method on each.
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT DISTINCT m.id
+		FROM refs r
+		JOIN symbols src ON src.id = r.src_symbol_id
+		JOIN symbols ifaceS ON ifaceS.id = r.dst_symbol_id
+		JOIN symbols m ON m.qualified = ifaceS.qualified || '.' || ?
+		WHERE r.kind = 'inherit' AND src.qualified = ?
+		UNION
+		SELECT DISTINCT m.id
+		FROM refs r
+		JOIN symbols ifaceS ON ifaceS.id = r.dst_symbol_id
+		JOIN symbols concreteS ON concreteS.id = r.src_symbol_id
+		JOIN symbols m ON m.qualified = concreteS.qualified || '.' || ?
+		WHERE r.kind = 'inherit' AND ifaceS.qualified = ?`,
+		method, parent, method, parent)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []NeighborNode
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		if id == seed.ID {
+			continue
+		}
+		nd, err := r.loadNode(ctx, id)
+		if err != nil {
+			continue
+		}
+		out = append(out, nd)
+	}
+	return out, rows.Err()
 }
 
 // traverseOutbound: follow refs.src_symbol_id -> refs.dst_symbol_id.

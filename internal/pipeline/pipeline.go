@@ -28,6 +28,15 @@ type Resolver interface {
 	Ready() bool
 }
 
+// InheritanceEmitter is the optional v2.1 extension: resolvers that compute
+// type-inheritance relationships (Go's go/types-driven implements check, and
+// in future TS/Python equivalents) implement this to append RefInherit
+// edges after the main call-resolution pass. The pipeline calls it via a
+// type assertion so adding this capability is non-breaking.
+type InheritanceEmitter interface {
+	EmitInheritance(absPath string, pr *parser.ParseResult) int
+}
+
 // Workspace pairs a per-project walker with the matching projects-table
 // row. v1.5 pipelines iterate a slice of these instead of a single
 // Walker; the legacy Pipeline.Walker still works when Workspaces is empty.
@@ -279,6 +288,12 @@ func (p *Pipeline) writeParsed(ctx context.Context, f repo.File, prs parser.Pars
 	// registered for this language or when the resolver isn't ready.
 	if res := p.resolverFor(prs.Language()); res != nil && res.Ready() {
 		res.ResolveFile(f.AbsPath, &result)
+		// v2.1: resolvers that implement InheritanceEmitter additionally
+		// emit RefInherit edges (concrete -> interface) so the query
+		// layer can fan out through interfaces (Chinthareddy 2026 §6.4).
+		if ie, ok := res.(InheritanceEmitter); ok {
+			ie.EmitInheritance(f.AbsPath, &result)
+		}
 	}
 
 	db := p.Index.DB()

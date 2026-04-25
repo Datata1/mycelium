@@ -407,7 +407,13 @@ type Stats struct {
 	DBSizeBytes          int64          `json:"db_size_bytes"`
 	DBFreelistPages      int            `json:"db_freelist_pages"`
 	DBPageCount          int            `json:"db_page_count"`
-	LastScan             time.Time      `json:"last_scan"`
+	// v2.1: interface-implementer linkage signal. Counts RefInherit edges
+	// emitted by language resolvers and the distinct concrete types they
+	// originate from. Surfaces via doctor as `interface_expansion_coverage`
+	// so users can confirm the fan-out is actually populated.
+	InterfaceImplementsRefs   int `json:"interface_implements_refs"`
+	InterfaceConcreteTypes    int `json:"interface_concrete_types"`
+	LastScan                  time.Time `json:"last_scan"`
 }
 
 // UnresolvedRatio is the fraction of *non-import* refs that no resolver
@@ -534,6 +540,16 @@ func (r *Reader) Stats(ctx context.Context) (Stats, error) {
 	_ = r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL`).Scan(&s.ChunksEmbedded)
 	s.StaleChunks = s.Chunks - s.ChunksEmbedded
 	_ = r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM embed_queue`).Scan(&s.EmbedQueueDepth)
+
+	// v2.1: interface-implementer linkage. RefInherit edges link concrete
+	// types to interfaces they implement; agents querying upstream
+	// consumers depend on these to reach interface-typed callers.
+	_ = r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM refs WHERE kind = 'inherit'`,
+	).Scan(&s.InterfaceImplementsRefs)
+	_ = r.db.QueryRowContext(ctx,
+		`SELECT COUNT(DISTINCT src_symbol_id) FROM refs WHERE kind = 'inherit'`,
+	).Scan(&s.InterfaceConcreteTypes)
 
 	// SQLite page stats. freelist_count / page_count is a cheap
 	// fragmentation proxy that tells VACUUM whether it'd pay off.

@@ -35,6 +35,36 @@ AI coding agents waste tokens and tool calls re-discovering a repo's structure o
 
 **Mycelium** gives agents a structured, always-fresh index they can query precisely.
 
+## Why deterministic AST graphs?
+
+Mycelium parses code with Go/AST and tree-sitter and stores typed,
+deterministic edges (`call`, `import`, `type_ref`, `inherit`). It
+deliberately does **not** ask an LLM to extract structure during
+indexing. That choice is deliberate, and recent independent research
+quantifies why.
+
+Chinthareddy (2026) benchmarked three retrieval pipelines on three Java
+codebases (Shopizer, ThingsBoard, OpenMRS Core), each evaluated against
+a fixed 15-question architecture-tracing suite. The results match
+mycelium's own design:
+
+| Pipeline | Correctness (Shopizer) | Indexing time | End-to-end cost |
+|---|---|---|---|
+| Vector-only RAG | 6/15 | seconds | 1.0× (baseline) |
+| LLM-extracted KG | 13/15 | minutes | ~20-45× |
+| **AST-derived graph** | **15/15** | **seconds** | **~2×** |
+
+Critically, LLM-mediated extraction silently skipped 31% of input files
+during indexing on Shopizer — schema-bound JSON output that the model
+just didn't return. Files that vanish at index time become retrieval
+blind spots at query time. AST parsing has no such failure mode: every
+file the parser accepts is indexed completely.
+
+Mycelium is in the third row: deterministic AST graph, runtime cost
+near the vector baseline, no probabilistic file-skipping. Full
+attribution and other research that has shaped the design lives in
+[RESEARCH.md](./RESEARCH.md).
+
 ## Status
 
 **v1.6** — graph-native tools + PR scope. Two new MCP tools
