@@ -28,6 +28,11 @@ type Config struct {
 	Daemon    DaemonConfig   `yaml:"daemon"`
 	Hooks     HooksConfig    `yaml:"hooks"`
 	Index     IndexConfig    `yaml:"index"`
+	// Telemetry is v2.2's opt-in, local-only call-frequency log.
+	// Default: disabled. When enabled, the daemon writes one JSON line
+	// per dispatched IPC/MCP call to .mycelium/telemetry.jsonl. No
+	// network. Drives `myco stats --telemetry` for adoption analysis.
+	Telemetry TelemetryConfig `yaml:"telemetry"`
 	// Projects is the v1.5 workspace mode. When empty, the whole repo
 	// is one implicit "root project" indexed with the top-level
 	// Languages/Include/Exclude — backward compatible with v1.4.
@@ -79,6 +84,15 @@ type DaemonConfig struct {
 
 type HooksConfig struct {
 	PostCommit bool `yaml:"post_commit"`
+}
+
+// TelemetryConfig (v2.2). Off by default; opt-in. Kept narrow on purpose:
+// the only knob is whether to log at all and where to put the file. We
+// resist adding sampling rates, retention windows, or per-tool toggles
+// until real usage shows we need them.
+type TelemetryConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Path    string `yaml:"path"` // empty -> .mycelium/telemetry.jsonl
 }
 
 type IndexConfig struct {
@@ -154,6 +168,10 @@ func Default() Config {
 				AutoCreate:  true, // create vss_chunks if extension loads
 				KNNEFSearch: 0,    // reserved for future HNSW tuning
 			},
+		},
+		Telemetry: TelemetryConfig{
+			Enabled: false, // opt-in only — see RESEARCH.md / v3 plan
+			Path:    "",    // resolved at daemon start to .mycelium/telemetry.jsonl
 		},
 	}
 }

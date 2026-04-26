@@ -6,6 +6,44 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Static skills tree (Pillar L, v2.3 in the v3 plan).** New
+  `internal/skills` package + `myco skills compile` CLI generate a
+  deterministic Markdown tree under `.mycelium/skills/` that an agent
+  can navigate with only the `Read` tool. Layout: per-package
+  `SKILL.md` (one per directory of source, language unified for
+  mixed-language directories), root `INDEX.md` listing every package,
+  and an `aspects/` subtree with four cross-cutting filters
+  (error-handling, context-propagation — clean signature matches;
+  config-loading, logging — heuristic ref-driven, frontmatter-flagged).
+  Output is `language: complementary` to MCP — SKILL.md is lean
+  (≤~160 lines on the largest mycelium package), points the reader at
+  `myco query refs/neighbors` for specifics. New reader helpers
+  `(*query.Reader).PackageRefAggregates`,
+  `SymbolsBySignatureLike`, `SymbolsByOutboundRef` keep the "query is
+  the only reader" rule intact. `--package` and `--aspect` flags
+  scope regen for fast iteration; both correctly skip everything
+  outside their scope. Self-dogfood on the mycelium repo: 28 packages
+  / 88 files / 589 symbols, full tree compiles in ~52ms; tree
+  gitignored as a sibling of `index.db`. Incremental hash-gated
+  regeneration is v2.5.
+- **Opt-in telemetry log (Pillar K, v2.2 in the v3 plan).** New
+  `internal/telemetry` package with a `Recorder` interface and a
+  JSONL `FileRecorder`. Off by default; enabled via
+  `telemetry: { enabled: true }` in `.mycelium.yml`. When on, the
+  daemon dispatcher in `internal/daemon/daemon.go` records one line
+  per IPC/MCP call to `.mycelium/telemetry.jsonl` (timestamp, tool
+  name, input bytes, output bytes, wall-clock ms, ok). No network,
+  no aggregation off-host — purely a local file the user can
+  `tail -f`. Open failure falls back to `Disabled` so observability
+  never gates daemon startup.
+- **`myco stats --telemetry`** aggregator: streams the JSONL log and
+  prints per-tool counts, byte totals, and p50/p95 durations, plus
+  an `all` rollup. Friendly hints when telemetry is off in config or
+  when no records exist yet, so users who flipped the flag but
+  haven't generated traffic understand what they're seeing.
+
 ### Fixed
 
 - **sqlite-vec extension entrypoint.** `LoadExtension` was being called

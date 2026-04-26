@@ -16,6 +16,7 @@ import (
 	"github.com/jdwiederstein/mycelium/internal/ipc"
 	"github.com/jdwiederstein/mycelium/internal/pipeline"
 	"github.com/jdwiederstein/mycelium/internal/query"
+	"github.com/jdwiederstein/mycelium/internal/telemetry"
 	"github.com/jdwiederstein/mycelium/internal/watch"
 )
 
@@ -32,7 +33,11 @@ type Daemon struct {
 	// configured). Plumbed into every Searcher the daemon creates so the
 	// KNN fast path can light up.
 	VSSTable string
-	Logger   Logger
+	// Telemetry records per-call timing/byte stats when enabled. Defaults
+	// to telemetry.Disabled{} so the dispatcher path is uniform — no
+	// nil checks at every call site.
+	Telemetry telemetry.Recorder
+	Logger    Logger
 }
 
 type Logger interface {
@@ -137,7 +142,36 @@ func (d *Daemon) HandleIPC(ctx context.Context, req ipc.Request) (any, error) {
 	return d.dispatch(ctx, req)
 }
 
+// dispatch wraps dispatchInner with v2.2 telemetry recording. The byte
+// counts are slightly approximate — input is the raw JSON params slice
+// the client sent, output is the marshaled result. We marshal here even
+// though the transports also marshal, so the numbers are stable across
+// unix/HTTP transports. Cost is ~microseconds on small payloads; tools
+// returning multi-MB results would notice it, but those are uncommon
+// and the extra fidelity in the log is worth it.
 func (d *Daemon) dispatch(ctx context.Context, req ipc.Request) (any, error) {
+	start := time.Now()
+	result, err := d.dispatchInner(ctx, req)
+	if d.Telemetry != nil {
+		outBytes := 0
+		if err == nil && result != nil {
+			if b, mErr := json.Marshal(result); mErr == nil {
+				outBytes = len(b)
+			}
+		}
+		_ = d.Telemetry.Record(telemetry.Record{
+			Timestamp:   start,
+			Tool:        req.Method,
+			InputBytes:  len(req.Params),
+			OutputBytes: outBytes,
+			DurationMS:  time.Since(start).Milliseconds(),
+			OK:          err == nil,
+		})
+	}
+	return result, err
+}
+
+func (d *Daemon) dispatchInner(ctx context.Context, req ipc.Request) (any, error) {
 	switch req.Method {
 	case ipc.MethodPing:
 		return map[string]string{"status": "ok"}, nil

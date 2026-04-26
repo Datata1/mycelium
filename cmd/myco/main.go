@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -28,9 +30,11 @@ import (
 	"github.com/jdwiederstein/mycelium/internal/pipeline"
 	"github.com/jdwiederstein/mycelium/internal/query"
 	"github.com/jdwiederstein/mycelium/internal/repo"
+	"github.com/jdwiederstein/mycelium/internal/skills"
 	goresolver "github.com/jdwiederstein/mycelium/internal/resolver/golang"
 	pyresolver "github.com/jdwiederstein/mycelium/internal/resolver/python"
 	tsresolver "github.com/jdwiederstein/mycelium/internal/resolver/typescript"
+	"github.com/jdwiederstein/mycelium/internal/telemetry"
 	"github.com/jdwiederstein/mycelium/internal/watch"
 )
 
@@ -56,6 +60,7 @@ func main() {
 		newHookCmd(),
 		newStatsCmd(),
 		newDoctorCmd(),
+		newSkillsCmd(),
 	)
 
 	if err := root.Execute(); err != nil {
@@ -775,7 +780,8 @@ func runQueryOutline(path string) error {
 }
 
 func newStatsCmd() *cobra.Command {
-	return &cobra.Command{
+	var showTelemetry bool
+	cmd := &cobra.Command{
 		Use:   "stats",
 		Short: "Print index status: languages, symbol counts, freshness",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -783,6 +789,9 @@ func newStatsCmd() *cobra.Command {
 			rc, err := loadRepoCtx()
 			if err != nil {
 				return err
+			}
+			if showTelemetry {
+				return runStatsTelemetry(rc)
 			}
 			ix, err := openIndex(rc)
 			if err != nil {
@@ -822,6 +831,55 @@ func newStatsCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&showTelemetry, "telemetry", false,
+		"aggregate the telemetry log instead of index stats (v2.2)")
+	return cmd
+}
+
+// runStatsTelemetry renders a per-tool histogram from the telemetry
+// JSONL log. Friendly hint when the log is missing or empty so users
+// who turned telemetry on but haven't generated traffic yet understand
+// what they're seeing.
+func runStatsTelemetry(rc repoCtx) error {
+	path := rc.Cfg.Telemetry.Path
+	if path == "" {
+		path = filepath.Join(rc.Root, ".mycelium", "telemetry.jsonl")
+	}
+	if !rc.Cfg.Telemetry.Enabled {
+		fmt.Fprintf(os.Stderr,
+			"hint: telemetry.enabled is false in .mycelium.yml — no calls have been recorded.\n"+
+				"      enable it with `telemetry: { enabled: true }` and restart the daemon.\n")
+	}
+	summaries, err := telemetry.Aggregate(path)
+	if err != nil {
+		return err
+	}
+	if len(summaries) == 0 {
+		fmt.Fprintf(os.Stderr, "hint: no records at %s yet.\n", path)
+		return nil
+	}
+	fmt.Printf("%-22s  %6s  %6s  %12s  %12s  %8s  %8s\n",
+		"tool", "calls", "ok", "in_total", "out_total", "p50", "p95")
+	for _, s := range summaries {
+		fmt.Printf("%-22s  %6d  %6d  %12s  %12s  %8s  %8s\n",
+			s.Tool, s.Count, s.OK,
+			humanBytes(s.InputBytes), humanBytes(s.OutputBytes),
+			s.P50Duration, s.P95Duration)
+	}
+	return nil
+}
+
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for x := n / unit; x >= unit; x /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
 func newDoctorCmd() *cobra.Command {
@@ -1116,14 +1174,36 @@ func runDaemon(ctx context.Context, backendOverride string) error {
 	}
 	go worker.Run(ctx)
 
+	// v2.2: opt-in telemetry. Default-off; when enabled, the daemon
+	// records per-call timing/byte stats to `.mycelium/telemetry.jsonl`
+	// (or the configured path). Open failures fall back to Disabled
+	// rather than aborting daemon startup — observability shouldn't
+	// gate availability.
+	var rec telemetry.Recorder = telemetry.Disabled{}
+	if rc.Cfg.Telemetry.Enabled {
+		path := rc.Cfg.Telemetry.Path
+		if path == "" {
+			path = filepath.Join(rc.Root, ".mycelium", "telemetry.jsonl")
+		}
+		fr, err := telemetry.Open(path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[daemon] telemetry disabled: %v\n", err)
+		} else {
+			rec = fr
+			fmt.Fprintf(os.Stderr, "[daemon] telemetry on: %s\n", path)
+			defer fr.Close()
+		}
+	}
+
 	d := &daemon.Daemon{
-		Pipeline: p,
-		Reader:   query.NewReader(ix.DB()),
-		Embedder: emb,
-		Watcher:  wat,
-		Socket:   rc.Root + "/" + rc.Cfg.Daemon.Socket,
-		RepoRoot: rc.Root,
-		VSSTable: ix.VSSTableName(),
+		Pipeline:  p,
+		Reader:    query.NewReader(ix.DB()),
+		Embedder:  emb,
+		Watcher:   wat,
+		Socket:    rc.Root + "/" + rc.Cfg.Daemon.Socket,
+		RepoRoot:  rc.Root,
+		VSSTable:  ix.VSSTableName(),
+		Telemetry: rec,
 	}
 
 	// Start the HTTP transport alongside the unix socket. Disabled when
@@ -1188,6 +1268,66 @@ func newHookCmd() *cobra.Command {
 
 func errNotImplemented(name string) error {
 	return fmt.Errorf("%s: not yet implemented (pre-v0.1 scaffolding)", name)
+}
+
+// newSkillsCmd is the v2.3 entrypoint for generating the Markdown
+// skills tree under .mycelium/skills/. The tree is the v3 "agent-
+// native" pillar: an on-disk filesystem of structural facts agents
+// can navigate with only Read.
+//
+// Subcommand group leaves room for `myco skills outline` and similar
+// in later milestones.
+func newSkillsCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "skills",
+		Short: "Generate / inspect the on-disk skills tree (v2.3)",
+	}
+	cmd.AddCommand(newSkillsCompileCmd())
+	return cmd
+}
+
+func newSkillsCompileCmd() *cobra.Command {
+	var (
+		outDir       string
+		pkgFilter    string
+		aspectFilter string
+	)
+	cmd := &cobra.Command{
+		Use:   "compile",
+		Short: "Regenerate the skills tree (default: .mycelium/skills/)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := context.Background()
+			rc, err := loadRepoCtx()
+			if err != nil {
+				return err
+			}
+			ix, err := openIndex(rc)
+			if err != nil {
+				return err
+			}
+			defer ix.Close()
+
+			out := outDir
+			if out == "" {
+				out = filepath.Join(rc.Root, ".mycelium", "skills")
+			}
+			start := time.Now()
+			err = skills.Compile(ctx, query.NewReader(ix.DB()), skills.Options{
+				OutDir:        out,
+				PackageFilter: pkgFilter,
+				AspectFilter:  aspectFilter,
+			})
+			if err != nil {
+				return err
+			}
+			fmt.Printf("compiled skills tree to %s (%s)\n", out, time.Since(start).Round(time.Millisecond))
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&outDir, "out", "", "output directory (default: .mycelium/skills/)")
+	cmd.Flags().StringVar(&pkgFilter, "package", "", "regenerate only this package directory (skips root index + aspects)")
+	cmd.Flags().StringVar(&aspectFilter, "aspect", "", "regenerate only this aspect (skips packages + root index)")
+	return cmd
 }
 
 // openIndex opens the repo's SQLite index and applies the vector-extension
