@@ -67,6 +67,15 @@ func runBackend(t *testing.T, backend string) []Event {
 	mustWrite(t, filepath.Join(dir, "a.go"), "package x\n// v2\n")
 	mustWrite(t, filepath.Join(dir, "README.md"), "ignored\n") // excluded by glob
 	mustWrite(t, filepath.Join(dir, "b.go"), "package x\n")
+	// Give fsnotify a chance to observe the b.go CREATE before we
+	// delete it. macOS FSEvents has been observed to coalesce a
+	// create+remove pair into nothing when they fire <~10ms apart,
+	// which makes the "saw at least one terminal event for b.go"
+	// assertion below flaky on macos-latest CI. The test contract
+	// (every non-excluded touched path produces some event) is
+	// unchanged — we just give the kernel a real opportunity to
+	// deliver the create before the file disappears.
+	time.Sleep(100 * time.Millisecond)
 	if err := os.Remove(filepath.Join(dir, "b.go")); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
