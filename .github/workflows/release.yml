@@ -86,6 +86,12 @@ jobs:
           update: true
           install: mingw-w64-x86_64-gcc
 
+      # Build the binary directly into the staging tree
+      # (`dist/myco-<suffix>/myco`), so the binary path and the
+      # staging-directory path are different from the start. An earlier
+      # version of this workflow built to `dist/myco-<suffix>` (a file)
+      # and later tried to mkdir `dist/myco-<suffix>/lib`, which failed
+      # with "Not a directory" because the file was already there.
       - name: build
         env:
           CGO_ENABLED: "1"
@@ -94,61 +100,47 @@ jobs:
           CC: ${{ matrix.cc }}
         shell: bash
         run: |
-          mkdir -p dist
-          OUT="dist/myco-${{ matrix.suffix }}${{ matrix.ext }}"
+          set -euo pipefail
+          STAGE="dist/myco-${{ matrix.suffix }}"
+          mkdir -p "${STAGE}/lib"
           VERSION="${GITHUB_REF#refs/tags/}"
           go build \
             -tags sqlite_fts5 \
             -trimpath \
             -ldflags "-s -w -X main.version=${VERSION}" \
-            -o "$OUT" \
+            -o "${STAGE}/myco${{ matrix.ext }}" \
             ./cmd/myco
 
-      # Pull the matching sqlite-vec asset and stage it next to the
-      # binary at `lib/<vec_member>` so DefaultExtensionPath finds it.
-      # We pin via SQLITE_VEC_VERSION at the top of the workflow; bump
-      # there to upgrade.
+      # Pull the matching sqlite-vec asset and drop the loadable
+      # library at `<stage>/lib/vec0.<ext>` so the binary's
+      # DefaultExtensionPath helper finds it. We pin via the workflow-
+      # level SQLITE_VEC_VERSION env var; bump there to upgrade.
       - name: fetch sqlite-vec
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          mkdir -p dist/_vec dist/lib
-          ASSET="${{ matrix.vec_asset }}"
-          MEMBER="${{ matrix.vec_member }}"
-          URL="https://github.com/asg017/sqlite-vec/releases/download/${SQLITE_VEC_VERSION}/${ASSET}"
-          echo "downloading ${URL}"
-          curl -fsSL -o "dist/_vec/${ASSET}" "${URL}"
-          case "${ASSET}" in
-            *.tar.gz) tar -xzf "dist/_vec/${ASSET}" -C dist/_vec ;;
-            *.zip)    (cd dist/_vec && 7z x "${ASSET}" -y >/dev/null) ;;
-          esac
-          # Find the loadable lib regardless of nesting in the asset.
-          FOUND="$(find dist/_vec -type f -name "${MEMBER}" | head -n 1)"
-          if [ -z "${FOUND}" ]; then
-            echo "could not find ${MEMBER} inside ${ASSET}" >&2
-            ls -laR dist/_vec
-            exit 1
-          fi
-          cp "${FOUND}" "dist/lib/${MEMBER}"
-          rm -rf dist/_vec
-
-      # Stage everything under a single myco-<suffix>/ tree so the
-      # archive unpacks to a self-contained directory. Layout:
-      #   myco-<suffix>/
-      #     myco[.exe]
-      #     lib/
-      #       vec0.<so|dylib|dll>
-      - name: stage tarball tree
         shell: bash
         run: |
           set -euo pipefail
           STAGE="dist/myco-${{ matrix.suffix }}"
-          mkdir -p "${STAGE}/lib"
-          mv "dist/myco-${{ matrix.suffix }}${{ matrix.ext }}" "${STAGE}/myco${{ matrix.ext }}"
-          mv "dist/lib/${{ matrix.vec_member }}" "${STAGE}/lib/${{ matrix.vec_member }}"
-          rmdir dist/lib
+          WORK="dist/_vec"
+          mkdir -p "${WORK}"
+          ASSET="${{ matrix.vec_asset }}"
+          MEMBER="${{ matrix.vec_member }}"
+          URL="https://github.com/asg017/sqlite-vec/releases/download/${SQLITE_VEC_VERSION}/${ASSET}"
+          echo "downloading ${URL}"
+          curl -fsSL -o "${WORK}/${ASSET}" "${URL}"
+          case "${ASSET}" in
+            *.tar.gz) tar -xzf "${WORK}/${ASSET}" -C "${WORK}" ;;
+            *.zip)    (cd "${WORK}" && 7z x "${ASSET}" -y >/dev/null) ;;
+          esac
+          # Find the loadable lib regardless of nesting in the asset.
+          FOUND="$(find "${WORK}" -type f -name "${MEMBER}" | head -n 1)"
+          if [ -z "${FOUND}" ]; then
+            echo "could not find ${MEMBER} inside ${ASSET}" >&2
+            ls -laR "${WORK}"
+            exit 1
+          fi
+          cp "${FOUND}" "${STAGE}/lib/${MEMBER}"
+          rm -rf "${WORK}"
+          ls -la "${STAGE}" "${STAGE}/lib"
 
       - name: archive (unix)
         if: matrix.os != 'windows-latest'
