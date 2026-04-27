@@ -97,7 +97,7 @@ func consumer(s Storage) error {
 	// 2. get_neighborhood on the concrete type must trigger the
 	//    interface-consumer expansion note and walk both the original
 	//    seed AND the interface sibling.
-	nb, err := r.GetNeighborhood(ctx, "iface.DiskStorage", "", 2, query.DirBoth)
+	nb, err := r.GetNeighborhood(ctx, "iface.DiskStorage", "", 2, query.DirBoth, "")
 	if err != nil {
 		t.Fatalf("neighborhood: %v", err)
 	}
@@ -110,7 +110,7 @@ func consumer(s Storage) error {
 
 	// 3. Reverse direction: querying the interface must surface the
 	//    concrete impl as a sibling and walk callers of either.
-	nb2, err := r.GetNeighborhood(ctx, "iface.Storage", "", 2, query.DirBoth)
+	nb2, err := r.GetNeighborhood(ctx, "iface.Storage", "", 2, query.DirBoth, "")
 	if err != nil {
 		t.Fatalf("neighborhood iface: %v", err)
 	}

@@ -2,6 +2,8 @@ package skills
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path"
@@ -20,10 +22,22 @@ import (
 type Reader interface {
 	ListFiles(ctx context.Context, language, nameContains, project string, limit int, pathsIn []string) ([]query.FileHit, error)
 	GetFileSummary(ctx context.Context, path string) (query.FileSummary, error)
-	GetFileOutline(ctx context.Context, path string) ([]query.FileOutlineItem, error)
+	GetFileOutline(ctx context.Context, path, focus string) ([]query.FileOutlineItem, error)
 	PackageRefAggregates(ctx context.Context, pkgDir string, limit int) (inbound, outbound []query.PackageRefAgg, err error)
 	SymbolsBySignatureLike(ctx context.Context, language string, patterns []string, limit int) ([]query.AspectMatch, error)
 	SymbolsByOutboundRef(ctx context.Context, language, dstFilePrefix, dstNameLike string, limit int) ([]query.AspectMatch, error)
+}
+
+// Store is the v2.5 hash-gating surface. *index.Index satisfies this
+// interface; tests pass an in-memory fake. When Store is nil on
+// Options, Compile renders and writes every file unconditionally —
+// the v2.3 behaviour preserved for callers that don't care about
+// modtime churn.
+type Store interface {
+	SkillFileHash(ctx context.Context, path string) (string, error)
+	UpsertSkillFile(ctx context.Context, path, hash string) error
+	DeleteSkillFile(ctx context.Context, path string) error
+	PruneSkillFiles(ctx context.Context, keep []string) error
 }
 
 // Options control a Compile run. Zero values give a sensible default
@@ -44,6 +58,26 @@ type Options struct {
 	// TopRefLimit caps the inbound/outbound tables in each SKILL.md.
 	// Default 20.
 	TopRefLimit int
+	// Store gates writes to disk by hash (v2.5). Nil = always write.
+	Store Store
+	// Stats, when non-nil, is populated with per-call counts so
+	// callers can report "rendered 28, wrote 0" on a clean tree
+	// without re-walking the output dir.
+	Stats *Stats
+	// DryRun makes Compile render + hash every output but skip both
+	// the os.WriteFile and the Store.UpsertSkillFile call. Combined
+	// with Stats it powers `myco skills compile --status`. Requires
+	// Store to be set (otherwise there's nothing to compare against).
+	DryRun bool
+}
+
+// Stats is the optional per-call write summary. Populated by Compile
+// + RegenerateAffected when Options.Stats is non-nil.
+type Stats struct {
+	Rendered int // total files rendered (including no-ops)
+	Written  int // files whose hash differed and were rewritten
+	Skipped  int // files whose hash matched and were skipped
+	Pruned   int // skill_files rows removed for orphan packages
 }
 
 // Compile walks the index via r and writes the skills tree under
@@ -84,19 +118,21 @@ func Compile(ctx context.Context, r Reader, opts Options) error {
 	}
 
 	var written []emitted
+	// emittedPaths tracks every tree-relative output path this run
+	// renders. Used by PruneSkillFiles when the run is unfiltered so
+	// orphaned hash rows get cleaned up.
+	var emittedPaths []string
 
 	for _, p := range pkgs {
-		out := filepath.Join(opts.OutDir, "packages", filepath.FromSlash(packageOutPath(p.Dir)), "SKILL.md")
-		if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
-			return err
-		}
 		body, totalSyms, topLevelN, renderErr := renderPackageSkill(ctx, r, p, opts)
 		if renderErr != nil {
 			return fmt.Errorf("render %s: %w", p.Dir, renderErr)
 		}
-		if err := os.WriteFile(out, []byte(body), 0o644); err != nil {
+		rel := skillRelPath("packages/" + packageOutPath(p.Dir) + "/SKILL.md")
+		if err := writeIfChanged(ctx, opts, rel, body); err != nil {
 			return err
 		}
+		emittedPaths = append(emittedPaths, rel)
 		written = append(written, emitted{Unit: p, TotalSyms: totalSyms, TopLevelN: topLevelN})
 	}
 
@@ -113,13 +149,11 @@ func Compile(ctx context.Context, r Reader, opts Options) error {
 			if err != nil {
 				return fmt.Errorf("render aspect %s: %w", spec.Name, err)
 			}
-			out := filepath.Join(opts.OutDir, "aspects", spec.Name, "INDEX.md")
-			if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+			rel := skillRelPath("aspects/" + spec.Name + "/INDEX.md")
+			if err := writeIfChanged(ctx, opts, rel, body); err != nil {
 				return err
 			}
-			if err := os.WriteFile(out, []byte(body), 0o644); err != nil {
-				return err
-			}
+			emittedPaths = append(emittedPaths, rel)
 			aspectsEmitted = append(aspectsEmitted, aspectEmitted{Spec: spec, MatchCount: n})
 		}
 	}
@@ -127,16 +161,172 @@ func Compile(ctx context.Context, r Reader, opts Options) error {
 	// Skip the root index when any filter is active: it'd be misleading
 	// to overwrite a whole-tree index with a one-package or one-aspect view.
 	if opts.PackageFilter == "" && opts.AspectFilter == "" {
-		idxPath := filepath.Join(opts.OutDir, "INDEX.md")
-		if err := os.MkdirAll(filepath.Dir(idxPath), 0o755); err != nil {
+		body := renderRootIndex(written, aspectsEmitted, opts)
+		rel := skillRelPath("INDEX.md")
+		if err := writeIfChanged(ctx, opts, rel, body); err != nil {
 			return err
 		}
-		body := renderRootIndex(written, aspectsEmitted, opts)
-		if err := os.WriteFile(idxPath, []byte(body), 0o644); err != nil {
+		emittedPaths = append(emittedPaths, rel)
+
+		// Prune orphan hash rows + on-disk SKILL.md / INDEX.md files
+		// that aren't in the kept set. Only safe on an unfiltered full
+		// run. DryRun skips both — the caller is asking what *would*
+		// change, not committing to it.
+		if !opts.DryRun {
+			if opts.Store != nil {
+				if err := opts.Store.PruneSkillFiles(ctx, emittedPaths); err != nil {
+					return fmt.Errorf("prune skill_files: %w", err)
+				}
+			}
+			if err := pruneOrphanFiles(opts.OutDir, emittedPaths); err != nil {
+				return fmt.Errorf("prune disk orphans: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+// RegenerateAffected is the daemon-driven incremental entry point. It
+// takes the set of package directories the watcher's most recent batch
+// touched and regenerates the skills tree.
+//
+// For v2.5 this delegates to Compile() with the Store set: the hash
+// gate inside writeIfChanged ensures unchanged files are not rewritten,
+// so the cost on a clean tree is just the render work (~100 ms on the
+// self-index). The packages parameter is captured for telemetry and to
+// reserve the API surface for a future per-package short-circuit;
+// today it is informational.
+//
+// Why not skip the discovery walk entirely? The root INDEX.md needs
+// every package's symbol counts, and aspects pull from across the whole
+// repo. Both depend on cross-package state that any one touched file
+// can invalidate (the v3 plan calls this "cross-package ref-count
+// drift"). Re-rendering is cheaper than tracking that dependency graph.
+func RegenerateAffected(ctx context.Context, r Reader, opts Options, packages []string) error {
+	if opts.Store == nil {
+		return fmt.Errorf("skills: RegenerateAffected requires Options.Store (incremental needs the hash gate)")
+	}
+	_ = packages // informational for v2.5; reserved for per-package short-circuit
+	return Compile(ctx, r, opts)
+}
+
+// writeIfChanged renders one skill file. When opts.Store is set it
+// hashes the body and skips the WriteFile when the stored hash
+// matches; otherwise it always writes (v2.3 behaviour). Either way it
+// makes the parent dir and updates opts.Stats when present.
+func writeIfChanged(ctx context.Context, opts Options, relPath, body string) error {
+	if opts.Stats != nil {
+		opts.Stats.Rendered++
+	}
+	abs := filepath.Join(opts.OutDir, filepath.FromSlash(relPath))
+	hash := hashBody(body)
+	skip := false
+	if opts.Store != nil {
+		stored, err := opts.Store.SkillFileHash(ctx, relPath)
+		if err != nil {
+			return err
+		}
+		// Belt-and-suspenders: even if the DB says we wrote this hash,
+		// a missing file on disk (someone rm'd the tree) needs a real
+		// write. Skipped under DryRun — the caller is asking "would my
+		// real tree change?", not about a transient temp dir.
+		if stored == hash {
+			if opts.DryRun {
+				skip = true
+			} else if _, statErr := os.Stat(abs); statErr == nil {
+				skip = true
+			}
+		}
+	}
+	if skip {
+		if opts.Stats != nil {
+			opts.Stats.Skipped++
+		}
+		return nil
+	}
+	if opts.DryRun {
+		// Count as a would-write without touching disk or the store.
+		if opts.Stats != nil {
+			opts.Stats.Written++
+		}
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(abs, []byte(body), 0o644); err != nil {
+		return err
+	}
+	if opts.Stats != nil {
+		opts.Stats.Written++
+	}
+	if opts.Store != nil {
+		if err := opts.Store.UpsertSkillFile(ctx, relPath, hash); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// hashBody is the canonical hash function for skill_files. SHA-256 is
+// overkill for a 2KB markdown blob but the cost is negligible and we
+// avoid a new dependency or the risk of a 32-bit collision in a
+// long-lived corpus.
+//
+// The wall-clock `generated:` frontmatter line is excluded so two
+// renders with the same structural content but different timestamps
+// produce the same hash. Without this the hash gate would fire on
+// every daemon batch, defeating the v2.5 incremental story.
+func hashBody(body string) string {
+	h := sha256.New()
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "generated:") {
+			continue
+		}
+		h.Write([]byte(line))
+		h.Write([]byte{'\n'})
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// skillRelPath normalises an output path to forward slashes. The DB
+// stores tree-relative paths and we want them stable across OSes.
+func skillRelPath(p string) string {
+	return filepath.ToSlash(p)
+}
+
+// pruneOrphanFiles removes SKILL.md / INDEX.md files under OutDir
+// that aren't in the kept set. Other files (handwritten notes, future
+// extension files) are left alone.
+func pruneOrphanFiles(outDir string, kept []string) error {
+	keepSet := make(map[string]bool, len(kept))
+	for _, k := range kept {
+		keepSet[k] = true
+	}
+	return filepath.Walk(outDir, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		base := filepath.Base(p)
+		if base != "SKILL.md" && base != "INDEX.md" {
+			return nil
+		}
+		rel, err := filepath.Rel(outDir, p)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if !keepSet[rel] {
+			return os.Remove(p)
+		}
+		return nil
+	})
 }
 
 // aspectEmitted records one written aspect for the root index.
@@ -308,7 +498,7 @@ func renderPackageSkill(ctx context.Context, r Reader, p pkgUnit, opts Options) 
 		for _, imp := range summary.Imports {
 			imports[imp] = true
 		}
-		outline, err := r.GetFileOutline(ctx, f.Path)
+		outline, err := r.GetFileOutline(ctx, f.Path, "")
 		if err != nil {
 			return "", 0, 0, err
 		}

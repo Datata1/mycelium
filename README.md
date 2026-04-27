@@ -28,12 +28,26 @@ See [CONTEXT.md](./CONTEXT.md) for the problem, goals, and non-goals, [CHANGELOG
 
 ## ⚡ Why Mycelium?
 
-AI coding agents waste tokens and tool calls re-discovering a repo's structure on every single task. 
-* **Ripgrep** is blind to structure.
-* **Full-text search** misses semantics.
-* **Whole-file reads** blow out your context windows. 
+AI coding agents already know how to use `Read`, `Glob`, and `Bash`.
+They have to be *told* to use a new MCP tool, and even then their
+reflex on the next task is still `grep -rn`. v3 of mycelium is
+designed around that reality: it gives the agent two surfaces to
+reach for, both of which feel like the tools it already trusts.
 
-**Mycelium** gives agents a structured, always-fresh index they can query precisely.
+- **A browseable filesystem at `.mycelium/skills/`** — root
+  `INDEX.md`, per-package `SKILL.md`, cross-cutting `aspects/`
+  views. The agent navigates with `Read` and `Glob` instead of
+  learning a schema.
+- **A focused-reads primitive (`read_focused`)** that returns one
+  file with non-matching symbols collapsed to one-line markers in
+  the file's native comment style. The agent gets the bytes it
+  needs without the bytes it doesn't.
+
+The structural MCP tools (`find_symbol`, `get_neighborhood`,
+`impact_analysis`, …) are still there for programmatic use, but
+they're no longer the headline. See [docs/adoption.md](./docs/adoption.md)
+for how to verify your agent is actually using mycelium and how to
+read the telemetry log when it isn't.
 
 ## Why deterministic AST graphs?
 
@@ -63,17 +77,82 @@ file the parser accepts is indexed completely.
 Mycelium is in the third row: deterministic AST graph, runtime cost
 near the vector baseline, no probabilistic file-skipping. Full
 attribution and other research that has shaped the design lives in
-[RESEARCH.md](./RESEARCH.md).
+[docs/research.md](./docs/research.md).
 
 ## Status
 
-**v1.6** — graph-native tools + PR scope. Two new MCP tools
-(`impact_analysis`, `critical_path`) over the now-honest ref graph,
-plus a `--since <ref>` path filter on the read surface for PR-scoped
-queries. Builds on v1.5's workspace mode, v1.2/v1.3 type-aware
-resolvers for Go/TS/Python, and v1.4's optional sqlite-vec fast path.
-Cross-repo federation stays a v3 non-goal (see
-[LIMITATIONS.md](./LIMITATIONS.md)).
+**v3.0-rc** — agent-native release. Adds the
+`.mycelium/skills/` filesystem (Pillar H, v2.3 + v2.5 incremental
+regen), `read_focused` and the `focus` parameter on existing
+read tools (Pillar I, v2.4), opt-in adoption telemetry (Pillar K,
+v2.2), and interface-consumer expansion in `get_neighborhood` /
+`impact_analysis` / `critical_path` (Pillar J, v2.1). Builds on
+v1.x's type-aware resolvers, workspace mode, PR-scoped queries,
+and optional sqlite-vec fast path. Cross-repo federation stays a
+v4 non-goal (see [LIMITATIONS.md](./LIMITATIONS.md)).
+
+## Two ways agents use mycelium
+
+### 1. The skills tree (`.mycelium/skills/`)
+
+Run once after indexing:
+
+```bash
+myco skills compile         # whole tree, ~100 ms on the self-index
+myco skills compile --incremental  # hash-gated; rewrites only changed files
+```
+
+The daemon then keeps the tree fresh on every file change (debounced
+batches, hash-gated writes — only the SKILL.md files whose rendered
+content actually changed get rewritten).
+
+Layout:
+
+```
+.mycelium/skills/
+├── INDEX.md                 (entry point: every package, language, file/symbol counts)
+├── packages/
+│   ├── internal/query/SKILL.md   (top-level symbols, top inbound/outbound callers)
+│   ├── internal/index/SKILL.md
+│   └── ...
+└── aspects/
+    ├── error-handling/INDEX.md   (Go signatures returning error)
+    ├── context-propagation/INDEX.md
+    ├── config-loading/INDEX.md   (heuristic, frontmatter-flagged)
+    └── logging/INDEX.md          (heuristic, frontmatter-flagged)
+```
+
+A worked navigation trace lives in
+[docs/navigation-example.md](./docs/navigation-example.md): an agent
+answering "which package is the only reader of the SQLite index?"
+using only `Read` on `.mycelium/skills/`.
+
+### 2. Focused reads
+
+When the agent does need a specific file, `read_focused` (or
+`myco read --focus`) returns it with non-matching symbols collapsed
+to one-line markers and matching symbols expanded in full:
+
+```bash
+$ myco read cmd/myco/main.go --focus "telemetry recorder" --stats
+# cmd/myco/main.go  focus="telemetry recorder"  expanded=3/47  bytes=8443/44337
+# (file body with 44 collapsed-to-one-line markers and 3 full functions)
+```
+
+Self-index measurements: 81% byte reduction on `cmd/myco/main.go`
+with `focus="telemetry recorder"`; 29% on `internal/daemon/daemon.go`
+with `focus="dispatch read_focused"`. Smaller files with denser
+inter-symbol coupling collapse less aggressively — that's the
+honest cost of a deterministic, no-neural-model filter.
+
+The same `focus` parameter is also available on `find_symbol`,
+`get_file_outline`, and `get_neighborhood` — all backward-
+compatible (empty focus = pre-v2.4 behaviour).
+
+### 3. Structural MCP tools (still available, demoted)
+
+For programmatic use, the structural tools are unchanged. See
+[MCP tools exposed](#mcp-tools-exposed) below.
 
 ## Install
 
@@ -139,27 +218,32 @@ Same idea, but for `~/.cursor/mcp.json`.
 
 ## MCP tools exposed
 
-All tools return JSON; line/col positions are 1-based.
+These are the structural tools for programmatic use. The
+[skills tree](#1-the-skills-tree-myceliumskills) and
+[focused reads](#2-focused-reads) are the v3 headline; this table is
+the back end. All tools return JSON; line/col positions are 1-based.
 
 Tools marked with `project?` accept an optional workspace project name
 (see [Workspace mode](#workspace-mode)). Unknown project names return
 zero hits rather than silently falling back to unscoped, so config typos
 surface immediately. Tools marked with `since?` accept a git ref and
 restrict results to files changed between `<ref>...HEAD` (see
-[PR-scoped queries](#pr-scoped-queries)).
+[PR-scoped queries](#pr-scoped-queries)). Tools marked with `focus?`
+accept the v2.4 lexical filter — empty value preserves prior behaviour.
 
 | Tool | Purpose | Key inputs |
 |---|---|---|
-| `find_symbol` | Fuzzy/exact symbol lookup. | `name`, `kind?`, `limit?`, `project?`, `since?` |
+| `find_symbol` | Fuzzy/exact symbol lookup. | `name`, `kind?`, `limit?`, `project?`, `since?`, `focus?` |
 | `get_definition` | Source span + snippet. | `symbol_id` or `qualified_name` |
-| `get_references` | Callers / importers / type uses; flags each hit as resolved vs textual. | `target`, `limit?`, `project?`, `since?` |
+| `get_references` | Callers / importers / type uses; flags each hit as resolved vs textual. Fans out through interface implementations (v2.1). | `target`, `limit?`, `project?`, `since?` |
+| `read_focused` | Returns one file with non-matching symbols collapsed to one-line markers in the file's native comment style (v2.4). Empty `focus` returns the file in full. | `path`, `focus?` |
 | `search_semantic` | Vector search over code chunks (requires embedder). | `query`, `k?`, `kind?`, `path_contains?`, `project?`, `since?` |
 | `search_lexical` | Ripgrep-style regex over indexed files. | `pattern`, `path_contains?`, `k?`, `project?`, `since?` |
 | `list_files` | Indexed files with language tags. | `language?`, `name_contains?`, `limit?`, `project?`, `since?` |
-| `get_file_outline` | Hierarchical symbol tree for one file. | `path` |
+| `get_file_outline` | Hierarchical symbol tree for one file. | `path`, `focus?` |
 | `get_file_summary` | Structural summary (exports, imports, LOC). | `path` |
-| `get_neighborhood` | Local call graph around a symbol (recursive CTE on refs). Seed lookup respects `project?`; traversal stays global so cross-project edges still surface. | `target`, `depth?`, `direction?`, `project?` |
-| `impact_analysis` | Transitive inbound closure ranked by distance (v1.6). For "who's impacted if I change this?" or (with `kind=method`) "what tests cover this?". | `target`, `kind?`, `depth?`, `project?`, `since?` |
+| `get_neighborhood` | Local call graph around a symbol (recursive CTE on refs). Seed lookup respects `project?`; traversal stays global so cross-project edges still surface. Walks `RefInherit` edges so interface consumers fan in (v2.1). | `target`, `depth?`, `direction?`, `project?`, `focus?` |
+| `impact_analysis` | Transitive inbound closure ranked by distance (v1.6). For "who's impacted if I change this?" or (with `kind=method`) "what tests cover this?". Interface-aware (v2.1). | `target`, `kind?`, `depth?`, `project?`, `since?` |
 | `critical_path` | Up to `k` shortest outbound call paths from `from` to `to` (v1.6). Bounded BFS at depth ≤ 8. | `from`, `to`, `depth?`, `k?`, `project?` |
 | `stats` | Languages, symbol counts, refs, freshness. | — |
 
@@ -510,6 +594,33 @@ is deferred; the self-loop is visible but doesn't break other queries.
 on save, delivering CREATE+DELETE instead of MODIFY. The `embed_cache` keyed
 by content hash makes this a no-op for embeddings; for the index itself,
 the post-commit hook acts as a catch-up.
+
+## Adoption: is your agent actually using mycelium?
+
+Mycelium is only useful if the agent reaches for it. Turn on telemetry
+to see which tools your agent actually calls:
+
+```yaml
+# .mycelium.yml
+telemetry:
+  enabled: true
+```
+
+Restart the daemon, run a normal session for a day, then aggregate:
+
+```bash
+myco stats --telemetry
+# tool                   count    ok    in_bytes   out_bytes   p50    p95
+# find_symbol               87    87       3.6KB      94.2KB    6ms   18ms
+# get_neighborhood          54    54       2.1KB     217.8KB   12ms   41ms
+# read_focused              19    19       0.8KB      72.6KB    7ms   22ms
+# ...
+```
+
+The log is local-only (`.mycelium/telemetry.jsonl`), one JSON object per
+call. [docs/adoption.md](./docs/adoption.md) covers the five-minute
+setup checklist, common shapes of "agent isn't using mycelium" with
+fixes, and reference numbers for what a healthy session looks like.
 
 ## Contributing
 

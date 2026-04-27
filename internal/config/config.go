@@ -170,7 +170,7 @@ func Default() Config {
 			},
 		},
 		Telemetry: TelemetryConfig{
-			Enabled: false, // opt-in only — see RESEARCH.md / v3 plan
+			Enabled: false, // opt-in only — see docs/research.md / v3 plan
 			Path:    "",    // resolved at daemon start to .mycelium/telemetry.jsonl
 		},
 	}

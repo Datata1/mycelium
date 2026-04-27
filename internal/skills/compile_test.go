@@ -49,7 +49,7 @@ func (f *fakeReader) GetFileSummary(ctx context.Context, p string) (query.FileSu
 	return f.summaries[p], nil
 }
 
-func (f *fakeReader) GetFileOutline(ctx context.Context, p string) ([]query.FileOutlineItem, error) {
+func (f *fakeReader) GetFileOutline(ctx context.Context, p, _ string) ([]query.FileOutlineItem, error) {
 	return f.outlines[p], nil
 }
 
@@ -253,6 +253,186 @@ func TestCompile_GoldenAspects(t *testing.T) {
 		"aspects/config-loading/INDEX.md",
 		"aspects/logging/INDEX.md",
 	})
+}
+
+// fakeStore is an in-memory implementation of Store for the v2.5
+// hash-gating tests. Round-trips path -> hash and tracks every Upsert
+// call so the second-pass tests can assert "wrote nothing."
+type fakeStore struct {
+	hashes  map[string]string
+	upserts int
+}
+
+func newFakeStore() *fakeStore { return &fakeStore{hashes: map[string]string{}} }
+
+func (f *fakeStore) SkillFileHash(_ context.Context, p string) (string, error) {
+	return f.hashes[p], nil
+}
+
+func (f *fakeStore) UpsertSkillFile(_ context.Context, p, h string) error {
+	f.hashes[p] = h
+	f.upserts++
+	return nil
+}
+
+func (f *fakeStore) DeleteSkillFile(_ context.Context, p string) error {
+	delete(f.hashes, p)
+	return nil
+}
+
+func (f *fakeStore) PruneSkillFiles(_ context.Context, keep []string) error {
+	keepSet := make(map[string]bool, len(keep))
+	for _, k := range keep {
+		keepSet[k] = true
+	}
+	for k := range f.hashes {
+		if !keepSet[k] {
+			delete(f.hashes, k)
+		}
+	}
+	return nil
+}
+
+// TestCompile_HashGate_SecondPassIsNoop is the headline v2.5
+// invariant: rendering the same fixture twice with the same Options
+// (including a Store) writes every file once and zero times.
+func TestCompile_HashGate_SecondPassIsNoop(t *testing.T) {
+	t.Parallel()
+	r := singlePackageFixture()
+	out := t.TempDir()
+	store := newFakeStore()
+	now, _ := time.Parse(time.RFC3339, "2026-04-26T12:00:00Z")
+
+	stats1 := Stats{}
+	if err := Compile(context.Background(), r, Options{
+		OutDir: out, Now: now, Store: store, Stats: &stats1,
+	}); err != nil {
+		t.Fatalf("first compile: %v", err)
+	}
+	if stats1.Written == 0 {
+		t.Fatalf("first pass should write at least one file; got %+v", stats1)
+	}
+	if stats1.Skipped != 0 {
+		t.Errorf("first pass should skip nothing; got %+v", stats1)
+	}
+
+	// Capture modtimes; they must NOT advance on the second pass.
+	preTimes := snapshotModTimes(t, out)
+
+	stats2 := Stats{}
+	// Note: same Now value so the rendered body is identical.
+	if err := Compile(context.Background(), r, Options{
+		OutDir: out, Now: now, Store: store, Stats: &stats2,
+	}); err != nil {
+		t.Fatalf("second compile: %v", err)
+	}
+	if stats2.Rendered != stats1.Rendered {
+		t.Errorf("rendered count drifted: first=%d second=%d", stats1.Rendered, stats2.Rendered)
+	}
+	if stats2.Written != 0 {
+		t.Errorf("second pass should write 0 files; got %d (%+v)", stats2.Written, stats2)
+	}
+	if stats2.Skipped != stats1.Rendered {
+		t.Errorf("second pass should skip every rendered file; got skipped=%d rendered=%d",
+			stats2.Skipped, stats2.Rendered)
+	}
+
+	postTimes := snapshotModTimes(t, out)
+	for path, before := range preTimes {
+		after, ok := postTimes[path]
+		if !ok {
+			t.Errorf("file disappeared between passes: %s", path)
+			continue
+		}
+		if !after.Equal(before) {
+			t.Errorf("modtime advanced for %s: before=%v after=%v", path, before, after)
+		}
+	}
+}
+
+// TestCompile_HashGate_ChangeOneFileRewritesOne verifies that altering
+// one package's contents rewrites only that package's SKILL.md (plus
+// the root index, which depends on the per-package totals). Aspects
+// stay untouched because nothing about their filter results changed.
+func TestCompile_HashGate_ChangeOneFileRewritesOne(t *testing.T) {
+	t.Parallel()
+	r := singlePackageFixture()
+	out := t.TempDir()
+	store := newFakeStore()
+	now, _ := time.Parse(time.RFC3339, "2026-04-26T12:00:00Z")
+
+	if err := Compile(context.Background(), r, Options{
+		OutDir: out, Now: now, Store: store,
+	}); err != nil {
+		t.Fatalf("first compile: %v", err)
+	}
+
+	// Mutate the fixture: bump a symbol count so the SKILL.md body
+	// changes for internal/query.
+	r.summaries["internal/query/query.go"] = query.FileSummary{
+		Path: "internal/query/query.go", Language: "go",
+		SymbolCount: 9, // was 5
+		Imports:     []string{"context", "database/sql"},
+	}
+
+	stats := Stats{}
+	if err := Compile(context.Background(), r, Options{
+		OutDir: out, Now: now, Store: store, Stats: &stats,
+	}); err != nil {
+		t.Fatalf("second compile: %v", err)
+	}
+	// Expect 2 writes: the changed package SKILL.md and the root
+	// INDEX.md (whose totals shifted).
+	if stats.Written != 2 {
+		t.Errorf("expected 2 writes after one-file change; got %d (%+v)", stats.Written, stats)
+	}
+}
+
+func singlePackageFixture() *fakeReader {
+	return &fakeReader{
+		files: []query.FileHit{
+			{Path: "internal/query/query.go", Language: "go", SymbolCount: 5},
+			{Path: "internal/query/summary.go", Language: "go", SymbolCount: 2},
+		},
+		summaries: map[string]query.FileSummary{
+			"internal/query/query.go": {
+				Path: "internal/query/query.go", Language: "go",
+				SymbolCount: 5, Imports: []string{"context", "database/sql"},
+			},
+			"internal/query/summary.go": {
+				Path: "internal/query/summary.go", Language: "go",
+				SymbolCount: 2, Imports: []string{"context", "database/sql"},
+			},
+		},
+		outlines: map[string][]query.FileOutlineItem{
+			"internal/query/query.go": {
+				{Name: "Reader", Qualified: "query.Reader", Kind: "type", StartLine: 15, Signature: "type Reader struct{ db *sql.DB }"},
+			},
+			"internal/query/summary.go": {
+				{Name: "FileSummary", Qualified: "query.FileSummary", Kind: "type", StartLine: 8, Signature: "type FileSummary struct{ Path string }"},
+			},
+		},
+		inbound:  map[string][]query.PackageRefAgg{"internal/query": {{Path: "internal/daemon", RefCount: 1}}},
+		outbound: map[string][]query.PackageRefAgg{"internal/query": {{Path: "internal/index", RefCount: 1}}},
+	}
+}
+
+// snapshotModTimes records modtimes of every regular file under root
+// so the test can assert nothing was rewritten.
+func snapshotModTimes(t *testing.T, root string) map[string]time.Time {
+	t.Helper()
+	out := map[string]time.Time{}
+	err := filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return err
+		}
+		out[p] = info.ModTime()
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+	return out
 }
 
 // assertGolden compares each relPath under genRoot against the

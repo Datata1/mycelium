@@ -14,6 +14,13 @@ on:
 # Linux arm64 cross-compile uses the aarch64-linux-gnu toolchain. A musl
 # static binary target can be added later if we find glibc portability
 # issues with release tarballs.
+#
+# Each tarball/zip bundles the matching sqlite-vec shared library at
+# `myco-<suffix>/lib/vec0.<ext>`. `internal/index.DefaultExtensionPath`
+# auto-discovers it, so release builds get the vec0 fast path with no
+# extra config.
+env:
+  SQLITE_VEC_VERSION: v0.1.9
 jobs:
   build:
     strategy:
@@ -25,28 +32,38 @@ jobs:
             goarch: amd64
             cc: gcc
             suffix: linux-amd64
+            vec_asset: sqlite-vec-0.1.9-loadable-linux-x86_64.tar.gz
+            vec_member: vec0.so
           - os: ubuntu-latest
             goos: linux
             goarch: arm64
             cc: aarch64-linux-gnu-gcc
             apt_packages: gcc-aarch64-linux-gnu
             suffix: linux-arm64
+            vec_asset: sqlite-vec-0.1.9-loadable-linux-aarch64.tar.gz
+            vec_member: vec0.so
           - os: macos-latest
             goos: darwin
             goarch: amd64
             cc: clang
             suffix: darwin-amd64
+            vec_asset: sqlite-vec-0.1.9-loadable-macos-x86_64.tar.gz
+            vec_member: vec0.dylib
           - os: macos-latest
             goos: darwin
             goarch: arm64
             cc: clang
             suffix: darwin-arm64
+            vec_asset: sqlite-vec-0.1.9-loadable-macos-aarch64.tar.gz
+            vec_member: vec0.dylib
           - os: windows-latest
             goos: windows
             goarch: amd64
             cc: gcc
             suffix: windows-amd64
             ext: .exe
+            vec_asset: sqlite-vec-0.1.9-loadable-windows-x86_64.zip
+            vec_member: vec0.dll
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -87,19 +104,65 @@ jobs:
             -o "$OUT" \
             ./cmd/myco
 
+      # Pull the matching sqlite-vec asset and stage it next to the
+      # binary at `lib/<vec_member>` so DefaultExtensionPath finds it.
+      # We pin via SQLITE_VEC_VERSION at the top of the workflow; bump
+      # there to upgrade.
+      - name: fetch sqlite-vec
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/_vec dist/lib
+          ASSET="${{ matrix.vec_asset }}"
+          MEMBER="${{ matrix.vec_member }}"
+          URL="https://github.com/asg017/sqlite-vec/releases/download/${SQLITE_VEC_VERSION}/${ASSET}"
+          echo "downloading ${URL}"
+          curl -fsSL -o "dist/_vec/${ASSET}" "${URL}"
+          case "${ASSET}" in
+            *.tar.gz) tar -xzf "dist/_vec/${ASSET}" -C dist/_vec ;;
+            *.zip)    (cd dist/_vec && 7z x "${ASSET}" -y >/dev/null) ;;
+          esac
+          # Find the loadable lib regardless of nesting in the asset.
+          FOUND="$(find dist/_vec -type f -name "${MEMBER}" | head -n 1)"
+          if [ -z "${FOUND}" ]; then
+            echo "could not find ${MEMBER} inside ${ASSET}" >&2
+            ls -laR dist/_vec
+            exit 1
+          fi
+          cp "${FOUND}" "dist/lib/${MEMBER}"
+          rm -rf dist/_vec
+
+      # Stage everything under a single myco-<suffix>/ tree so the
+      # archive unpacks to a self-contained directory. Layout:
+      #   myco-<suffix>/
+      #     myco[.exe]
+      #     lib/
+      #       vec0.<so|dylib|dll>
+      - name: stage tarball tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE="dist/myco-${{ matrix.suffix }}"
+          mkdir -p "${STAGE}/lib"
+          mv "dist/myco-${{ matrix.suffix }}${{ matrix.ext }}" "${STAGE}/myco${{ matrix.ext }}"
+          mv "dist/lib/${{ matrix.vec_member }}" "${STAGE}/lib/${{ matrix.vec_member }}"
+          rmdir dist/lib
+
       - name: archive (unix)
         if: matrix.os != 'windows-latest'
         shell: bash
         run: |
           cd dist
-          tar -czf myco-${{ matrix.suffix }}.tar.gz myco-${{ matrix.suffix }}
+          tar -czf "myco-${{ matrix.suffix }}.tar.gz" "myco-${{ matrix.suffix }}"
 
       - name: archive (windows)
         if: matrix.os == 'windows-latest'
         shell: bash
         run: |
           cd dist
-          7z a myco-${{ matrix.suffix }}.zip myco-${{ matrix.suffix }}.exe
+          7z a "myco-${{ matrix.suffix }}.zip" "myco-${{ matrix.suffix }}"
 
       - uses: actions/upload-artifact@v4
         with:

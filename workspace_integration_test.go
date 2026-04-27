@@ -83,7 +83,7 @@ func TestIntegration_WorkspaceMode(t *testing.T) {
 			{"", 1}, // unscoped still finds it
 		}
 		for _, tc := range cases {
-			hits, err := reader.FindSymbol(ctx, "APIOnlySymbol", "", tc.project, 10, nil)
+			hits, err := reader.FindSymbol(ctx, "APIOnlySymbol", "", tc.project, 10, nil, "")
 			if err != nil {
 				t.Fatalf("find_symbol project=%q: %v", tc.project, err)
 			}
@@ -119,7 +119,7 @@ func TestIntegration_WorkspaceMode(t *testing.T) {
 	t.Run("unknown_project_returns_zero_not_unscoped", func(t *testing.T) {
 		// A typo'd project name must not silently fall back to an
 		// unscoped query — that would mask config bugs.
-		hits, err := reader.FindSymbol(ctx, "APIOnlySymbol", "", "does-not-exist", 10, nil)
+		hits, err := reader.FindSymbol(ctx, "APIOnlySymbol", "", "does-not-exist", 10, nil, "")
 		if err != nil {
 			t.Fatalf("find_symbol: %v", err)
 		}

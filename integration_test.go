@@ -92,7 +92,7 @@ func TestIntegration_IndexAndQuery(t *testing.T) {
 	})
 
 	t.Run("find_symbol", func(t *testing.T) {
-		hits, err := reader.FindSymbol(ctx, "AuthService", "", "", 10, nil)
+		hits, err := reader.FindSymbol(ctx, "AuthService", "", "", 10, nil, "")
 		if err != nil {
 			t.Fatalf("find_symbol: %v", err)
 		}
@@ -132,7 +132,7 @@ func TestIntegration_IndexAndQuery(t *testing.T) {
 	})
 
 	t.Run("get_file_outline", func(t *testing.T) {
-		out, err := reader.GetFileOutline(ctx, "main.go")
+		out, err := reader.GetFileOutline(ctx, "main.go", "")
 		if err != nil {
 			t.Fatalf("outline: %v", err)
 		}
@@ -166,7 +166,7 @@ func TestIntegration_IndexAndQuery(t *testing.T) {
 	})
 
 	t.Run("get_neighborhood_inbound", func(t *testing.T) {
-		nb, err := reader.GetNeighborhood(ctx, "NewGreeter", "", 2, query.DirIn)
+		nb, err := reader.GetNeighborhood(ctx, "NewGreeter", "", 2, query.DirIn, "")
 		if err != nil {
 			t.Fatalf("neighborhood: %v", err)
 		}

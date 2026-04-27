@@ -61,6 +61,7 @@ func main() {
 		newStatsCmd(),
 		newDoctorCmd(),
 		newSkillsCmd(),
+		newReadCmd(),
 	)
 
 	if err := root.Execute(); err != nil {
@@ -172,13 +173,15 @@ func newQueryCmd() *cobra.Command {
 			limit, _ := cmd.Flags().GetInt("limit")
 			project, _ := cmd.Flags().GetString("project")
 			since, _ := cmd.Flags().GetString("since")
-			return runQueryFind(args[0], kind, project, since, limit)
+			focus, _ := cmd.Flags().GetString("focus")
+			return runQueryFind(args[0], kind, project, since, focus, limit)
 		},
 	}
 	findCmd.Flags().String("kind", "", "filter by kind: function | method | type | interface | var | const")
 	findCmd.Flags().Int("limit", 20, "max results")
 	findCmd.Flags().String("project", "", "restrict to a workspace project (by name)")
 	findCmd.Flags().String("since", "", "restrict to files changed between <ref>...HEAD")
+	findCmd.Flags().String("focus", "", "v2.4 lexical focus filter — keep + rerank hits matching this hint")
 
 	refsCmd := &cobra.Command{
 		Use:   "refs <symbol>",
@@ -221,9 +224,11 @@ func newQueryCmd() *cobra.Command {
 		Short: "Print the hierarchical symbol outline of a single file",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runQueryOutline(args[0])
+			focus, _ := cmd.Flags().GetString("focus")
+			return runQueryOutline(args[0], focus)
 		},
 	}
+	outlineCmd.Flags().String("focus", "", "v2.4 lexical focus filter — keep top-level items whose subtree matches")
 
 	grepCmd := &cobra.Command{
 		Use:   "grep <pattern>",
@@ -259,12 +264,14 @@ func newQueryCmd() *cobra.Command {
 			depth, _ := cmd.Flags().GetInt("depth")
 			dir, _ := cmd.Flags().GetString("direction")
 			project, _ := cmd.Flags().GetString("project")
-			return runQueryNeighborhood(args[0], project, depth, dir)
+			focus, _ := cmd.Flags().GetString("focus")
+			return runQueryNeighborhood(args[0], project, depth, dir, focus)
 		},
 	}
 	neighborCmd.Flags().Int("depth", 2, "traversal depth (max 5)")
 	neighborCmd.Flags().String("direction", "both", "out | in | both")
 	neighborCmd.Flags().String("project", "", "restrict seed lookup to a workspace project (traversal remains global)")
+	neighborCmd.Flags().String("focus", "", "v2.4 lexical focus filter — drop unmatched leaves from the result")
 
 	impactCmd := &cobra.Command{
 		Use:   "impact <symbol>",
@@ -355,7 +362,7 @@ func resolveCLISince(ctx context.Context, rc repoCtx, since string) ([]string, e
 	return gitref.ResolveSince(ctx, rc.Root, since)
 }
 
-func runQueryFind(name, kind, project, since string, limit int) error {
+func runQueryFind(name, kind, project, since, focus string, limit int) error {
 	ctx := context.Background()
 	rc, err := loadRepoCtx()
 	if err != nil {
@@ -363,7 +370,7 @@ func runQueryFind(name, kind, project, since string, limit int) error {
 	}
 	var hits []query.SymbolHit
 	if c, ok := daemonClient(rc); ok {
-		if err := c.Call(ipc.MethodFindSymbol, ipc.FindSymbolParams{Name: name, Kind: kind, Project: project, Since: since, Limit: limit}, &hits); err != nil {
+		if err := c.Call(ipc.MethodFindSymbol, ipc.FindSymbolParams{Name: name, Kind: kind, Project: project, Since: since, Limit: limit, Focus: focus}, &hits); err != nil {
 			return err
 		}
 	} else {
@@ -377,7 +384,7 @@ func runQueryFind(name, kind, project, since string, limit int) error {
 		}
 		defer ix.Close()
 		r := query.NewReader(ix.DB())
-		hits, err = r.FindSymbol(ctx, name, kind, project, limit, paths)
+		hits, err = r.FindSymbol(ctx, name, kind, project, limit, paths, focus)
 		if err != nil {
 			return err
 		}
@@ -552,7 +559,7 @@ func runQuerySummary(path string) error {
 	return nil
 }
 
-func runQueryNeighborhood(target, project string, depth int, direction string) error {
+func runQueryNeighborhood(target, project string, depth int, direction, focus string) error {
 	ctx := context.Background()
 	rc, err := loadRepoCtx()
 	if err != nil {
@@ -560,7 +567,7 @@ func runQueryNeighborhood(target, project string, depth int, direction string) e
 	}
 	var nb query.Neighborhood
 	if c, ok := daemonClient(rc); ok {
-		if err := c.Call(ipc.MethodGetNeighborhood, ipc.GetNeighborhoodParams{Target: target, Project: project, Depth: depth, Direction: direction}, &nb); err != nil {
+		if err := c.Call(ipc.MethodGetNeighborhood, ipc.GetNeighborhoodParams{Target: target, Project: project, Depth: depth, Direction: direction, Focus: focus}, &nb); err != nil {
 			return err
 		}
 	} else {
@@ -570,7 +577,7 @@ func runQueryNeighborhood(target, project string, depth int, direction string) e
 		}
 		defer ix.Close()
 		r := query.NewReader(ix.DB())
-		nb, err = r.GetNeighborhood(ctx, target, project, depth, query.Direction(direction))
+		nb, err = r.GetNeighborhood(ctx, target, project, depth, query.Direction(direction), focus)
 		if err != nil {
 			return err
 		}
@@ -735,7 +742,7 @@ func runQuerySearch(q string, k int, kind, pathContains, project, since string) 
 	return nil
 }
 
-func runQueryOutline(path string) error {
+func runQueryOutline(path, focus string) error {
 	ctx := context.Background()
 	rc, err := loadRepoCtx()
 	if err != nil {
@@ -743,7 +750,7 @@ func runQueryOutline(path string) error {
 	}
 	var items []query.FileOutlineItem
 	if c, ok := daemonClient(rc); ok {
-		if err := c.Call(ipc.MethodGetFileOutline, ipc.GetFileOutlineParams{Path: path}, &items); err != nil {
+		if err := c.Call(ipc.MethodGetFileOutline, ipc.GetFileOutlineParams{Path: path, Focus: focus}, &items); err != nil {
 			return err
 		}
 	} else {
@@ -753,7 +760,7 @@ func runQueryOutline(path string) error {
 		}
 		defer ix.Close()
 		r := query.NewReader(ix.DB())
-		items, err = r.GetFileOutline(ctx, path)
+		items, err = r.GetFileOutline(ctx, path, focus)
 		if err != nil {
 			return err
 		}
@@ -1206,6 +1213,22 @@ func runDaemon(ctx context.Context, backendOverride string) error {
 		Telemetry: rec,
 	}
 
+	// v2.5 incremental skills regen: only wired when the user has
+	// previously compiled the tree (i.e. .mycelium/skills/ exists).
+	// Avoids surprising users who never opted into the skills feature
+	// with a regenerated tree on first daemon start.
+	skillsDir := filepath.Join(rc.Root, ".mycelium", "skills")
+	if info, err := os.Stat(skillsDir); err == nil && info.IsDir() {
+		reader := query.NewReader(ix.DB())
+		d.SkillsRegen = func(ctx context.Context, packages []string) error {
+			return skills.RegenerateAffected(ctx, reader, skills.Options{
+				OutDir: skillsDir,
+				Store:  ix,
+			}, packages)
+		}
+		fmt.Fprintf(os.Stderr, "[daemon] skills regen on: %s\n", skillsDir)
+	}
+
 	// Start the HTTP transport alongside the unix socket. Disabled when
 	// config.daemon.http_port = 0.
 	if rc.Cfg.Daemon.HTTPPort > 0 {
@@ -1291,6 +1314,8 @@ func newSkillsCompileCmd() *cobra.Command {
 		outDir       string
 		pkgFilter    string
 		aspectFilter string
+		status       bool
+		incremental  bool
 	)
 	cmd := &cobra.Command{
 		Use:   "compile",
@@ -1311,13 +1336,42 @@ func newSkillsCompileCmd() *cobra.Command {
 			if out == "" {
 				out = filepath.Join(rc.Root, ".mycelium", "skills")
 			}
-			start := time.Now()
-			err = skills.Compile(ctx, query.NewReader(ix.DB()), skills.Options{
+			opts := skills.Options{
 				OutDir:        out,
 				PackageFilter: pkgFilter,
 				AspectFilter:  aspectFilter,
-			})
-			if err != nil {
+			}
+			// --status renders + hashes every output but neither writes
+			// nor mutates the store: we want to know what *would* change
+			// against the real on-disk tree, not against a temp dir.
+			if status {
+				opts.Store = ix
+				opts.DryRun = true
+				stats := skills.Stats{}
+				opts.Stats = &stats
+				if err := skills.Compile(ctx, query.NewReader(ix.DB()), opts); err != nil {
+					return err
+				}
+				fmt.Printf("status: %d rendered, %d unchanged, %d would change\n",
+					stats.Rendered, stats.Skipped, stats.Written)
+				return nil
+			}
+			// --incremental writes through the index store so unchanged
+			// files are skipped (v2.5 default behaviour for the daemon).
+			if incremental {
+				opts.Store = ix
+				stats := skills.Stats{}
+				opts.Stats = &stats
+				start := time.Now()
+				if err := skills.Compile(ctx, query.NewReader(ix.DB()), opts); err != nil {
+					return err
+				}
+				fmt.Printf("compiled skills tree to %s (%s; rendered=%d wrote=%d skipped=%d)\n",
+					out, time.Since(start).Round(time.Millisecond), stats.Rendered, stats.Written, stats.Skipped)
+				return nil
+			}
+			start := time.Now()
+			if err := skills.Compile(ctx, query.NewReader(ix.DB()), opts); err != nil {
 				return err
 			}
 			fmt.Printf("compiled skills tree to %s (%s)\n", out, time.Since(start).Round(time.Millisecond))
@@ -1327,14 +1381,84 @@ func newSkillsCompileCmd() *cobra.Command {
 	cmd.Flags().StringVar(&outDir, "out", "", "output directory (default: .mycelium/skills/)")
 	cmd.Flags().StringVar(&pkgFilter, "package", "", "regenerate only this package directory (skips root index + aspects)")
 	cmd.Flags().StringVar(&aspectFilter, "aspect", "", "regenerate only this aspect (skips packages + root index)")
+	cmd.Flags().BoolVar(&status, "status", false, "report how many files would change without writing (v2.5)")
+	cmd.Flags().BoolVar(&incremental, "incremental", false, "use the v2.5 hash gate: only rewrite files whose rendered bytes differ")
+	return cmd
+}
+
+
+// newReadCmd is the v2.4 `myco read` subcommand: it returns a single
+// indexed file with non-focus-matching symbols collapsed to one-line
+// markers. Empty `--focus` returns the file in full (a daemon-mediated
+// alternative to `cat`).
+func newReadCmd() *cobra.Command {
+	var (
+		focus    string
+		showHdr  bool
+	)
+	cmd := &cobra.Command{
+		Use:   "read <path>",
+		Short: "Read one indexed file with non-matching symbols collapsed (v2.4)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := context.Background()
+			rc, err := loadRepoCtx()
+			if err != nil {
+				return err
+			}
+			path := args[0]
+			var fr query.FocusedRead
+			if c, ok := daemonClient(rc); ok {
+				if err := c.Call(ipc.MethodReadFocused, ipc.ReadFocusedParams{Path: path, Focus: focus}, &fr); err != nil {
+					return err
+				}
+			} else {
+				ix, err := openIndex(rc)
+				if err != nil {
+					return err
+				}
+				defer ix.Close()
+				r := query.NewReader(ix.DB())
+				fr, err = r.ReadFocused(ctx, rc.Root, path, focus)
+				if err != nil {
+					return err
+				}
+			}
+			if showHdr {
+				fmt.Fprintf(os.Stderr,
+					"# %s  focus=%q  expanded=%d/%d  bytes=%d/%d\n",
+					fr.Path, fr.Focus,
+					fr.Stats.ExpandedSymbols, fr.Stats.TotalSymbols,
+					fr.Stats.ReturnedBytes, fr.Stats.OriginalBytes,
+				)
+			}
+			fmt.Print(fr.Content)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&focus, "focus", "", "lexical focus hint; empty returns the full file")
+	cmd.Flags().BoolVar(&showHdr, "stats", false, "print collapse stats to stderr")
 	return cmd
 }
 
 // openIndex opens the repo's SQLite index and applies the vector-extension
 // config. Callers don't need to care whether sqlite-vec loaded — the
 // returned Index transparently handles both fast and fallback paths.
+//
+// Resolution order for the extension path:
+//
+//   1. config.index.vector.extension_path (explicit user override).
+//   2. The release-tarball-bundled library at <exe-dir>/lib/vec0.*.
+//   3. Empty — brute-force cosine fallback.
+//
+// Release builds get (2) for free; users on `go install` builds (no
+// bundled library) and CI test envs land at (3) unless they set (1).
 func openIndex(rc repoCtx) (*index.Index, error) {
-	return index.OpenWithExtension(rc.Root+"/"+rc.Cfg.Index.Path, rc.Cfg.Index.Vector.ExtensionPath)
+	extPath := rc.Cfg.Index.Vector.ExtensionPath
+	if extPath == "" {
+		extPath = index.DefaultExtensionPath()
+	}
+	return index.OpenWithExtension(rc.Root+"/"+rc.Cfg.Index.Path, extPath)
 }
 
 // buildWorkspaces materializes the v1.5 per-project walkers from config

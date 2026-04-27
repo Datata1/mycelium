@@ -189,6 +189,12 @@ func mapToolToIPC(tool string, rawArgs json.RawMessage) (string, any, error) {
 			return "", nil, err
 		}
 		return ipc.MethodCriticalPath, p, nil
+	case "read_focused":
+		var p ipc.ReadFocusedParams
+		if err := unmarshalArgs(rawArgs, &p); err != nil {
+			return "", nil, err
+		}
+		return ipc.MethodReadFocused, p, nil
 	default:
 		return "", nil, fmt.Errorf("unknown tool: %s", tool)
 	}

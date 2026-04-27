@@ -169,7 +169,7 @@ func TestIntegration_PathsInFilter(t *testing.T) {
 	ctx := context.Background()
 
 	// Unscoped: Greeter lives in main.go.
-	all, err := reader.FindSymbol(ctx, "Greeter", "", "", 10, nil)
+	all, err := reader.FindSymbol(ctx, "Greeter", "", "", 10, nil, "")
 	if err != nil {
 		t.Fatalf("find unscoped: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestIntegration_PathsInFilter(t *testing.T) {
 	}
 
 	t.Run("match_file", func(t *testing.T) {
-		hits, err := reader.FindSymbol(ctx, "Greeter", "", "", 10, []string{"main.go"})
+		hits, err := reader.FindSymbol(ctx, "Greeter", "", "", 10, []string{"main.go"}, "")
 		if err != nil {
 			t.Fatalf("find scoped: %v", err)
 		}
@@ -193,7 +193,7 @@ func TestIntegration_PathsInFilter(t *testing.T) {
 	})
 
 	t.Run("nonmatching_file", func(t *testing.T) {
-		hits, err := reader.FindSymbol(ctx, "Greeter", "", "", 10, []string{"src/auth.ts"})
+		hits, err := reader.FindSymbol(ctx, "Greeter", "", "", 10, []string{"src/auth.ts"}, "")
 		if err != nil {
 			t.Fatalf("find scoped: %v", err)
 		}
@@ -204,7 +204,7 @@ func TestIntegration_PathsInFilter(t *testing.T) {
 
 	t.Run("empty_slice_is_zero_rows", func(t *testing.T) {
 		// Empty (non-nil) slice = "--since matched nothing" — must return 0.
-		hits, err := reader.FindSymbol(ctx, "Greeter", "", "", 10, []string{})
+		hits, err := reader.FindSymbol(ctx, "Greeter", "", "", 10, []string{}, "")
 		if err != nil {
 			t.Fatalf("find empty: %v", err)
 		}

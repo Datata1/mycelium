@@ -27,6 +27,7 @@ const (
 	MethodSearchSemantic  = "search_semantic"
 	MethodImpactAnalysis  = "impact_analysis"  // v1.6
 	MethodCriticalPath    = "critical_path"    // v1.6
+	MethodReadFocused     = "read_focused"     // v2.4
 	MethodPing            = "ping"
 )
 
@@ -56,6 +57,7 @@ type FindSymbolParams struct {
 	Limit   int    `json:"limit,omitempty"`
 	Project string `json:"project,omitempty"` // v1.5 workspace scope
 	Since   string `json:"since,omitempty"`   // v1.6 PR scope (git ref)
+	Focus   string `json:"focus,omitempty"`   // v2.4 focused-reads filter
 }
 
 type GetReferencesParams struct {
@@ -74,7 +76,8 @@ type ListFilesParams struct {
 }
 
 type GetFileOutlineParams struct {
-	Path string `json:"path"`
+	Path  string `json:"path"`
+	Focus string `json:"focus,omitempty"` // v2.4
 }
 
 type SearchSemanticParams struct {
@@ -103,6 +106,7 @@ type GetNeighborhoodParams struct {
 	Depth     int    `json:"depth,omitempty"`
 	Direction string `json:"direction,omitempty"` // out | in | both
 	Project   string `json:"project,omitempty"`
+	Focus     string `json:"focus,omitempty"` // v2.4
 }
 
 // ImpactAnalysisParams is the v1.6 `impact_analysis` call. Depth
@@ -123,4 +127,12 @@ type CriticalPathParams struct {
 	Depth   int    `json:"depth,omitempty"`
 	K       int    `json:"k,omitempty"`
 	Project string `json:"project,omitempty"`
+}
+
+// ReadFocusedParams is the v2.4 `read_focused` call. The daemon
+// resolves the file relative to the repo root and renders it with
+// non-matching symbols collapsed to one-line markers.
+type ReadFocusedParams struct {
+	Path  string `json:"path"`
+	Focus string `json:"focus,omitempty"`
 }

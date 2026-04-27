@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/jdwiederstein/mycelium/internal/focus"
 )
 
 // Direction controls which edges get traversed by GetNeighborhood.
@@ -63,7 +65,7 @@ const MaxNeighborhoodDepth = 5
 // recursive CTEs on the `refs` table handle it just fine for depth 2–3 at
 // 50k-symbol scale. If deeper traversals ever become the primary workload,
 // this is the exact function to swap for a dedicated graph backend (Kùzu).
-func (r *Reader) GetNeighborhood(ctx context.Context, target, project string, depth int, direction Direction) (Neighborhood, error) {
+func (r *Reader) GetNeighborhood(ctx context.Context, target, project string, depth int, direction Direction, focusQ string) (Neighborhood, error) {
 	// v1.5 workspace-mode note: `project` filters the *seed* lookup only.
 	// Once we've found the seed symbol, the recursive CTE walks refs
 	// across all projects — cross-project call graphs are exactly the
@@ -150,7 +152,50 @@ func (r *Reader) GetNeighborhood(ctx context.Context, target, project string, de
 			result.Nodes = append(result.Nodes, nodes...)
 		}
 	}
+	if tokens := focus.Tokenize(focusQ); len(tokens) > 0 {
+		seedIDs := map[int64]bool{seedID: true}
+		for _, e := range expansion {
+			seedIDs[e.ID] = true
+		}
+		applyFocusToNeighborhood(tokens, &result, seedIDs)
+	}
 	return result, nil
+}
+
+// applyFocusToNeighborhood prunes nodes that don't match focus AND aren't
+// the seed (or an inheritance-expansion sibling). Edges referencing
+// pruned nodes are dropped. Notes records the prune count so agents can
+// reason about why the graph shrank.
+func applyFocusToNeighborhood(tokens []string, n *Neighborhood, seeds map[int64]bool) {
+	keep := make(map[int64]bool, len(n.Nodes))
+	var kept []NeighborNode
+	for _, nd := range n.Nodes {
+		if seeds[nd.ID] {
+			keep[nd.ID] = true
+			kept = append(kept, nd)
+			continue
+		}
+		if _, ok := focus.MatchTokens(tokens, focus.Candidate{Qualified: nd.Qualified}); ok {
+			keep[nd.ID] = true
+			kept = append(kept, nd)
+		}
+	}
+	prunedNodes := len(n.Nodes) - len(kept)
+	n.Nodes = kept
+	keptEdges := n.Edges[:0]
+	for _, e := range n.Edges {
+		if keep[e.FromID] && keep[e.ToID] {
+			keptEdges = append(keptEdges, e)
+		}
+	}
+	prunedEdges := len(n.Edges) - len(keptEdges)
+	n.Edges = keptEdges
+	if prunedNodes > 0 || prunedEdges > 0 {
+		n.Notes = append(n.Notes, fmt.Sprintf(
+			"focus filter pruned %d node(s) and %d edge(s)",
+			prunedNodes, prunedEdges,
+		))
+	}
 }
 
 func idsOf(nodes []NeighborNode) []int64 {

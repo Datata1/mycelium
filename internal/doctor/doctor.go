@@ -10,6 +10,8 @@ package doctor
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/jdwiederstein/mycelium/internal/config"
 	"github.com/jdwiederstein/mycelium/internal/query"
@@ -286,7 +288,59 @@ func Run(ctx context.Context, r *query.Reader, embedderProvider string, th Thres
 		},
 	})
 
+	// v2.5: skills tree coverage. Skipped entirely when
+	// .mycelium/skills/ doesn't exist — the feature is opt-in, so
+	// showing a failing check on a fresh repo would be noise. Once any
+	// package has been rendered we expect on-disk == indexed; warn
+	// below 0.95 and fail below 0.5 to flag stale / partially-deleted
+	// trees. Walking the filesystem (vs reading skill_files) catches
+	// the case where the DB row outlives the file on disk.
+	if repoRoot != "" {
+		skillsRoot := filepath.Join(repoRoot, ".mycelium", "skills", "packages")
+		if onDisk := countSkillFiles(skillsRoot); onDisk > 0 && s.SkillsPackagesIndexed > 0 {
+			coverage := float64(onDisk) / float64(s.SkillsPackagesIndexed)
+			level := LevelPass
+			switch {
+			case coverage < 0.5:
+				level = LevelFail
+			case coverage < 0.95:
+				level = LevelWarn
+			}
+			add(Check{
+				Name:  "skills_coverage",
+				Level: level,
+				Message: fmt.Sprintf(
+					"%d/%d packages have a SKILL.md (%.0f%%)",
+					onDisk, s.SkillsPackagesIndexed, coverage*100,
+				),
+				Detail: map[string]any{
+					"on_disk":  onDisk,
+					"indexed":  s.SkillsPackagesIndexed,
+					"coverage": coverage,
+				},
+			})
+		}
+	}
+
 	return rep, nil
+}
+
+// countSkillFiles walks <skills>/packages/**/SKILL.md and returns the
+// count. Returns 0 (not an error) when the dir is missing — the doctor
+// caller treats absence as "skills feature not enabled" rather than a
+// failure.
+func countSkillFiles(skillsPackagesDir string) int {
+	count := 0
+	_ = filepath.Walk(skillsPackagesDir, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if !info.IsDir() && filepath.Base(p) == "SKILL.md" {
+			count++
+		}
+		return nil
+	})
+	return count
 }
 
 // ThresholdsFromConfig lets users override defaults via the embedder block

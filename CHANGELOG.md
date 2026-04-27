@@ -8,6 +8,133 @@ to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **v3.0-rc polish + docs.** Canonicalises the `docs/` layout (the
+  old root `RESEARCH.md` moves to `docs/research.md` and gains a
+  design-decision crosswalk plus a "read but not acted on" section),
+  rewrites the README around the v3 agent-native story (skills tree
+  and focused reads as the headline; structural MCP tools demoted
+  to "for programmatic use") while leaving the project header /
+  badges untouched, ships `docs/adoption.md` as a guide to verifying
+  agent uptake via the v2.2 telemetry log, and adds a navigation
+  integration test (`navigation_integration_test.go`) that
+  mechanises `docs/navigation-example.md` so the
+  `INDEX.md → SKILL.md → read_focused` path is enforced in CI.
+  Release tarballs now bundle the matching sqlite-vec shared library
+  next to the binary, and `index.OpenWithExtension` auto-discovers
+  it when `index.vector.extension_path` is left empty in
+  `.mycelium.yml` — semantic search at scale is now zero-config on
+  release builds.
+- **Incremental skills regeneration (Pillar H, v2.5 in the v3 plan).**
+  The v2.3 skills tree gets a hash gate: every rendered file (per-
+  package SKILL.md, per-aspect INDEX.md, root INDEX.md) is hashed
+  before write; if `skill_files.skill_hash` matches, the WriteFile and
+  store update are both skipped. New migration `0006_skills.sql`
+  introduces the `skill_files` table; new `internal/index` helpers
+  (`SkillFileHash`, `UpsertSkillFile`, `DeleteSkillFile`,
+  `PruneSkillFiles`, `ListSkillFiles`) satisfy a small `skills.Store`
+  interface so the renderer stays storage-agnostic. `Compile` grows
+  `Options.Store`, `Options.Stats`, `Options.DryRun`; passing a Store
+  enables hash-gated writes, and Stats reports `Rendered / Written /
+  Skipped / Pruned`. The wall-clock `generated:` frontmatter line is
+  stripped from the hash input so two renders of the same structural
+  content produce the same hash regardless of when they ran — without
+  this the gate would fire on every daemon batch and defeat the
+  whole milestone.
+- **Daemon-driven incremental regen.** New `Daemon.SkillsRegen
+  func(ctx, packages []string) error` field plus a debounced batcher in
+  the watcher event loop: every `path.Dir(relPath)` from
+  `Pipeline.HandleChange` is collected into a dedup set, and after
+  `SkillsDebounce` (default 200ms) of channel idle the batch is
+  flushed to a worker goroutine that calls SkillsRegen exactly once.
+  A second worker serialises regen calls so two bursts can't race on
+  the same `.mycelium/skills/` tree. `cmd/myco daemon` wires
+  SkillsRegen to `skills.RegenerateAffected` only when
+  `.mycelium/skills/` already exists, so users who never opted into
+  the skills feature aren't surprised by a regenerated tree.
+  `RegenerateAffected` for v2.5 is a thin wrapper over `Compile` with
+  the Store set: the per-render cost is ~100ms on the self-index and
+  the hash gate makes the actual write cost zero on a clean tree, so
+  fully exploiting per-package short-circuiting was deferred — the
+  packages slice is captured for telemetry and reserved for a future
+  optimisation hook.
+- **`skills_coverage` doctor metric.** New `Stats.SkillsPackagesIndexed`
+  (distinct directories holding indexed files) plus a filesystem walk
+  in `internal/doctor` that counts present `SKILL.md` files under
+  `.mycelium/skills/packages/`. Coverage = on-disk / indexed; pass at
+  ≥ 0.95, warn below, fail below 0.5. Skipped when the skills dir
+  doesn't exist (opt-in feature, not a regression). Walking the
+  filesystem rather than reading `skill_files` catches the case where
+  the DB row outlives the file on disk.
+- **`myco skills compile --status` and `--incremental` flags.**
+  `--status` runs the renderer in DryRun mode against the live
+  `skill_files` hashes and reports `rendered / unchanged / would
+  change` without touching disk or the DB. `--incremental` is the
+  hash-gated equivalent of `compile`: it writes only the files whose
+  rendered bytes differ and prints the same per-call counters the
+  daemon logs.
+
+### Measured
+
+- **v2.5 hash gate on the self-index (Tiger Lake, 105 files / 30
+  packages / 35 rendered files).** Cold compile: 35 rendered, 35
+  written, ~100ms. Warm compile (no source changes): 35 rendered, 0
+  written, 35 skipped, ~70ms. Single-symbol change (added one
+  top-level `func`): 35 rendered, 6 written, 29 skipped — the changed
+  package + root INDEX.md + four aspect indices. Pure-formatting
+  source change (added a blank line to a comment): 35 rendered, 0
+  written, 35 skipped — the index hash didn't move, so neither did
+  the SKILL.md hash.
+
+- **Focused reads (Pillar I, v2.4 in the v3 plan).** New
+  `internal/focus` package implements the deterministic lexical filter
+  promised by the v3 roadmap: tokenize a focus string (lowercase,
+  stopword-strip), then score candidates against name (3.0 exact / 2.0
+  substring), qualified name (2.0 substring), docstring (1.0
+  substring), and ref targets (0.5 substring). Pure Go, no neural
+  model — we adopt the SWE-Pruner *pattern* but explicitly not the
+  *mechanism*, so the single-static-binary distribution story holds.
+  Wired into three existing reader methods as an optional `focus`
+  param: `FindSymbol` drops non-matchers and re-ranks survivors by
+  score; `GetFileOutline` keeps top-level items whose subtree
+  contains any match; `GetNeighborhood` prunes nodes outside the
+  focus and surfaces a `focus filter pruned N node(s)` note. Empty
+  focus is byte-identical to prior behaviour — verified by the
+  pre-existing integration suite.
+- **`read_focused` MCP tool / `myco read` CLI.** New top-level read
+  primitive that returns one indexed file with non-focus-matching
+  symbols collapsed to one-line markers in the file's native
+  comment style (`// signature ...  // collapsed (lines N-M)` for
+  Go/TS/JS, `# ...` for Python). Empty focus returns the file in
+  full, so the tool also functions as a daemon-mediated `cat` when
+  the agent isn't sure how big the file is. Multi-line signatures
+  (Go interface bodies, struct definitions) are flattened to their
+  first line with `…` appended so the marker stays single-line.
+  Response carries a `Stats { TotalSymbols, ExpandedSymbols,
+  OriginalBytes, ReturnedBytes }` block plus an `Expanded` list of
+  surviving symbols with their original `[StartLine, EndLine]` ranges
+  so agents can map back to source. Wire-up: new `Focus` field on
+  `FindSymbolParams`/`GetFileOutlineParams`/`GetNeighborhoodParams`,
+  new `ReadFocusedParams` + `MethodReadFocused`, daemon dispatch,
+  MCP tool schema entry, HTTP route auto-derived from the
+  dispatcher, `--focus` flag on `myco query find|outline|neighbors`,
+  and `myco read <path> --focus "<q>"` (with `--stats` for the
+  collapse counters on stderr).
+
+### Measured
+
+- **`read_focused` byte reduction (self-index, Tiger Lake).** Three
+  representative queries on this repo:
+  | file | focus | returned/original | reduction |
+  |---|---|---|---|
+  | cmd/myco/main.go (44 KB) | "telemetry recorder" | 8443 / 44337 | 81% |
+  | cmd/myco/main.go (44 KB) | "skills compile" | 8909 / 44337 | 80% |
+  | internal/daemon/daemon.go (9 KB) | "dispatch read_focused" | 6540 / 9163 | 29% |
+  Results vary with focus specificity and file shape — large files
+  with many independent symbols collapse aggressively, small dense
+  files less so. We're explicitly not claiming SWE-Pruner's 23–54%
+  range against a trained reranker; the lexical filter trades
+  precision for distribution simplicity.
+
 - **Static skills tree (Pillar L, v2.3 in the v3 plan).** New
   `internal/skills` package + `myco skills compile` CLI generate a
   deterministic Markdown tree under `.mycelium/skills/` that an agent

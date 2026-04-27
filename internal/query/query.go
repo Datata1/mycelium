@@ -4,8 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"path"
+	"sort"
 	"strings"
 	"time"
+
+	"github.com/jdwiederstein/mycelium/internal/focus"
 )
 
 // Reader is the query-side handle. It takes an already-open *sql.DB (owned by
@@ -42,7 +46,12 @@ type SymbolHit struct {
 // pathsIn (v1.6) additionally restricts to a fixed set of repo-relative
 // paths (the `--since <ref>` filter). nil = unscoped; empty slice =
 // zero rows (distinguishes "no filter" from "no changes").
-func (r *Reader) FindSymbol(ctx context.Context, name, kind, project string, limit int, pathsIn []string) ([]SymbolHit, error) {
+//
+// focus (v2.4) is a free-text hint. When non-empty, hits whose name,
+// qualified name, or docstring fail the focus.Match filter are dropped,
+// and survivors are re-ranked by focus score (descending). Empty focus
+// preserves the v1.6 behaviour byte-for-byte.
+func (r *Reader) FindSymbol(ctx context.Context, name, kind, project string, limit int, pathsIn []string, focusQ string) ([]SymbolHit, error) {
 	if limit <= 0 {
 		limit = 20
 	}
@@ -96,7 +105,47 @@ func (r *Reader) FindSymbol(ctx context.Context, name, kind, project string, lim
 		}
 		hits = append(hits, h)
 	}
-	return hits, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if tokens := focus.Tokenize(focusQ); len(tokens) > 0 {
+		hits = applyFocusToHits(tokens, hits)
+	}
+	return hits, nil
+}
+
+// applyFocusToHits drops hits with no focus match and reorders survivors
+// by focus score (descending), preserving original order on ties so the
+// SQL-side LIKE+length tiebreak still wins for equal scores.
+func applyFocusToHits(tokens []string, hits []SymbolHit) []SymbolHit {
+	type scored struct {
+		h     SymbolHit
+		score float64
+		ord   int
+	}
+	keep := make([]scored, 0, len(hits))
+	for i, h := range hits {
+		score, ok := focus.MatchTokens(tokens, focus.Candidate{
+			Name:      h.Name,
+			Qualified: h.Qualified,
+			Docstring: h.Docstring,
+		})
+		if !ok {
+			continue
+		}
+		keep = append(keep, scored{h: h, score: score, ord: i})
+	}
+	sort.SliceStable(keep, func(i, j int) bool {
+		if keep[i].score != keep[j].score {
+			return keep[i].score > keep[j].score
+		}
+		return keep[i].ord < keep[j].ord
+	})
+	out := make([]SymbolHit, len(keep))
+	for i, s := range keep {
+		out[i] = s.h
+	}
+	return out
 }
 
 // ReferenceHit is one call/import/type-use site pointing at a symbol.
@@ -322,7 +371,10 @@ type FileOutlineItem struct {
 
 // GetFileOutline returns the hierarchical symbol tree for a file. Parent
 // relationships drive the tree; parentless symbols sit at the top level.
-func (r *Reader) GetFileOutline(ctx context.Context, path string) ([]FileOutlineItem, error) {
+//
+// focus (v2.4) — when non-empty, top-level items are kept iff they or any
+// descendant matches focus. Empty focus preserves prior behaviour.
+func (r *Reader) GetFileOutline(ctx context.Context, path, focusQ string) ([]FileOutlineItem, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT s.id, s.name, s.qualified, s.kind, s.start_line, s.end_line,
 		       COALESCE(s.signature, ''), COALESCE(s.parent_id, 0)
@@ -373,7 +425,39 @@ func (r *Reader) GetFileOutline(ctx context.Context, path string) ([]FileOutline
 			parent.Children = append(parent.Children, rr.FileOutlineItem)
 		}
 	}
+	if tokens := focus.Tokenize(focusQ); len(tokens) > 0 {
+		out = filterOutlineByFocus(tokens, out)
+	}
 	return out, nil
+}
+
+// filterOutlineByFocus drops top-level items whose subtree (item +
+// children, recursively) contains no focus match. Children of a kept
+// item are not pruned — once an item earns its place, the agent gets
+// the full sub-outline.
+func filterOutlineByFocus(tokens []string, items []FileOutlineItem) []FileOutlineItem {
+	var keep []FileOutlineItem
+	for _, it := range items {
+		if outlineMatches(tokens, it) {
+			keep = append(keep, it)
+		}
+	}
+	return keep
+}
+
+func outlineMatches(tokens []string, it FileOutlineItem) bool {
+	if _, ok := focus.MatchTokens(tokens, focus.Candidate{
+		Name:      it.Name,
+		Qualified: it.Qualified,
+	}); ok {
+		return true
+	}
+	for _, c := range it.Children {
+		if outlineMatches(tokens, c) {
+			return true
+		}
+	}
+	return false
 }
 
 // Stats mirrors the write-side stats but lives here so all reads come from
@@ -413,6 +497,12 @@ type Stats struct {
 	// so users can confirm the fan-out is actually populated.
 	InterfaceImplementsRefs   int `json:"interface_implements_refs"`
 	InterfaceConcreteTypes    int `json:"interface_concrete_types"`
+	// v2.5 skills coverage: distinct package directories the index
+	// knows about. The on-disk count comes from a filesystem walk in
+	// the doctor layer (so missing files are caught even when the
+	// skill_files DB row still exists). 0 when the user never ran
+	// `myco skills compile`.
+	SkillsPackagesIndexed int `json:"skills_packages_indexed"`
 	LastScan                  time.Time `json:"last_scan"`
 }
 
@@ -550,6 +640,23 @@ func (r *Reader) Stats(ctx context.Context) (Stats, error) {
 	_ = r.db.QueryRowContext(ctx,
 		`SELECT COUNT(DISTINCT src_symbol_id) FROM refs WHERE kind = 'inherit'`,
 	).Scan(&s.InterfaceConcreteTypes)
+
+	// v2.5 skills coverage. SkillsPackagesIndexed = distinct
+	// directories holding indexed files (same shape as
+	// Compile.discoverPackages). On-disk count is computed by the
+	// caller (doctor) via a filesystem walk so missing-file detection
+	// works even when the skill_files DB row still exists.
+	if pathRows, err := r.db.QueryContext(ctx, `SELECT path FROM files`); err == nil {
+		dirs := map[string]struct{}{}
+		for pathRows.Next() {
+			var p string
+			if err := pathRows.Scan(&p); err == nil {
+				dirs[path.Dir(p)] = struct{}{}
+			}
+		}
+		pathRows.Close()
+		s.SkillsPackagesIndexed = len(dirs)
+	}
 
 	// SQLite page stats. freelist_count / page_count is a cheap
 	// fragmentation proxy that tells VACUUM whether it'd pay off.

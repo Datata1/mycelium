@@ -46,6 +46,10 @@ func Tools() []Tool {
 						"type":        "string",
 						"description": "Optional git ref. Restricts to files changed between <ref>...HEAD (v1.6).",
 					},
+					"focus": map[string]any{
+						"type":        "string",
+						"description": "Optional v2.4 focus hint. Drops hits that don't match and re-ranks survivors by lexical relevance to this string.",
+					},
 				},
 				"required": []string{"name"},
 			},
@@ -114,6 +118,10 @@ func Tools() []Tool {
 					"path": map[string]any{
 						"type":        "string",
 						"description": "Repo-relative path to the file.",
+					},
+					"focus": map[string]any{
+						"type":        "string",
+						"description": "Optional v2.4 focus hint. Keeps top-level items whose subtree contains a lexical match against this string.",
 					},
 				},
 				"required": []string{"path"},
@@ -184,6 +192,10 @@ func Tools() []Tool {
 					"project": map[string]any{
 						"type":        "string",
 						"description": "Optional workspace project — scopes the seed lookup only; traversal remains global so cross-project edges still surface.",
+					},
+					"focus": map[string]any{
+						"type":        "string",
+						"description": "Optional v2.4 focus hint. Prunes nodes that don't lexically match (the seed always survives); a note records the prune count.",
 					},
 				},
 				"required": []string{"target"},
@@ -281,6 +293,24 @@ func Tools() []Tool {
 					},
 				},
 				"required": []string{"from", "to"},
+			},
+		},
+		{
+			Name:        "read_focused",
+			Description: "Read one indexed file with non-matching symbols collapsed to one-line markers. The 'focus' hint is matched lexically against symbol names, qualified names, and docstrings; matched symbols are returned in full, others are replaced with '<comment> signature  <comment> collapsed (lines N-M)'. Empty focus returns the full file. Use this in place of a raw Read when you only care about specific symbols in a large file (v2.4).",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path": map[string]any{
+						"type":        "string",
+						"description": "Repo-relative path to the file.",
+					},
+					"focus": map[string]any{
+						"type":        "string",
+						"description": "Free-text focus hint (e.g. 'auth login flow'). Empty = expand everything.",
+					},
+				},
+				"required": []string{"path"},
 			},
 		},
 		{

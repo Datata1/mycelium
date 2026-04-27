@@ -97,7 +97,7 @@ func BenchmarkQueryFindSymbol(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := r.FindSymbol(context.Background(), "Action0500_4", "", "", 10, nil); err != nil {
+		if _, err := r.FindSymbol(context.Background(), "Action0500_4", "", "", 10, nil, ""); err != nil {
 			b.Fatalf("FindSymbol: %v", err)
 		}
 	}
@@ -125,7 +125,7 @@ func BenchmarkQueryNeighborhood(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := r.GetNeighborhood(context.Background(), "pkg0500.NewKind500", "", 2, query.DirBoth); err != nil {
+		if _, err := r.GetNeighborhood(context.Background(), "pkg0500.NewKind500", "", 2, query.DirBoth, ""); err != nil {
 			b.Fatalf("neighborhood: %v", err)
 		}
 	}
