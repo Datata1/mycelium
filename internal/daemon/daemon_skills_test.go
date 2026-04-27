@@ -73,6 +73,11 @@ func TestDaemon_SkillsRegen_BatchesAcrossDebounce(t *testing.T) {
 		mu    sync.Mutex
 		calls [][]string
 	)
+	// flush signals every SkillsRegen invocation so the test can wait
+	// deterministically instead of sleeping. Buffered to never block
+	// the worker; capacity 4 absorbs spurious extra fires that the
+	// later assertion turns into a clear failure.
+	flush := make(chan []string, 4)
 	d := &Daemon{
 		Pipeline:       p,
 		Reader:         query.NewReader(ix.DB()),
@@ -82,10 +87,14 @@ func TestDaemon_SkillsRegen_BatchesAcrossDebounce(t *testing.T) {
 		SkillsDebounce: 50 * time.Millisecond,
 		SkillsRegen: func(_ context.Context, pkgs []string) error {
 			mu.Lock()
-			defer mu.Unlock()
 			cp := append([]string(nil), pkgs...)
 			sort.Strings(cp)
 			calls = append(calls, cp)
+			mu.Unlock()
+			select {
+			case flush <- cp:
+			default:
+			}
 			return nil
 		},
 		Logger: silentLogger{},
@@ -100,7 +109,19 @@ func TestDaemon_SkillsRegen_BatchesAcrossDebounce(t *testing.T) {
 	// Two events in the same burst → one batch with both packages.
 	wat.Push(watch.Event{RelPath: "a/a.go", AbsPath: filepath.Join(root, "a", "a.go")})
 	wat.Push(watch.Event{RelPath: "b/b.go", AbsPath: filepath.Join(root, "b", "b.go")})
-	time.Sleep(150 * time.Millisecond)
+
+	// Wait for the first flush instead of sleeping a fixed window —
+	// macOS CI runners under -race can blow past a sleep budget that
+	// works locally on Linux. 5s is the upper bound; the actual wait
+	// is one debounce window (~50ms) plus goroutine scheduling.
+	var got []string
+	select {
+	case got = <-flush:
+	case <-time.After(5 * time.Second):
+		cancel()
+		<-done
+		t.Fatalf("SkillsRegen never fired within 5s; calls=%v", calls)
+	}
 
 	cancel()
 	<-done
@@ -108,9 +129,8 @@ func TestDaemon_SkillsRegen_BatchesAcrossDebounce(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	if len(calls) != 1 {
-		t.Fatalf("expected 1 SkillsRegen call, got %d: %+v", len(calls), calls)
+		t.Fatalf("expected exactly 1 SkillsRegen call, got %d: %+v", len(calls), calls)
 	}
-	got := calls[0]
 	want := []string{"a", "b"}
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Errorf("got packages %v, want %v", got, want)

@@ -71,10 +71,30 @@ func runBackend(t *testing.T, backend string) []Event {
 		t.Fatalf("remove: %v", err)
 	}
 
-	// Wait long enough for debounce + coalesce to flush.
-	// DebounceMS=20 + CoalesceMS=50 means ~100ms is plenty in theory;
-	// we sleep 400ms to give slow CI a cushion.
-	time.Sleep(400 * time.Millisecond)
+	// Poll until both expected paths have arrived, with a generous
+	// upper bound. fsnotify on macOS occasionally takes >1s to
+	// deliver CREATE events for files written immediately after a
+	// watch is registered; a fixed 400ms sleep was flaking on
+	// macos-latest CI runners under -race. Poll resolution is 25ms
+	// so the common case still finishes well under 200ms.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		seenA, seenB := false, false
+		for _, ev := range got {
+			if ev.RelPath == "a.go" {
+				seenA = true
+			}
+			if ev.RelPath == "b.go" {
+				seenB = true
+			}
+		}
+		mu.Unlock()
+		if seenA && seenB {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 	cancel()
 	<-done
 
