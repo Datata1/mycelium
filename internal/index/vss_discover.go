@@ -34,11 +34,19 @@ func DefaultExtensionPath() string {
 	if err != nil {
 		return ""
 	}
-	dir := filepath.Dir(exe)
-	libName := "vec0" + extensionSuffix()
+	return resolveBundledExtension(filepath.Dir(exe), extensionSuffix())
+}
+
+// resolveBundledExtension is the testable core of DefaultExtensionPath:
+// given an executable directory and a platform-specific extension
+// suffix, return the first matching bundled-library path or "".
+// Split out so tests can pin both inputs without spoofing
+// os.Executable.
+func resolveBundledExtension(exeDir, suffix string) string {
+	libName := "vec0" + suffix
 	for _, candidate := range []string{
-		filepath.Join(dir, "lib", libName),
-		filepath.Join(dir, libName),
+		filepath.Join(exeDir, "lib", libName),
+		filepath.Join(exeDir, libName),
 	} {
 		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
 			return candidate

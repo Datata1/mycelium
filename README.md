@@ -159,17 +159,26 @@ For programmatic use, the structural tools are unchanged. See
 ### From release binaries (recommended)
 
 Grab the tarball for your platform from
-[GitHub Releases](https://github.com/jdwiederstein/mycelium/releases):
+[GitHub Releases](https://github.com/jdwiederstein/mycelium/releases).
+Each archive unpacks to a self-contained directory containing the
+`myco` binary and a bundled `sqlite-vec` shared library at
+`lib/vec0.*`. The binary auto-discovers the bundled library, so the
+vec0 fast path for `search_semantic` works with zero extra config.
 
 ```bash
 # Linux amd64
 curl -sSL https://github.com/jdwiederstein/mycelium/releases/latest/download/myco-linux-amd64.tar.gz \
-  | tar -xz -C /tmp && sudo mv /tmp/myco-linux-amd64 /usr/local/bin/myco
+  | tar -xz -C /opt && sudo ln -sf /opt/myco-linux-amd64/myco /usr/local/bin/myco
 
 # macOS arm64 (Apple Silicon)
 curl -sSL https://github.com/jdwiederstein/mycelium/releases/latest/download/myco-darwin-arm64.tar.gz \
-  | tar -xz -C /tmp && sudo mv /tmp/myco-darwin-arm64 /usr/local/bin/myco
+  | tar -xz -C /opt && sudo ln -sf /opt/myco-darwin-arm64/myco /usr/local/bin/myco
 ```
+
+`DefaultExtensionPath` follows the symlink and looks for `lib/vec0.*`
+next to the resolved binary, so the install layout above is the
+recommended one. If you'd rather not symlink, run
+`/opt/myco-<suffix>/myco` directly — same effect.
 
 Supported platforms: `linux/amd64`, `linux/arm64`, `darwin/amd64`,
 `darwin/arm64`, `windows/amd64`.
@@ -438,14 +447,32 @@ Without an embedder configured, `search_semantic` cleanly returns
 ### Scaling with sqlite-vec (v1.4+)
 
 The default brute-force cosine search works but scans every embedding per
-query — fine below ~10k chunks, painful above. For larger repos install
-the [sqlite-vec](https://github.com/asg017/sqlite-vec) extension and point
-the config at it:
+query — fine below ~10k chunks, painful above.
+
+**Release tarballs (v3.0-rc+) ship a matching
+[sqlite-vec](https://github.com/asg017/sqlite-vec) build at
+`lib/vec0.*` next to the `myco` binary.** `internal/index.DefaultExtensionPath`
+auto-discovers it, so on a release install the vec0 fast path is on by
+default — no config edit needed. The vec0 version we pin is in
+`.github/workflows/release.yml`.
+
+Resolution order (first hit wins):
+
+1. `index.vector.extension_path` in `.mycelium.yml` — explicit user
+   override, always preferred.
+2. `<exe-dir>/lib/vec0.<ext>` — release-tarball layout.
+3. `<exe-dir>/vec0.<ext>` — same dir as the binary, in case someone
+   unpacked the archive flat.
+4. Empty — brute-force cosine fallback.
+
+Source builds (`go install` / `go build`) don't ship with a bundled
+library, so on those installs you'll want to either install
+sqlite-vec system-wide or point `extension_path` at a downloaded
+build. Example on Linux amd64:
 
 ```bash
-# Install: pick the right prebuilt .so/.dylib/.dll for your platform from
+# Pick the right prebuilt .so/.dylib/.dll for your platform from
 #   https://github.com/asg017/sqlite-vec/releases
-# Example on Linux amd64:
 mkdir -p /usr/local/lib/mycelium
 cp vec0.so /usr/local/lib/mycelium/vec0.so
 
