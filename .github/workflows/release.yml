@@ -62,7 +62,7 @@ jobs:
             cc: gcc
             suffix: windows-amd64
             ext: .exe
-            vec_asset: sqlite-vec-0.1.9-loadable-windows-x86_64.zip
+            vec_asset: sqlite-vec-0.1.9-loadable-windows-x86_64.tar.gz
             vec_member: vec0.dll
     runs-on: ${{ matrix.os }}
     steps:
@@ -127,10 +127,10 @@ jobs:
           URL="https://github.com/asg017/sqlite-vec/releases/download/${SQLITE_VEC_VERSION}/${ASSET}"
           echo "downloading ${URL}"
           curl -fsSL -o "${WORK}/${ASSET}" "${URL}"
-          case "${ASSET}" in
-            *.tar.gz) tar -xzf "${WORK}/${ASSET}" -C "${WORK}" ;;
-            *.zip)    (cd "${WORK}" && 7z x "${ASSET}" -y >/dev/null) ;;
-          esac
+          # All sqlite-vec loadable assets ship as .tar.gz, including
+          # the Windows one. Git Bash on the windows-latest runner has
+          # tar installed, so we don't need the 7z fallback.
+          tar -xzf "${WORK}/${ASSET}" -C "${WORK}"
           # Find the loadable lib regardless of nesting in the asset.
           FOUND="$(find "${WORK}" -type f -name "${MEMBER}" | head -n 1)"
           if [ -z "${FOUND}" ]; then
