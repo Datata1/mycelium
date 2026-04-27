@@ -67,7 +67,7 @@ func TestDaemon_SkillsRegen_BatchesAcrossDebounce(t *testing.T) {
 	}
 
 	wat := &fakeWatcher{events: make(chan watch.Event, 8)}
-	socket := filepath.Join(root, ".mycelium", "daemon.sock")
+	socket := shortSocketPath(t)
 
 	var (
 		mu    sync.Mutex
@@ -103,8 +103,15 @@ func TestDaemon_SkillsRegen_BatchesAcrossDebounce(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- d.Run(ctx) }()
-	// Give Run a moment to spin up the goroutines + listen on the socket.
-	time.Sleep(20 * time.Millisecond)
+	// Fail fast if Run errored out (e.g. socket bind failure on macOS,
+	// where the unix-socket path-length limit is tighter than Linux's).
+	// Without this peek the test would otherwise time out at 5s with a
+	// misleading "SkillsRegen never fired" message.
+	select {
+	case err := <-done:
+		t.Fatalf("daemon exited before events were pushed: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
 
 	// Two events in the same burst → one batch with both packages.
 	wat.Push(watch.Event{RelPath: "a/a.go", AbsPath: filepath.Join(root, "a", "a.go")})
@@ -162,14 +169,18 @@ func TestDaemon_SkillsRegen_NotInvokedWhenNil(t *testing.T) {
 		Pipeline: p,
 		Reader:   query.NewReader(ix.DB()),
 		Watcher:  wat,
-		Socket:   filepath.Join(root, ".mycelium", "daemon.sock"),
+		Socket:   shortSocketPath(t),
 		RepoRoot: root,
 		Logger:   silentLogger{},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- d.Run(ctx) }()
-	time.Sleep(20 * time.Millisecond)
+	select {
+	case err := <-done:
+		t.Fatalf("daemon exited before events were pushed: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
 	wat.Push(watch.Event{RelPath: "x.go", AbsPath: filepath.Join(root, "x.go")})
 	time.Sleep(80 * time.Millisecond)
 	cancel()
@@ -183,6 +194,22 @@ func writeFile(path, content string) error {
 		return err
 	}
 	return os.WriteFile(path, []byte(content), 0o644)
+}
+
+// shortSocketPath returns a unix socket path that fits in macOS's
+// 104-byte sun_path limit. t.TempDir() under `/var/folders/...` plus
+// the test name eats most of that budget, so we allocate the socket
+// in a dedicated short-prefix temp dir and clean it up after the
+// test. Linux's 108-byte limit is also satisfied — the helper is
+// platform-agnostic; the cause is just only ever observed on macOS.
+func shortSocketPath(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "myco-d-")
+	if err != nil {
+		t.Fatalf("mkdir temp socket dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return filepath.Join(dir, "s")
 }
 
 type silentLogger struct{}
