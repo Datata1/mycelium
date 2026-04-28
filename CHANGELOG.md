@@ -8,6 +8,71 @@ to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **v3.1 adoption-driven fixes (first slice of the broader-hyphae
+  roadmap).** Three surgical changes targeting the field-test
+  findings from a real TS-monorepo session: agents fell into the
+  documented "search_lexical only" pattern, `find_symbol` returned
+  `null` instead of an empty list with a hint, and `read_focused`
+  was never reached for despite multiple full-file reads.
+  - **A4 — `Stats.ConfiguredProjects` + `projects_configured_but_empty`
+    doctor check.** New `ProjectStats` shape (`name`, `root`,
+    `file_count`) populated from a LEFT JOIN on `projects` × `files`,
+    so a configured project whose include glob matched nothing still
+    appears with `file_count=0`. Doctor fails when any configured
+    project has zero files (likely a misconfigured `include` or
+    `root` in `.mycelium.yml`), warns under 10 files (likely a
+    too-narrow include), passes otherwise. Skipped entirely when no
+    `projects:` block is configured (single-project mode, the
+    default — keeps the report clean for the common case). New
+    thresholds `EmptyProjectFail` / `EmptyProjectWarn` in
+    `doctor.Thresholds`. Surfaced via `myco stats` as a per-project
+    file-count line. Tests in
+    `internal/doctor/doctor_projects_test.go` cover skip /
+    pass / warn / fail paths.
+  - **A1 — `FindSymbolResult{Matches, Hints}` envelope.**
+    `Reader.FindSymbol` now returns a result struct instead of a
+    bare `[]SymbolHit`. `Matches` is always non-nil (empty slice,
+    not nil → JSON `[]`, not `null`). When `Matches` is empty,
+    `Hints` populates with diagnostic lines explaining why a filter
+    eliminated everything: typo'd project name (with the configured
+    project list), `kind` filter that eliminated all real matches
+    (with the kinds the name actually matches), or unknown kind
+    value (with the index's known kinds). New `internal/query/diagnose.go`
+    holds the helpers; they only run on the empty-result path so
+    the hot path stays unchanged. Hint phrasing is intentionally a
+    flat `[]string` of human-readable lines so wording can iterate
+    without breaking schema. Integration tests in `integration_test.go`
+    cover successful match (no hints), bogus project (project hint),
+    kind-eliminated-all (kind hint), and genuine miss (no hints).
+  - **A3 — MCP tool descriptions rewritten for first-reach priming.**
+    Every entry in `pkg/mcpschema/tools.go` follows a uniform "what
+    it does + when to reach for me" shape. The five most-affected
+    tools (`find_symbol`, `read_focused`, `get_references`,
+    `get_neighborhood`, `search_lexical`) explicitly contrast with
+    the wrong-tool reflex agents fell into during the field test —
+    e.g. `search_lexical` now reads "Use this **only** for literal
+    strings or regex patterns. For symbol navigation prefer
+    `find_symbol`; for 'who calls X' prefer `get_references`."
+    Wording stays competitor-neutral ("the agent's general-purpose
+    file reader") rather than naming Claude Code tools literally
+    so it survives client renames. Structural test in
+    `pkg/mcpschema/tools_test.go` locks in ≥ 2 sentences + a
+    reach-for-me cue (one of `reach`/`use`/`instead`/`prefer`/
+    `before`/`after`) for every tool, plus a stricter contrast
+    assertion for the five high-priority tools.
+
+### Changed
+
+- **`Reader.FindSymbol` return shape.** `[]SymbolHit, error` →
+  `FindSymbolResult, error`. Direct callers in this repo
+  (`cmd/myco/main.go`, integration tests) updated; external
+  consumers of the IPC / HTTP / MCP `find_symbol` method see a JSON
+  shape change from `[…]` to `{"matches":[…], "hints":[…]}`. Other
+  query methods (`get_references`, `search_lexical`, etc.) keep
+  their bare-list shape — extending the envelope to them is a v3.2
+  / v3.3 decision once the shape proves itself in the field-test
+  re-run.
+
 - **v3.0-rc polish + docs.** Canonicalises the `docs/` layout (the
   old root `RESEARCH.md` moves to `docs/research.md` and gains a
   design-decision crosswalk plus a "read but not acted on" section),

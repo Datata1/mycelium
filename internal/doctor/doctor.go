@@ -75,6 +75,14 @@ type Thresholds struct {
 	// `git clone` away from fsnotify silently dropping watches.
 	InotifyWarn float64
 	InotifyFail float64
+	// v3.1: per-project file-count thresholds for the
+	// projects_configured_but_empty check. EmptyProjectFail = files
+	// strictly below this fail (default 1, i.e. 0 files fails);
+	// EmptyProjectWarn = files strictly below this warn (default 10,
+	// likely a misconfigured include pattern but maybe a legitimately
+	// tiny project).
+	EmptyProjectFail int
+	EmptyProjectWarn int
 }
 
 func DefaultThresholds() Thresholds {
@@ -87,8 +95,10 @@ func DefaultThresholds() Thresholds {
 		FragmentFail:   0.50,
 		StaleWarn:      1,
 		StaleFail:      1000,
-		InotifyWarn:    0.50,
-		InotifyFail:    0.90,
+		InotifyWarn:      0.50,
+		InotifyFail:      0.90,
+		EmptyProjectFail: 1,
+		EmptyProjectWarn: 10,
 	}
 }
 
@@ -287,6 +297,44 @@ func Run(ctx context.Context, r *query.Reader, embedderProvider string, th Thres
 			"inherit_refs":   s.InterfaceImplementsRefs,
 		},
 	})
+
+	// v3.1: workspace project configuration. Skipped when no
+	// projects: block is set (single-project mode, the default). When
+	// configured, every project should have indexed files; zero is a
+	// fail (the include pattern matched nothing or the project root
+	// is wrong) and a small handful warns (likely a too-narrow
+	// include glob, but might be a legitimately tiny project).
+	if len(s.ConfiguredProjects) > 0 {
+		var fails, warns []string
+		for _, p := range s.ConfiguredProjects {
+			switch {
+			case p.FileCount < th.EmptyProjectFail:
+				fails = append(fails, fmt.Sprintf("%s (0 files; root=%s)", p.Name, p.Root))
+			case p.FileCount < th.EmptyProjectWarn:
+				warns = append(warns, fmt.Sprintf("%s (%d files)", p.Name, p.FileCount))
+			}
+		}
+		level := LevelPass
+		msg := fmt.Sprintf("%d configured project(s) all populated", len(s.ConfiguredProjects))
+		switch {
+		case len(fails) > 0:
+			level = LevelFail
+			msg = fmt.Sprintf("empty project(s): %v — likely an include/root misconfiguration in .mycelium.yml", fails)
+		case len(warns) > 0:
+			level = LevelWarn
+			msg = fmt.Sprintf("project(s) with very few files: %v", warns)
+		}
+		add(Check{
+			Name:    "projects_configured_but_empty",
+			Level:   level,
+			Message: msg,
+			Detail: map[string]any{
+				"configured": s.ConfiguredProjects,
+				"fails":      fails,
+				"warns":      warns,
+			},
+		})
+	}
 
 	// v2.5: skills tree coverage. Skipped entirely when
 	// .mycelium/skills/ doesn't exist — the feature is opt-in, so

@@ -173,19 +173,19 @@ func TestIntegration_PathsInFilter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("find unscoped: %v", err)
 	}
-	if len(all) == 0 {
+	if len(all.Matches) == 0 {
 		t.Fatalf("expected Greeter in unscoped results")
 	}
 
 	t.Run("match_file", func(t *testing.T) {
-		hits, err := reader.FindSymbol(ctx, "Greeter", "", "", 10, []string{"main.go"}, "")
+		res, err := reader.FindSymbol(ctx, "Greeter", "", "", 10, []string{"main.go"}, "")
 		if err != nil {
 			t.Fatalf("find scoped: %v", err)
 		}
-		if len(hits) == 0 {
+		if len(res.Matches) == 0 {
 			t.Errorf("expected Greeter hit when pathsIn contains main.go")
 		}
-		for _, h := range hits {
+		for _, h := range res.Matches {
 			if !strings.HasSuffix(h.Path, "main.go") {
 				t.Errorf("unexpected path in scoped result: %s", h.Path)
 			}
@@ -193,23 +193,23 @@ func TestIntegration_PathsInFilter(t *testing.T) {
 	})
 
 	t.Run("nonmatching_file", func(t *testing.T) {
-		hits, err := reader.FindSymbol(ctx, "Greeter", "", "", 10, []string{"src/auth.ts"}, "")
+		res, err := reader.FindSymbol(ctx, "Greeter", "", "", 10, []string{"src/auth.ts"}, "")
 		if err != nil {
 			t.Fatalf("find scoped: %v", err)
 		}
-		if len(hits) != 0 {
-			t.Errorf("expected 0 hits when pathsIn excludes main.go; got %d", len(hits))
+		if len(res.Matches) != 0 {
+			t.Errorf("expected 0 hits when pathsIn excludes main.go; got %d", len(res.Matches))
 		}
 	})
 
 	t.Run("empty_slice_is_zero_rows", func(t *testing.T) {
 		// Empty (non-nil) slice = "--since matched nothing" — must return 0.
-		hits, err := reader.FindSymbol(ctx, "Greeter", "", "", 10, []string{}, "")
+		res, err := reader.FindSymbol(ctx, "Greeter", "", "", 10, []string{}, "")
 		if err != nil {
 			t.Fatalf("find empty: %v", err)
 		}
-		if len(hits) != 0 {
-			t.Errorf("empty pathsIn should yield 0 hits; got %d", len(hits))
+		if len(res.Matches) != 0 {
+			t.Errorf("empty pathsIn should yield 0 hits; got %d", len(res.Matches))
 		}
 	})
 }

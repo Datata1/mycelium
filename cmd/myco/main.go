@@ -368,9 +368,9 @@ func runQueryFind(name, kind, project, since, focus string, limit int) error {
 	if err != nil {
 		return err
 	}
-	var hits []query.SymbolHit
+	var result query.FindSymbolResult
 	if c, ok := daemonClient(rc); ok {
-		if err := c.Call(ipc.MethodFindSymbol, ipc.FindSymbolParams{Name: name, Kind: kind, Project: project, Since: since, Limit: limit, Focus: focus}, &hits); err != nil {
+		if err := c.Call(ipc.MethodFindSymbol, ipc.FindSymbolParams{Name: name, Kind: kind, Project: project, Since: since, Limit: limit, Focus: focus}, &result); err != nil {
 			return err
 		}
 	} else {
@@ -384,13 +384,17 @@ func runQueryFind(name, kind, project, since, focus string, limit int) error {
 		}
 		defer ix.Close()
 		r := query.NewReader(ix.DB())
-		hits, err = r.FindSymbol(ctx, name, kind, project, limit, paths, focus)
+		result, err = r.FindSymbol(ctx, name, kind, project, limit, paths, focus)
 		if err != nil {
 			return err
 		}
 	}
+	hits := result.Matches
 	if len(hits) == 0 {
 		fmt.Fprintln(os.Stderr, "no matches")
+		for _, h := range result.Hints {
+			fmt.Fprintf(os.Stderr, "  hint: %s\n", h)
+		}
 		return nil
 	}
 	for _, h := range hits {
@@ -833,6 +837,12 @@ func newStatsCmd() *cobra.Command {
 				fmt.Println("unresolved refs by language:")
 				for l, n := range s.UnresolvedByLanguage {
 					fmt.Printf("  %s: %d / %d\n", l, n, s.TotalByLanguage[l])
+				}
+			}
+			if len(s.ConfiguredProjects) > 0 {
+				fmt.Println("configured projects:")
+				for _, p := range s.ConfiguredProjects {
+					fmt.Printf("  %s (root=%s): %d files\n", p.Name, p.Root, p.FileCount)
 				}
 			}
 			return nil

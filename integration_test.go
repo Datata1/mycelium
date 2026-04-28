@@ -92,12 +92,62 @@ func TestIntegration_IndexAndQuery(t *testing.T) {
 	})
 
 	t.Run("find_symbol", func(t *testing.T) {
-		hits, err := reader.FindSymbol(ctx, "AuthService", "", "", 10, nil, "")
+		res, err := reader.FindSymbol(ctx, "AuthService", "", "", 10, nil, "")
 		if err != nil {
 			t.Fatalf("find_symbol: %v", err)
 		}
-		if !hasQualified(hits, "auth.AuthService") {
-			t.Errorf("expected auth.AuthService; got %+v", names(hits))
+		if !hasQualified(res.Matches, "auth.AuthService") {
+			t.Errorf("expected auth.AuthService; got %+v", names(res.Matches))
+		}
+		if len(res.Hints) != 0 {
+			t.Errorf("expected no hints on a successful match; got %v", res.Hints)
+		}
+	})
+
+	t.Run("find_symbol_hints_unknown_project", func(t *testing.T) {
+		res, err := reader.FindSymbol(ctx, "AuthService", "", "no-such-project", 10, nil, "")
+		if err != nil {
+			t.Fatalf("find_symbol: %v", err)
+		}
+		if len(res.Matches) != 0 {
+			t.Fatalf("expected zero matches under bogus project; got %d", len(res.Matches))
+		}
+		if len(res.Hints) == 0 {
+			t.Fatalf("expected at least one hint about the bogus project filter")
+		}
+		joined := strings.Join(res.Hints, "\n")
+		if !strings.Contains(joined, "no-such-project") {
+			t.Errorf("expected hint to mention the bogus project name; got %q", joined)
+		}
+	})
+
+	t.Run("find_symbol_hints_kind_eliminated", func(t *testing.T) {
+		// AuthService is a struct/type, so kind=function should eliminate
+		// it. The hint should tell us which kind(s) actually matched.
+		res, err := reader.FindSymbol(ctx, "AuthService", "function", "", 10, nil, "")
+		if err != nil {
+			t.Fatalf("find_symbol: %v", err)
+		}
+		if len(res.Matches) != 0 {
+			t.Fatalf("expected zero matches under kind=function; got %d", len(res.Matches))
+		}
+		if len(res.Hints) == 0 {
+			t.Fatalf("expected at least one hint about the kind filter")
+		}
+	})
+
+	t.Run("find_symbol_no_hints_on_real_miss", func(t *testing.T) {
+		// Genuinely-not-present name with no filters: empty Matches,
+		// empty Hints (we have nothing useful to say).
+		res, err := reader.FindSymbol(ctx, "TotallyMadeUpSymbolName_xyzzy", "", "", 10, nil, "")
+		if err != nil {
+			t.Fatalf("find_symbol: %v", err)
+		}
+		if len(res.Matches) != 0 {
+			t.Fatalf("expected zero matches; got %d", len(res.Matches))
+		}
+		if len(res.Hints) != 0 {
+			t.Errorf("expected no hints on a real miss; got %v", res.Hints)
 		}
 	})
 

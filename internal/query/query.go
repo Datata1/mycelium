@@ -35,6 +35,21 @@ type SymbolHit struct {
 	Docstring string `json:"docstring,omitempty"`
 }
 
+// FindSymbolResult wraps the matches plus optional diagnostic hints
+// (v3.1). Hints populate when Matches is empty *and* the diagnose path
+// has something useful to say about why — typo'd project name,
+// kind filter that eliminated all real matches, etc. Empty Hints on an
+// empty Matches means "the index just doesn't contain that symbol."
+//
+// Always returned with non-nil Matches (empty slice rather than nil) so
+// JSON serialisation produces `[]` instead of `null` — agents
+// distinguish "tool returned nothing" from "tool errored" more reliably
+// when the shape is consistent.
+type FindSymbolResult struct {
+	Matches []SymbolHit `json:"matches"`
+	Hints   []string    `json:"hints,omitempty"`
+}
+
 // FindSymbol returns symbols matching name (substring match for v0.2). FTS5
 // trigram lookup lands with the switch from LIKE to MATCH once we validate
 // the tokenizer across platforms.
@@ -51,17 +66,18 @@ type SymbolHit struct {
 // qualified name, or docstring fail the focus.Match filter are dropped,
 // and survivors are re-ranked by focus score (descending). Empty focus
 // preserves the v1.6 behaviour byte-for-byte.
-func (r *Reader) FindSymbol(ctx context.Context, name, kind, project string, limit int, pathsIn []string, focusQ string) ([]SymbolHit, error) {
+func (r *Reader) FindSymbol(ctx context.Context, name, kind, project string, limit int, pathsIn []string, focusQ string) (FindSymbolResult, error) {
+	empty := FindSymbolResult{Matches: []SymbolHit{}}
 	if limit <= 0 {
 		limit = 20
 	}
 	scope, scopeArgs, err := r.projectScope(ctx, project)
 	if err != nil {
-		return nil, err
+		return empty, err
 	}
 	pathClause, pathArgs, err := pathsInClause(pathsIn)
 	if err != nil {
-		return nil, err
+		return empty, err
 	}
 	q := "%" + name + "%"
 	var (
@@ -94,24 +110,28 @@ func (r *Reader) FindSymbol(ctx context.Context, name, kind, project string, lim
 			LIMIT ?`, args...)
 	}
 	if err != nil {
-		return nil, err
+		return empty, err
 	}
 	defer rows.Close()
-	var hits []SymbolHit
+	hits := []SymbolHit{}
 	for rows.Next() {
 		var h SymbolHit
 		if err := rows.Scan(&h.ID, &h.Name, &h.Qualified, &h.Kind, &h.Path, &h.StartLine, &h.EndLine, &h.Signature, &h.Docstring); err != nil {
-			return nil, err
+			return empty, err
 		}
 		hits = append(hits, h)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return empty, err
 	}
 	if tokens := focus.Tokenize(focusQ); len(tokens) > 0 {
 		hits = applyFocusToHits(tokens, hits)
 	}
-	return hits, nil
+	result := FindSymbolResult{Matches: hits}
+	if len(hits) == 0 {
+		result.Hints = r.diagnoseEmptyFind(ctx, name, kind, project)
+	}
+	return result, nil
 }
 
 // applyFocusToHits drops hits with no focus match and reorders survivors
@@ -503,7 +523,21 @@ type Stats struct {
 	// skill_files DB row still exists). 0 when the user never ran
 	// `myco skills compile`.
 	SkillsPackagesIndexed int `json:"skills_packages_indexed"`
-	LastScan                  time.Time `json:"last_scan"`
+	// v3.1: configured workspace projects with per-project file counts.
+	// Empty when no `projects:` block is set in `.mycelium.yml` (the
+	// repo runs in single-project mode and `files.project_id` is NULL
+	// everywhere). Used by doctor to flag misconfigured projects whose
+	// include patterns matched nothing, and by FindSymbol's hint
+	// generator to tell agents which project names are valid.
+	ConfiguredProjects        []ProjectStats `json:"configured_projects,omitempty"`
+	LastScan                  time.Time      `json:"last_scan"`
+}
+
+// ProjectStats is the per-project file count surfaced via Stats.
+type ProjectStats struct {
+	Name      string `json:"name"`
+	Root      string `json:"root"`
+	FileCount int    `json:"file_count"`
 }
 
 // UnresolvedRatio is the fraction of *non-import* refs that no resolver
@@ -656,6 +690,24 @@ func (r *Reader) Stats(ctx context.Context) (Stats, error) {
 		}
 		pathRows.Close()
 		s.SkillsPackagesIndexed = len(dirs)
+	}
+
+	// v3.1: configured projects with per-project file counts. LEFT JOIN
+	// so projects with zero matched files (the misconfiguration we
+	// want to flag) still appear in the output with file_count=0.
+	if projRows, err := r.db.QueryContext(ctx, `
+		SELECT p.name, p.root, COUNT(f.id)
+		FROM projects p
+		LEFT JOIN files f ON f.project_id = p.id
+		GROUP BY p.id
+		ORDER BY p.name`); err == nil {
+		for projRows.Next() {
+			var ps ProjectStats
+			if err := projRows.Scan(&ps.Name, &ps.Root, &ps.FileCount); err == nil {
+				s.ConfiguredProjects = append(s.ConfiguredProjects, ps)
+			}
+		}
+		projRows.Close()
 	}
 
 	// SQLite page stats. freelist_count / page_count is a cheap

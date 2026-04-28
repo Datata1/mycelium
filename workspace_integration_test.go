@@ -83,13 +83,13 @@ func TestIntegration_WorkspaceMode(t *testing.T) {
 			{"", 1}, // unscoped still finds it
 		}
 		for _, tc := range cases {
-			hits, err := reader.FindSymbol(ctx, "APIOnlySymbol", "", tc.project, 10, nil, "")
+			res, err := reader.FindSymbol(ctx, "APIOnlySymbol", "", tc.project, 10, nil, "")
 			if err != nil {
 				t.Fatalf("find_symbol project=%q: %v", tc.project, err)
 			}
-			if len(hits) != tc.want {
+			if len(res.Matches) != tc.want {
 				t.Errorf("find_symbol APIOnlySymbol project=%q: got %d hits, want %d",
-					tc.project, len(hits), tc.want)
+					tc.project, len(res.Matches), tc.want)
 			}
 		}
 	})
@@ -119,12 +119,16 @@ func TestIntegration_WorkspaceMode(t *testing.T) {
 	t.Run("unknown_project_returns_zero_not_unscoped", func(t *testing.T) {
 		// A typo'd project name must not silently fall back to an
 		// unscoped query — that would mask config bugs.
-		hits, err := reader.FindSymbol(ctx, "APIOnlySymbol", "", "does-not-exist", 10, nil, "")
+		res, err := reader.FindSymbol(ctx, "APIOnlySymbol", "", "does-not-exist", 10, nil, "")
 		if err != nil {
 			t.Fatalf("find_symbol: %v", err)
 		}
-		if len(hits) != 0 {
-			t.Errorf("unknown project should yield 0 hits, got %d", len(hits))
+		if len(res.Matches) != 0 {
+			t.Errorf("unknown project should yield 0 hits, got %d", len(res.Matches))
+		}
+		// v3.1: empty result with unknown project should carry a hint.
+		if len(res.Hints) == 0 {
+			t.Error("expected at least one hint for unknown project; got none")
 		}
 	})
 

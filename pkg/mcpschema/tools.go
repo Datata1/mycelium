@@ -22,7 +22,7 @@ func Tools() []Tool {
 	return []Tool{
 		{
 			Name:        "find_symbol",
-			Description: "Find symbols (functions, methods, types, etc.) by name. Supports exact and substring matches. Use this as the primary way to locate code by identifier.",
+			Description: "Locate a symbol's definition by name (exact or substring) across the indexed graph. Reach for this **before** any string search whenever you have an identifier — function, class, variable, type, interface, method. String search is for literal text; find_symbol is for navigating code structure and is faster + more accurate. Empty `Matches` may include `Hints` explaining why a filter eliminated everything (e.g. typo'd project name, kind that doesn't exist on this name).",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -56,7 +56,7 @@ func Tools() []Tool {
 		},
 		{
 			Name:        "get_references",
-			Description: "List the call-sites, imports, and other uses of a symbol. Accepts a qualified name (preferred) or short name. Flags each hit as resolved (graph-linked) or textual (name-match only).",
+			Description: "List the call-sites, imports, and other uses of a symbol. Reach for this when answering 'who calls X?' or 'where is X used?' — it's faster and more accurate than string-searching the symbol's name because it knows about resolved vs. textual refs and won't false-match on string literals or comments. Each hit is flagged resolved (graph-linked) or textual (name-match only). Pass a qualified name (e.g. `pkg.Type.Method`) when you have one — it disambiguates better than the short name.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -82,7 +82,7 @@ func Tools() []Tool {
 		},
 		{
 			Name:        "list_files",
-			Description: "List indexed files, optionally filtered by language or path substring. Useful for orientation on an unfamiliar repo.",
+			Description: "Enumerate indexed files, optionally filtered by language or path substring. Use this for orientation on an unfamiliar repo before zooming in with `find_symbol` or `get_file_outline`. Faster than recursive directory walks and respects the index's exclude rules so you don't see vendored/generated noise.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -111,7 +111,7 @@ func Tools() []Tool {
 		},
 		{
 			Name:        "get_file_outline",
-			Description: "Return the hierarchical symbol tree for a single file. Cheap way for the agent to orient itself inside one file.",
+			Description: "Return the hierarchical symbol tree for one file. Use this to orient inside a file before reading it — the outline is far cheaper than a full read and tells you whether the file is even relevant. Pair with `read_focused` once you know which symbol you want to study.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -129,7 +129,7 @@ func Tools() []Tool {
 		},
 		{
 			Name:        "search_lexical",
-			Description: "Ripgrep-style regex/substring search over indexed file content. Use for exact string matches ('error: cannot %s'), log messages, or anywhere semantic search would miss literals. Faster than semantic search and needs no embedder.",
+			Description: "Ripgrep-style regex/substring search over indexed file content. Use this **only** for literal strings or regex patterns — log messages, error formats, magic constants, route literals. For symbol navigation prefer `find_symbol`; for 'who calls X' prefer `get_references`. Treating this as a general-purpose code search is a known anti-pattern: it returns text matches with no graph awareness, so refactors and renames mislead it.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -159,7 +159,7 @@ func Tools() []Tool {
 		},
 		{
 			Name:        "get_file_summary",
-			Description: "Structural summary of one file: exports, imports, LOC, symbol counts by kind. Fast orientation tool — read this before reading the file itself.",
+			Description: "Structural digest of one file: exports, imports, LOC, symbol counts by kind. Use this before any file read to decide whether the file is worth opening at all — it's the cheapest possible orientation signal and answers 'what is this file?' in a single round-trip.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -173,7 +173,7 @@ func Tools() []Tool {
 		},
 		{
 			Name:        "get_neighborhood",
-			Description: "Local call graph around a symbol. Direction 'out' returns callees (what does this function call?), 'in' returns callers (who calls this?), 'both' unions both. Depth defaults to 2; clamped to 5.",
+			Description: "Walk the local call graph around a symbol — both directions in one query. Reach for this **instead of** chaining `find_symbol` + `get_references` repeatedly when you need to understand how a symbol fits into its surroundings. Direction 'out' returns callees, 'in' returns callers, 'both' unions them. Depth defaults to 2; clamped to 5 because deeper traversals on dense graphs balloon exponentially.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -203,7 +203,7 @@ func Tools() []Tool {
 		},
 		{
 			Name:        "search_semantic",
-			Description: "Semantic search over code chunks. Use for fuzzy intent queries ('function that parses dates', 'http handler for login') when you don't know the symbol name. Requires an embedder configured (otherwise returns an error).",
+			Description: "Embedding-based search over code chunks. Use this for intent queries ('function that parses ISO dates', 'http handler for login') when you don't know the symbol name and lexical search would miss the wording. If you do know the name, prefer `find_symbol` — it's faster and exact. Requires an embedder configured; returns an error otherwise.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -237,7 +237,7 @@ func Tools() []Tool {
 		},
 		{
 			Name:        "impact_analysis",
-			Description: "Transitive inbound closure around a symbol, ranked by distance. Use to answer 'who's impacted if I change this?' or (with kind filter) 'what tests cover this?'. Returns a flat distance-sorted list; for the graph shape use get_neighborhood. Default depth 5, max 10.",
+			Description: "Transitive inbound closure around a symbol, ranked by distance. Reach for this when answering 'who's impacted if I change X?' — it's the right tool to scope a refactor before touching code. With a `kind` filter (e.g. 'test') it also answers 'what tests cover this?'. Returns a flat distance-sorted list; use `get_neighborhood` instead when you need the graph shape rather than a flat impact set.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -267,7 +267,7 @@ func Tools() []Tool {
 		},
 		{
 			Name:        "critical_path",
-			Description: "Up to k shortest outbound call paths from `from` to `to`. Bounded BFS over the refs graph; cycles prevented. Default k=5, max depth 8.",
+			Description: "Up to k shortest outbound call paths from one symbol to another. Use this to answer 'how does X reach Y?' — the routes in the call graph between two specific symbols, not their general neighbourhoods. Bounded BFS over the refs graph; cycles prevented. Default k=5, max depth 8.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -297,7 +297,7 @@ func Tools() []Tool {
 		},
 		{
 			Name:        "read_focused",
-			Description: "Read one indexed file with non-matching symbols collapsed to one-line markers. The 'focus' hint is matched lexically against symbol names, qualified names, and docstrings; matched symbols are returned in full, others are replaced with '<comment> signature  <comment> collapsed (lines N-M)'. Empty focus returns the full file. Use this in place of a raw Read when you only care about specific symbols in a large file (v2.4).",
+			Description: "Read one indexed file with non-focus-matching symbols collapsed to one-line markers. Use this **instead of** the agent's general-purpose file reader whenever you know what you're looking for in the file — it cuts read bytes 30–80 % on files larger than ~5 KB by hiding the symbols that don't match the `focus` query. Empty `focus` returns the full file unchanged, so it's safe as a default file-read tool when file size is unknown. Matched symbols return in full; others become single-line markers like `// signature ...  // collapsed (lines N-M)` with the original line ranges preserved in `Expanded` for round-tripping.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -315,7 +315,7 @@ func Tools() []Tool {
 		},
 		{
 			Name:        "stats",
-			Description: "Index status: languages, symbol counts, refs, freshness. Useful for the agent to decide whether the index is trustworthy before running searches.",
+			Description: "Snapshot of index status: file/symbol/ref counts, languages, last-scan time, configured projects. Use this once at session start to confirm the index is fresh and the right shape before running queries — a stale or empty index will silently no-op many calls below. Cheap; no embedder required.",
 			InputSchema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},

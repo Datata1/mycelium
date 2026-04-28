@@ -60,19 +60,21 @@ func TestIntegration_FindSymbol_Focus(t *testing.T) {
 	ctx := context.Background()
 
 	// Empty focus = baseline behaviour.
-	baseline, err := reader.FindSymbol(ctx, "", "", "", 50, nil, "")
+	baselineRes, err := reader.FindSymbol(ctx, "", "", "", 50, nil, "")
 	if err != nil {
 		t.Fatalf("baseline: %v", err)
 	}
+	baseline := baselineRes.Matches
 	if len(baseline) == 0 {
 		t.Fatalf("expected baseline hits")
 	}
 
 	// Focus="auth" should drop unrelated symbols and rank auth-named ones first.
-	focused, err := reader.FindSymbol(ctx, "", "", "", 50, nil, "auth")
+	focusedRes, err := reader.FindSymbol(ctx, "", "", "", 50, nil, "auth")
 	if err != nil {
 		t.Fatalf("focused: %v", err)
 	}
+	focused := focusedRes.Matches
 	if len(focused) == 0 {
 		t.Fatalf("expected at least one focused hit")
 	}
