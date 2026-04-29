@@ -6,6 +6,28 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **v3.1.1 hotfix — workspace-mode disk reads.** `ReadFocused` and
+  `SearchLexical` both joined `repoRoot` with the index-stored path
+  to locate the file on disk, but in workspace mode (v1.5+) the
+  index stores **project-relative** paths — the disk file lives at
+  `repoRoot + projectRoot + path`. Pre-fix consequences observed in
+  a v3.1 field test:
+  - `read_focused` failed unconditionally on any monorepo workspace
+    project, returning `"no such file or directory"` for the
+    canonical path that `list_files` had just returned.
+  - `search_lexical` silently swallowed the read error and returned
+    zero results (the worker `continue`s on read failure), so a
+    lexical search across an entire monorepo project would look like
+    a real "no matches" — false negatives that destroyed agent trust.
+  Both tools now `LEFT JOIN projects ON projects.id = files.project_id`
+  to recover the project root and prepend it to the disk-side path.
+  Single-project mode (`project_id` NULL) keeps the existing
+  `repoRoot + path` join. New regression tests in
+  `workspace_integration_test.go` cover both code paths against the
+  existing 3-project fixture.
+
 ### Added
 
 - **v3.1 adoption-driven fixes (first slice of the broader-hyphae

@@ -7,6 +7,7 @@ package mycelium_test
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -129,6 +130,44 @@ func TestIntegration_WorkspaceMode(t *testing.T) {
 		// v3.1: empty result with unknown project should carry a hint.
 		if len(res.Hints) == 0 {
 			t.Error("expected at least one hint for unknown project; got none")
+		}
+	})
+
+	// v3.1.1 regression: ReadFocused and SearchLexical both join repoRoot
+	// with the index-stored path, but in workspace mode that path is
+	// project-relative — the disk file lives at repoRoot+projectRoot+path.
+	// Pre-fix, both tools silently failed (ReadFocused with an error,
+	// SearchLexical by swallowing the read error and returning empty).
+	t.Run("read_focused_resolves_workspace_path", func(t *testing.T) {
+		rf, err := reader.ReadFocused(ctx, dst, "server.go", "")
+		if err != nil {
+			t.Fatalf("ReadFocused: %v", err)
+		}
+		if rf.Stats.OriginalBytes == 0 {
+			t.Fatalf("expected non-empty read; got 0 bytes")
+		}
+		if !strings.Contains(rf.Content, "APIOnlySymbol") {
+			t.Errorf("expected file content to contain APIOnlySymbol; got %q", rf.Content)
+		}
+	})
+
+	t.Run("search_lexical_reads_workspace_files", func(t *testing.T) {
+		hits, err := reader.SearchLexical(ctx, "APIOnlySymbol", "", "", 10, dst, nil)
+		if err != nil {
+			t.Fatalf("SearchLexical: %v", err)
+		}
+		if len(hits) == 0 {
+			t.Fatalf("expected at least one APIOnlySymbol match; got 0 (likely the silent-skip path bug)")
+		}
+		var found bool
+		for _, h := range hits {
+			if h.Path == "server.go" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected hit at path 'server.go'; got %+v", hits)
 		}
 	})
 

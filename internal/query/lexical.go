@@ -46,7 +46,7 @@ func (r *Reader) SearchLexical(ctx context.Context, pattern, pathContains, proje
 	// SSD-backed disks without starving the tree-sitter / parser workers that
 	// run alongside on the daemon.
 	const workers = 4
-	jobs := make(chan string)
+	jobs := make(chan candidatePath)
 	hitsCh := make(chan LexicalHit, 64)
 	var wg sync.WaitGroup
 
@@ -54,8 +54,9 @@ func (r *Reader) SearchLexical(ctx context.Context, pattern, pathContains, proje
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for rel := range jobs {
-				if err := scanFile(ctx, filepath.Join(repoRoot, rel), rel, re, hitsCh); err != nil {
+			for j := range jobs {
+				abs := filepath.Join(repoRoot, j.projectRoot, j.rel)
+				if err := scanFile(ctx, abs, j.rel, re, hitsCh); err != nil {
 					// silent: skip unreadable files
 					continue
 				}
@@ -94,7 +95,16 @@ func (r *Reader) SearchLexical(ctx context.Context, pattern, pathContains, proje
 	return hits, nil
 }
 
-func (r *Reader) candidatePaths(ctx context.Context, pathContains, project string, pathsIn []string) ([]string, error) {
+// candidatePath pairs the index-stored path (project-relative in
+// workspace mode) with the project root that needs to prefix it on
+// disk. projectRoot is empty for files outside any explicit project
+// (single-project mode where files.project_id is NULL).
+type candidatePath struct {
+	rel         string
+	projectRoot string
+}
+
+func (r *Reader) candidatePaths(ctx context.Context, pathContains, project string, pathsIn []string) ([]candidatePath, error) {
 	scope, scopeArgs, err := r.projectScope(ctx, project)
 	if err != nil {
 		return nil, err
@@ -104,11 +114,15 @@ func (r *Reader) candidatePaths(ctx context.Context, pathContains, project strin
 		return nil, err
 	}
 	// candidatePaths builds its own SELECT so the scope clause needs a
-	// valid WHERE anchor; start with 1=1 and AND everything in.
-	q := `SELECT path FROM files f WHERE 1=1`
+	// valid WHERE anchor; start with 1=1 and AND everything in. LEFT
+	// JOIN to projects so single-project (NULL project_id) files keep
+	// participating with an empty projectRoot.
+	q := `SELECT f.path, COALESCE(p.root, '')
+	      FROM files f LEFT JOIN projects p ON p.id = f.project_id
+	      WHERE 1=1`
 	args := []any{}
 	if pathContains != "" {
-		q += ` AND path LIKE ?`
+		q += ` AND f.path LIKE ?`
 		args = append(args, "%"+pathContains+"%")
 	}
 	if scope != "" {
@@ -124,13 +138,13 @@ func (r *Reader) candidatePaths(ctx context.Context, pathContains, project strin
 		return nil, err
 	}
 	defer rs.Close()
-	var out []string
+	var out []candidatePath
 	for rs.Next() {
-		var p string
-		if err := rs.Scan(&p); err != nil {
+		var c candidatePath
+		if err := rs.Scan(&c.rel, &c.projectRoot); err != nil {
 			return nil, err
 		}
-		out = append(out, p)
+		out = append(out, c)
 	}
 	return out, rs.Err()
 }

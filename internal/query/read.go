@@ -56,13 +56,19 @@ type flatSymbol struct {
 	Docstring string
 }
 
-// ReadFocused returns the file at repo-relative path, with non-focus-
-// matching symbols collapsed to one-line `// signature ...` markers.
+// ReadFocused returns the file at the path the index stores, with
+// non-focus-matching symbols collapsed to one-line `// signature ...`
+// markers.
 //
-// repoRoot is the absolute path to the repo so the disk read can resolve
-// from a relative path the index stores. focusQ may be empty — in that
-// case all symbols expand and the function effectively becomes a normal
-// file read mediated by the daemon.
+// `path` must match what `list_files` / `find_symbol` returned — in
+// workspace mode that's the **project-relative** path (e.g.
+// `src/ci/ui-test.ts`), not the repo-relative one. The disk read joins
+// the file's project root (looked up via `files.project_id`) with that
+// path, so callers don't have to know the project layout.
+//
+// `repoRoot` is the absolute path to the repo. focusQ may be empty —
+// in that case all symbols expand and the function effectively
+// becomes a normal file read mediated by the daemon.
 //
 // The collapsed marker uses the language's line-comment syntax (// for
 // Go/TS/JS, # for Python, // fallback otherwise). Line numbers in the
@@ -73,9 +79,12 @@ func (r *Reader) ReadFocused(ctx context.Context, repoRoot, path, focusQ string)
 
 	var fileID int64
 	var language string
+	var projectRoot sql.NullString
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, language FROM files WHERE path = ?`, path,
-	).Scan(&fileID, &language)
+		`SELECT f.id, f.language, p.root
+		 FROM files f LEFT JOIN projects p ON p.id = f.project_id
+		 WHERE f.path = ?`, path,
+	).Scan(&fileID, &language, &projectRoot)
 	if err == sql.ErrNoRows {
 		return out, fmt.Errorf("file not in index: %s", path)
 	}
@@ -83,9 +92,18 @@ func (r *Reader) ReadFocused(ctx context.Context, repoRoot, path, focusQ string)
 		return out, err
 	}
 
+	// In workspace mode, files.path is project-relative (the walker's
+	// Rel base is the project root, not the repo root). Reassemble the
+	// absolute disk path by joining repo + project + file. NULL
+	// project_id (single-project / implicit-root mode) skips the
+	// project prefix.
 	abs := path
 	if !filepath.IsAbs(abs) {
-		abs = filepath.Join(repoRoot, path)
+		if projectRoot.Valid && projectRoot.String != "" {
+			abs = filepath.Join(repoRoot, projectRoot.String, path)
+		} else {
+			abs = filepath.Join(repoRoot, path)
+		}
 	}
 	raw, err := os.ReadFile(abs)
 	if err != nil {
