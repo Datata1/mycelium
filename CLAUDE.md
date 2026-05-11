@@ -6,22 +6,33 @@ transports (MCP stdio, unix socket, HTTP :7777 loopback) share one dispatcher.
 
 See `README.md` for user-facing docs, `CONTEXT.md` for the problem + goals,
 `LIMITATIONS.md` for what doesn't work today (read before proposing new
-features — the list covers most "could we…?" questions), and `CHANGELOG.md`
-for version history. The active roadmap is the v2.0 plan at
-`~/.claude/plans/1-everything-you-mentioned-indexed-duckling.md`.
+features), `CHANGELOG.md` for version history, and `docs/adoption.md` for
+guidance on verifying that an agent is actually reaching for myco tools.
 
-## Build + run (required every session)
+Active roadmap: `~/.claude/plans/7-v3.1-broader-hyphae.md` (v3.2–v3.4 plan).
 
-Always build with the `sqlite_fts5` tag — it enables FTS5 in the embedded SQLite
-driver, without which migrations fail.
+## Build + run
+
+Always build with the `sqlite_fts5` tag — it enables FTS5 in the embedded
+SQLite driver, without which migrations fail.
+
+```bash
+task build          # go build -tags sqlite_fts5 -o /tmp/myco ./cmd/myco
+task check          # go vet + go test -race ./...
+task smoke          # wipe index → re-index → myco doctor (fastest loop)
+task daemon         # build + start daemon (blocks)
+```
+
+`task` is installed via `go install github.com/go-task/task/v3/cmd/task@latest`
+and lives at `$(go env GOPATH)/bin/task`. Run `task --list` for all targets.
+
+Raw commands (when task isn't on PATH):
 
 ```bash
 go build -tags sqlite_fts5 -o /tmp/myco ./cmd/myco
 go test  -tags sqlite_fts5 -race ./...
 go vet   -tags sqlite_fts5 ./...
 ```
-
-Fastest smoke-test cycle: `rm -rf .mycelium && /tmp/myco index && /tmp/myco doctor`.
 
 ## Load-bearing architectural rules
 
@@ -43,100 +54,104 @@ Enforce in review. Deviations need an explicit reason in CHANGELOG.
 - **Go parser uses stdlib `go/ast`** (no cgo). Only TS and Python use tree-sitter.
 - **Distribution = GitHub Releases binaries.** No Homebrew, no `go install`,
   no Docker (fsnotify through bind-mounts is unreliable).
+- **Migrations** (`internal/index/migrations/*.sql`) are additive — never
+  rewrite a shipped file. New numbered file per schema change.
 
-## Roadmap status (as of last session)
+## Roadmap status
 
-- **v1.0 shipped** — 9 MCP tools, 3 transports, 3 languages (Go/TS/Python).
-- **v1.1 shipped** — `myco doctor`, extended `query.Stats`, benchmark harness.
-- **v1.2 shipped** — Go type resolver (`internal/resolver/golang/`). Self-index
-  now shows 0 resolution-bug self-loops and 0% truly-unresolved refs.
-- **v1.3 shipped** — TS resolver (`internal/resolver/typescript/`,
-  ResolverVersion=2) and Python resolver (`internal/resolver/python/`,
-  ResolverVersion=3). Scope-tracking walkers on top of existing
-  tree-sitter output. Handle imports, `this.method()`, `self.method()`,
-  namespace imports, aliased imports. Pipeline now uses
-  `Resolvers map[string]Resolver` instead of separate fields per language.
-- **v1.4 shipped** — optional `sqlite-vec` integration via named driver +
-  ConnectHook (`internal/index/vss.go`). `Searcher.VSSTable` enables the
-  vec0 KNN fast path when the extension is loaded; brute-force Go cosine
-  is the honest fallback. Two-pass search (`embed.UnpackInto` hot loop +
-  top-k-only hydrate) brought 10k-chunk brute-force from 166 ms to
-  114 ms. Benchmark matrix in `internal/query/semantic_bench_test.go`:
-  10k / 50k / 100k at 768 dim = 114 / 555 / 1100 ms brute-force on Tiger
-  Lake. vec0 path is written and compiled but not measured in this
-  release (extension not installed in dev env).
-- **v1.5 shipped** — "Workspace mode." New `projects` table +
-  nullable `files.project_id` (migration `0005_projects.sql`), per-
-  project config overrides under `projects:` in `.mycelium.yml`,
-  optional `project` filter on every query tool and `--project` on the
-  CLI. Pipeline gains a `Workspaces []Workspace` slice with per-project
-  walkers plus a `FileProjectFor` longest-prefix resolver for watcher
-  events. Integration test + fixture at
-  `testdata/fixtures/workspace/` and `workspace_integration_test.go`.
-  **Explicit non-goal held**: cross-repo federation (N worktrees, one
-  graph) — still v3. Vec0 fast path skips when `project` is set (MATCH
-  doesn't compose with WHERE); brute-force handles scoped search.
-- **v1.6 shipped** — "Graph-native tools + PR scope." Two new MCP
-  tools: `impact_analysis` (flat, distance-ranked inbound closure,
-  optional `kind` filter; default depth 5, max 10) and `critical_path`
-  (bounded BFS over `refs` via SQL CTE + `instr()` cycle check; depth
-  ≤ 8, default k = 5). Both live in `internal/query/graph.go` and
-  reuse `resolveSeed` / `loadNode` from `neighborhood.go`.
-  `--since <ref>` filter plumbed through `find_symbol`,
-  `get_references`, `list_files`, `search_lexical`, `search_semantic`;
-  resolution happens at the transport boundary via
-  `internal/gitref.ResolveSince`, reader stays git-ignorant. Shared
-  splicer in `internal/query/paths.go` caps the path list at 500.
-  Integration tests at `graph_integration_test.go` +
-  `internal/gitref/resolve_test.go`. `get_neighborhood` perf revisit
-  was deliberately deferred (now tagged v1.7 / v3 in LIMITATIONS).
-  Vec0 fast path skips when `since` is set (same reason as v1.5).
-- **Active next: v1.7** — Watchman opt-in backend (Pillar G) per the
-  v2.0 roadmap, plus the deferred `get_neighborhood` perf revisit if
-  real-world metrics say it's worth it before the v3 GraphStore swap.
+- **v1.0** — 9 MCP tools, 3 transports, 3 languages (Go/TS/Python).
+- **v1.1** — `myco doctor`, extended `query.Stats`, benchmark harness.
+- **v1.2** — Go type resolver (`internal/resolver/golang/`). Self-index:
+  0 self-loops, 0.0% unresolved refs.
+- **v1.3** — TS resolver (ResolverVersion=2) + Python resolver
+  (ResolverVersion=3). Scope-tracking walkers; handle imports,
+  `this.method()`, `self.method()`, namespace + aliased imports.
+- **v1.4** — sqlite-vec integration (`internal/index/vss.go`). Brute-force
+  Go cosine fallback. Two-pass search: 10k/768dim brute-force 166→114ms.
+- **v1.5** — Workspace mode. `projects` table, nullable `files.project_id`,
+  per-project config overrides, `project` filter on every query tool.
+- **v1.6** — Graph-native tools (`impact_analysis`, `critical_path`) +
+  `--since <ref>` PR-scope filter on five read methods.
+- **v1.7** — Watchman opt-in backend. Pluggable `internal/watch.Watcher`
+  interface; `watcher.backend: watchman` in config; inotify headroom check
+  in `myco doctor`.
+- **v2.0-rc1** — Consolidation tag for the v1.x series; all v2.0 acceptance
+  criteria met (type-aware refs, workspace, graph tools, doctor, vec).
+- **v2.2** — Opt-in telemetry log (`internal/telemetry`). JSONL per-call
+  recorder; `myco stats --telemetry` aggregator. Off by default.
+- **v2.3** — Static skills tree (`internal/skills`, `myco skills compile`).
+  Per-package `SKILL.md` + cross-cutting `aspects/` under `.mycelium/skills/`.
+- **v2.4** — Focused reads. `internal/focus` lexical filter; `read_focused`
+  MCP tool + `myco read`; `--focus` on `find_symbol`, `get_file_outline`,
+  `get_neighborhood`. Typical 80% byte reduction on large files.
+- **v2.5** — Incremental skills regen. `skill_files` hash gate; daemon-driven
+  batcher; `--status`/`--incremental` flags on `myco skills compile`.
+- **v3.0** — Agent-native release: bundled sqlite-vec in release tarball,
+  `docs/adoption.md`, `docs/navigation-example.md`, zero-config semantic
+  search on release builds, v3 plan pillars consolidated.
+- **v3.1** — Adoption fixes from first TS-monorepo field test:
+  `FindSymbolResult{Matches,Hints}` envelope (no more `null` on miss),
+  MCP tool descriptions rewritten for first-reach priming, `Stats.ConfiguredProjects`
+  + `projects_configured_but_empty` doctor check.
+- **v3.1.1 (unreleased)** — Workspace-mode disk-read fix: `ReadFocused` and
+  `SearchLexical` now LEFT JOIN `projects` to recover the project root when
+  resolving paths on disk (project-relative storage + repo-root assumption
+  was returning ENOENT on every workspace-project file).
+- **Session telemetry (unreleased, between-roadmap)** — `myco session`
+  command group: per-conversation sessions, automatic Claude Code hook wiring
+  (`UserPromptSubmit` / `PostToolUse` / `Stop`), fallback-tool tracking
+  (grep/Read calls recorded alongside myco calls so adoption quality is
+  measurable). `telemetry.enabled: true` is set in `.mycelium.yml`.
 
-**v1.2 baselines achieved (self-index, Tiger Lake laptop):**
-- `self_loop_count`: 11 → **0** ✓
-- `unresolved_ref_ratio` (non-import, v0+null): 74.8% → **0.0%** ✓
-- 550 refs resolved to local symbols; 1425 type-resolved external
-- 10k-symbol benchmark: 2347 sym/sec (−3.5% vs v1.1)
+**Active next: v3.2 — Setup wizard** (C1 interactive `myco init`, C2 CLAUDE.md
+priming snippet, C3 `--doctor-after` for CI). Plan:
+`~/.claude/plans/7-v3.1-broader-hyphae.md`.
 
-When diagnosing v1.2 resolution issues, set `MYCELIUM_RESOLVER_DEBUG=1`
-for per-file visit/rewrite counts on stderr.
+After that: v3.3 (documents surface: i18n JSON / package.json / go.mod
+indexing + `find_document_key` tool), v3.4 (route literals + new languages).
 
 ## Dogfooding — use mycelium to develop mycelium
 
-Once the daemon + MCP are wired into Claude Code, reach for mycelium's own
-tools before `grep`/`Read` whenever it's applicable.
+Reach for myco tools before `grep`/`Read` whenever applicable. Check
+`docs/adoption.md` if the agent is falling into the "search_lexical only"
+pattern — that doc describes the common failure modes and how to diagnose them.
 
 One-time setup:
 
 ```bash
-cd /home/jan-david/Documents/repo-graph
-/tmp/myco daemon &                 # background watcher + index server
-/tmp/myco init --mcp claude        # prints the JSON for ~/.claude.json
-# paste the printed snippet into mcpServers in ~/.claude.json
-# then restart Claude Code — MCP servers load at startup
+task daemon &                      # build + start daemon in background
+/tmp/myco init --mcp claude        # prints the JSON snippet for ~/.claude.json
+# paste into mcpServers in ~/.claude.json, then restart Claude Code
 ```
 
-Once wired, these tools are available (subset):
+For session telemetry (tracking which myco tools vs. grep/Read the agent
+uses per conversation):
+
+```bash
+task hooks-install    # writes UserPromptSubmit/PostToolUse/Stop hooks
+                      # to .claude/settings.json — restart Claude Code after
+task session-list     # see recorded sessions
+task session-export -- <id>           # full report: myco calls + fallback tools
+task session-export -- <id> --format markdown
+task session-compare -- <id-a> <id-b> # side-by-side diff
+```
+
+Sessions start automatically when Claude Code hook fires `UserPromptSubmit`.
+The key metric is `fallback_exploratory` — how many grep/Read calls the agent
+made instead of using myco. Low ratio = myco is covering the use case.
+
+Available MCP tools (all active):
 `find_symbol`, `get_references`, `get_definition`, `get_neighborhood`,
 `search_lexical`, `search_semantic`, `get_file_outline`, `get_file_summary`,
-`stats`.
-
-**Honest caveat**: until v1.2 ships, `get_references` and `get_neighborhood`
-are quality-limited on this repo by the 72.8% unresolved-ref problem (v1.2's
-whole point). Results are still useful but not authoritative.
+`read_focused`, `impact_analysis`, `critical_path`, `stats`, `list_files`.
 
 ## Conventions
 
 - **Comments**: only when the *why* is non-obvious. No explaining what code
-  does; names carry that. No references to "the current task", "for the X
-  flow", etc. — those belong in PR descriptions.
+  does; names carry that. No references to "the current task" or caller names.
 - **Tests**: every new query method gets a case in `integration_test.go`.
   Benchmarks for anything on the query hot path.
-- **Migrations** (`internal/index/migrations/*.sql`) are additive — never
-  rewrite a shipped file. New numbered file each change.
+- **Migrations**: additive only — new numbered file, never rewrite shipped ones.
 - **Commit messages**: imperative present ("add X"), not "added X".
 - **CHANGELOG**: one section per milestone, Keep-a-Changelog format. Every
   milestone ends with a CHANGELOG entry.

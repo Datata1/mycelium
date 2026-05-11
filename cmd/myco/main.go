@@ -16,6 +16,7 @@ import (
 
 	"github.com/jdwiederstein/mycelium/internal/config"
 	"github.com/jdwiederstein/mycelium/internal/daemon"
+	"github.com/jdwiederstein/mycelium/internal/wizard"
 	"github.com/jdwiederstein/mycelium/internal/doctor"
 	"github.com/jdwiederstein/mycelium/internal/embed"
 	"github.com/jdwiederstein/mycelium/internal/gitref"
@@ -961,19 +962,25 @@ func printDoctorReport(rep doctor.Report) {
 }
 
 func newInitCmd() *cobra.Command {
-	var mcpClient string
+	var (
+		acceptAll   bool
+		doctorAfter bool
+	)
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "Initialize mycelium in the current repo (writes .mycelium.yml, installs hook)",
+		Short: "Interactive setup wizard: config, MCP, CLAUDE.md, git hook (v3.2)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runInit(mcpClient)
+			return runWizard(acceptAll, doctorAfter)
 		},
 	}
-	cmd.Flags().StringVar(&mcpClient, "mcp", "", "register the MCP server with a client: claude | cursor")
+	cmd.Flags().BoolVarP(&acceptAll, "yes", "y", false,
+		"accept all defaults without prompting (CI / non-interactive)")
+	cmd.Flags().BoolVar(&doctorAfter, "doctor-after", false,
+		"run myco doctor at the end and exit non-zero on warn/fail (CI gate)")
 	return cmd
 }
 
-func runInit(mcpClient string) error {
+func runWizard(yes, doctorAfter bool) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
@@ -982,50 +989,180 @@ func runInit(mcpClient string) error {
 	if err != nil {
 		return err
 	}
-	cfgPath := root + "/" + config.DefaultPath
+	binary, err := os.Executable()
+	if err != nil {
+		binary = "myco"
+	}
 
-	// 1. Write .mycelium.yml if absent.
-	if _, err := os.Stat(cfgPath); err == nil {
-		fmt.Printf("  %s already exists, keeping it\n", config.DefaultPath)
+	fmt.Printf("Mycelium setup  ·  %s\n", root)
+	fmt.Println(strings.Repeat("─", 54))
+
+	// ── Step 1: language detection ────────────────────────────────────
+	wizard.Step("Detecting languages…")
+	langs, err := wizard.DetectLanguages(root)
+	if err != nil {
+		wizard.Warn("language scan failed: " + err.Error())
+	}
+	var chosenLangs []string
+	if len(langs) == 0 {
+		wizard.Warn("no Go / TypeScript / Python files found — defaulting to all three")
+		chosenLangs = []string{"go", "typescript", "python"}
 	} else {
-		if err := config.WriteDefault(cfgPath); err != nil {
-			return err
+		var detected []string
+		for _, l := range langs {
+			detected = append(detected, fmt.Sprintf("%s (%d files)", l.Language, l.Count))
 		}
-		fmt.Printf("  wrote %s\n", config.DefaultPath)
+		fmt.Printf("  Found: %s\n", strings.Join(detected, ", "))
+		for _, l := range langs {
+			chosenLangs = append(chosenLangs, l.Language)
+		}
 	}
 
-	// 2. Ensure .mycelium/ is gitignored.
+	// ── Step 2: monorepo detection ────────────────────────────────────
+	wizard.Step("Scanning for workspace sub-projects…")
+	subs, err := wizard.DetectSubprojects(root)
+	if err != nil {
+		wizard.Warn("subproject scan failed: " + err.Error())
+	}
+	var projects []config.ProjectConfig
+	if len(subs) > 0 {
+		fmt.Printf("  Monorepo? Found %d sub-projects:\n", len(subs))
+		for _, s := range subs {
+			fmt.Printf("    %s  (%s)\n", s.RelDir, s.MarkerFile)
+		}
+		if wizard.YN("  Set up as workspace projects?", true, yes) {
+			for _, s := range subs {
+				name := wizard.Str(fmt.Sprintf("    Name for %s", s.RelDir), s.SuggestedName, yes)
+				projects = append(projects, config.ProjectConfig{Name: name, Root: s.RelDir})
+			}
+		}
+	} else {
+		wizard.Skip("single-project repo (no sub go.mod / package.json found)")
+	}
+
+	// ── Step 3: write .mycelium.yml ──────────────────────────────────
+	wizard.Step("Writing config…")
+	cfgPath := root + "/" + config.DefaultPath
+	if _, err := os.Stat(cfgPath); err == nil {
+		wizard.Skip(config.DefaultPath + " already exists — keeping it")
+	} else {
+		cfg := buildConfig(chosenLangs, projects)
+		if err := config.Write(cfgPath, cfg); err != nil {
+			return fmt.Errorf("write config: %w", err)
+		}
+		wizard.Done("wrote " + config.DefaultPath)
+	}
+
+	// ── Step 4: .gitignore ───────────────────────────────────────────
 	if err := ensureGitignoreEntry(root+"/.gitignore", ".mycelium/"); err != nil {
-		return err
+		wizard.Warn("could not update .gitignore: " + err.Error())
 	}
 
-	// 3. Install post-commit hook.
+	// ── Step 5: git hook ─────────────────────────────────────────────
 	installed, err := hook.InstallPostCommit(root)
 	if err != nil {
-		return err
-	}
-	if installed {
-		fmt.Println("  installed .git/hooks/post-commit")
+		wizard.Warn("git hook install failed: " + err.Error())
+	} else if installed {
+		wizard.Done("installed .git/hooks/post-commit")
 	} else {
-		fmt.Println("  skipped git hook (not a git repo)")
+		wizard.Skip("git hook (not a git repo)")
 	}
 
-	// 4. Optional MCP client registration.
-	if mcpClient != "" {
-		if err := registerMCPClient(mcpClient, root); err != nil {
-			fmt.Fprintf(os.Stderr, "  warning: could not register MCP client %q: %v\n", mcpClient, err)
+	// ── Step 6: MCP client registration ──────────────────────────────
+	wizard.Step("MCP client registration…")
+	clients := wizard.DetectMCPClients()
+	var mcpOptions []string
+	for _, c := range clients {
+		label := c.Name
+		if c.Detected {
+			label += " — config found ✓"
+		} else {
+			label += " — not detected"
+		}
+		mcpOptions = append(mcpOptions, label)
+	}
+	mcpOptions = append(mcpOptions, "Print snippet only", "Skip")
+
+	choice := wizard.Choice("  Register with MCP client:", mcpOptions, yes)
+	switch {
+	case choice < len(clients):
+		c := clients[choice]
+		if wizard.YN(fmt.Sprintf("  Write mycelium into %s?", c.ConfigPath), true, yes) {
+			if err := wizard.WriteClaudeCodeMCP(c.ConfigPath, binary, root); err != nil {
+				wizard.Warn("could not write MCP config: " + err.Error())
+				fmt.Println()
+				fmt.Println("  Paste this instead:")
+				fmt.Println(wizard.MCPSnippet(binary, root))
+			} else {
+				wizard.Done("registered in " + c.ConfigPath)
+				fmt.Println("  Restart your agent client for MCP to take effect.")
+			}
+		}
+	case choice == len(clients): // print snippet
+		fmt.Println()
+		fmt.Println("  Paste this into your agent's MCP config:")
+		fmt.Println(wizard.MCPSnippet(binary, root))
+	default: // skip
+		wizard.Skip("MCP registration")
+	}
+
+	// ── Step 7: CLAUDE.md priming snippet ────────────────────────────
+	claudeMDPath := root + "/CLAUDE.md"
+	if _, err := os.Stat(claudeMDPath); err == nil {
+		wizard.Step("CLAUDE.md priming…")
+		fmt.Println("  A short block helps the agent know when to reach for myco tools.")
+		if wizard.YN("  Append to CLAUDE.md?", true, yes) {
+			wrote, err := wizard.AppendPrimingSnippet(claudeMDPath)
+			if err != nil {
+				wizard.Warn("could not write CLAUDE.md: " + err.Error())
+			} else if wrote {
+				wizard.Done("appended priming snippet to CLAUDE.md")
+			} else {
+				wizard.Skip("snippet already present in CLAUDE.md")
+			}
+		} else {
+			fmt.Println()
+			fmt.Println("  Snippet (copy manually):")
+			fmt.Println(wizard.PrimingSnippet())
 		}
 	}
 
+	// ── Next steps ────────────────────────────────────────────────────
 	fmt.Println()
+	fmt.Println(strings.Repeat("─", 54))
 	fmt.Println("Next steps:")
-	fmt.Println("  1. Start the daemon:       myco daemon &")
-	fmt.Println("  2. Index the repo:         myco index   # (daemon also does this on start)")
-	fmt.Println("  3. Try a query:            myco query find <name>")
-	if mcpClient == "" {
-		fmt.Println("  4. Wire it into an agent:  myco init --mcp claude   (or --mcp cursor)")
+	fmt.Println("  task daemon    # start the daemon (blocks; run in a separate terminal)")
+	fmt.Println("  task check     # vet + test before pushing")
+	fmt.Println("  myco doctor    # health check once the daemon has indexed")
+
+	// ── --doctor-after (CI gate) ─────────────────────────────────────
+	if doctorAfter {
+		fmt.Println()
+		ix, err := openIndex(repoCtx{Root: root, Cfg: config.Default()})
+		if err != nil {
+			return fmt.Errorf("doctor: open index: %w", err)
+		}
+		defer ix.Close()
+		ctx := context.Background()
+		r := query.NewReader(ix.DB())
+		rep, err := doctor.Run(ctx, r, "", doctor.ThresholdsFromConfig(config.Default()), root)
+		if err != nil {
+			return fmt.Errorf("doctor: %w", err)
+		}
+		printDoctorReport(rep)
+		if code := rep.ExitCode(); code != 0 {
+			os.Exit(code)
+		}
 	}
 	return nil
+}
+
+// buildConfig constructs a Config populated from wizard choices.
+func buildConfig(langs []string, projects []config.ProjectConfig) config.Config {
+	cfg := config.Default()
+	cfg.Languages = langs
+	cfg.Projects = projects
+	return cfg
 }
 
 func ensureGitignoreEntry(path, entry string) error {
@@ -1048,7 +1185,7 @@ func ensureGitignoreEntry(path, entry string) error {
 	}
 	_, err = f.WriteString(entry + "\n")
 	if err == nil {
-		fmt.Printf("  added %q to .gitignore\n", entry)
+		wizard.Done("added .mycelium/ to .gitignore")
 	}
 	return err
 }
@@ -1066,29 +1203,6 @@ func splitLines(s string) []string {
 		out = append(out, s[start:])
 	}
 	return out
-}
-
-// registerMCPClient is intentionally conservative: Claude Code and Cursor
-// config locations vary by OS and are user-editable. v0.3 prints the snippet
-// the user should paste. A proper patcher lands in v0.4 once we've verified
-// the config shape stays stable.
-func registerMCPClient(which, root string) error {
-	binary, err := os.Executable()
-	if err != nil {
-		binary = "myco"
-	}
-	snippet := fmt.Sprintf(`{
-  "mcpServers": {
-    "mycelium": {
-      "command": "%s",
-      "args": ["mcp"],
-      "cwd": "%s"
-    }
-  }
-}`, binary, root)
-
-	fmt.Printf("\n  paste this into your %s MCP config:\n\n%s\n", which, snippet)
-	return nil
 }
 
 func newDaemonCmd() *cobra.Command {
