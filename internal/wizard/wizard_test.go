@@ -72,6 +72,29 @@ func TestDetectLanguages_SkipsNodeModules(t *testing.T) {
 
 // ── DetectSubprojects ────────────────────────────────────────────────────────
 
+func TestSuggestProjectName(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		relDir string
+		want   string
+	}{
+		{"services/api", "api"},              // non-generic → keep as-is
+		{"xxx-service/common", "xxx-common"}, // generic → parent-base (strip -service)
+		{"xxx-service/node", "xxx-node"},     // generic → parent-base
+		{"yyy-svc/shared", "yyy-shared"},     // generic → parent-base (strip -svc)
+		{"packages/lib", "packages-lib"},     // generic → parent-base
+		{"backend", "backend"},               // single component → as-is
+		{"apps/dashboard", "dashboard"},      // non-generic → as-is
+		{"services/worker", "worker"},        // non-generic → as-is
+	}
+	for _, tc := range cases {
+		got := wizard.SuggestProjectName(tc.relDir)
+		if got != tc.want {
+			t.Errorf("SuggestProjectName(%q) = %q, want %q", tc.relDir, got, tc.want)
+		}
+	}
+}
+
 func TestDetectSubprojects_NoSubprojects(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

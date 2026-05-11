@@ -1046,7 +1046,11 @@ func runWizard(yes, doctorAfter bool) error {
 	if _, err := os.Stat(cfgPath); err == nil {
 		wizard.Skip(config.DefaultPath + " already exists — keeping it")
 	} else {
-		cfg := buildConfig(chosenLangs, projects)
+		enableTelemetry := wizard.YN(
+			"  Enable telemetry? (records tool call stats; powers `myco doctor` adoption check)",
+			true, yes,
+		)
+		cfg := buildConfig(chosenLangs, projects, enableTelemetry)
 		if err := config.Write(cfgPath, cfg); err != nil {
 			return fmt.Errorf("write config: %w", err)
 		}
@@ -1096,6 +1100,18 @@ func runWizard(yes, doctorAfter bool) error {
 			} else {
 				wizard.Done("registered in " + c.ConfigPath)
 				fmt.Println("  Restart your agent client for MCP to take effect.")
+				// Offer session-tracking hooks immediately after MCP registration.
+				fmt.Println()
+				fmt.Println("  Session hooks record which myco tools vs. grep/Read")
+				fmt.Println("  the agent uses per conversation (UserPromptSubmit /")
+				fmt.Println("  PostToolUse / Stop).")
+				if wizard.YN("  Install session tracking hooks?", true, yes) {
+					if err := installSessionHooks(root, binary); err != nil {
+						wizard.Warn("hooks install failed: " + err.Error())
+					} else {
+						wizard.Done("session hooks written to .claude/settings.json")
+					}
+				}
 			}
 		}
 	case choice == len(clients): // print snippet
@@ -1158,10 +1174,11 @@ func runWizard(yes, doctorAfter bool) error {
 }
 
 // buildConfig constructs a Config populated from wizard choices.
-func buildConfig(langs []string, projects []config.ProjectConfig) config.Config {
+func buildConfig(langs []string, projects []config.ProjectConfig, telemetry bool) config.Config {
 	cfg := config.Default()
 	cfg.Languages = langs
 	cfg.Projects = projects
+	cfg.Telemetry.Enabled = telemetry
 	return cfg
 }
 
@@ -1702,6 +1719,16 @@ func newSessionCmd() *cobra.Command {
 	return cmd
 }
 
+// transcriptFor resolves the Claude Code transcript path for a session:
+// uses the stored TranscriptPath first, then falls back to the conventional
+// ~/.claude/projects/<slug>/<claude_session_id>.jsonl derivation.
+func transcriptFor(rep telemetry.SessionReport, repoRoot string) string {
+	if rep.Session.TranscriptPath != "" {
+		return rep.Session.TranscriptPath
+	}
+	return telemetry.TranscriptPathFromSessionID(repoRoot, rep.Session.ClaudeSessionID)
+}
+
 func sessionPaths(rc repoCtx) (jsonlPath, sessionFilePath, hookMetaDir string) {
 	base := filepath.Join(rc.Root, ".mycelium")
 	jsonlPath = rc.Cfg.Telemetry.Path
@@ -1730,15 +1757,18 @@ func newSessionStartCmd() *cobra.Command {
 			jsonlPath, sessionFilePath, _ := sessionPaths(rc)
 
 			name := strings.Join(args, " ")
+			var claudeSessionID, transcriptPath string
 			if auto {
-				// Read hook stdin for a name hint; fall through to timestamp if empty.
-				hint, _, _ := telemetry.ParseHookStdin(os.Stdin)
-				if hint != "" {
-					name = hint
+				// Parse all useful fields from the hook stdin payload.
+				hook := telemetry.ParseHookStdin(os.Stdin)
+				if hook.Name != "" && name == "" {
+					name = hook.Name
 				}
+				claudeSessionID = hook.ClaudeSessionID
+				transcriptPath = hook.TranscriptPath
 			}
 
-			meta, err := telemetry.StartSession(jsonlPath, sessionFilePath, name)
+			meta, err := telemetry.StartSession(jsonlPath, sessionFilePath, name, claudeSessionID, transcriptPath)
 			if err != nil {
 				return err
 			}
@@ -1803,13 +1833,14 @@ func newSessionExportCmd() *cobra.Command {
 			}
 			hook, hasHook := telemetry.ReadHookMeta(hookMetaDir, args[0])
 			ext, _ := telemetry.SummarizeExternal(telemetry.ExternalPath(hookMetaDir, args[0]))
+			ts, _ := telemetry.ParseTranscript(transcriptFor(rep, rc.Root))
 			switch format {
 			case "json":
-				return printSessionJSON(rep, hook, hasHook, ext)
+				return printSessionJSON(rep, hook, hasHook, ext, ts)
 			case "markdown", "md":
-				printSessionMarkdown(rep, hook, hasHook, ext)
+				printSessionMarkdown(rep, hook, hasHook, ext, ts)
 			default:
-				printSessionTable(rep, hook, hasHook, ext)
+				printSessionTable(rep, hook, hasHook, ext, ts)
 			}
 			return nil
 		},
@@ -1841,7 +1872,9 @@ func newSessionCompareCmd() *cobra.Command {
 			hookB, _ := telemetry.ReadHookMeta(hookMetaDir, args[1])
 			extA, _ := telemetry.SummarizeExternal(telemetry.ExternalPath(hookMetaDir, args[0]))
 			extB, _ := telemetry.SummarizeExternal(telemetry.ExternalPath(hookMetaDir, args[1]))
-			printSessionCompare(a, b, hookA, hookB, extA, extB)
+			tsA, _ := telemetry.ParseTranscript(transcriptFor(a, rc.Root))
+			tsB, _ := telemetry.ParseTranscript(transcriptFor(b, rc.Root))
+			printSessionCompare(a, b, hookA, hookB, extA, extB, tsA, tsB)
 			return nil
 		},
 	}
@@ -1900,12 +1933,12 @@ func newSessionAnnotateCmd() *cobra.Command {
 			// Resolve session ID: explicit flag > stdin > current_session.json.
 			sid := sessionID
 			if fromStdin {
-				_, it, ot := telemetry.ParseHookStdin(os.Stdin)
-				if it > 0 {
-					inputTokens = it
+				hook := telemetry.ParseHookStdin(os.Stdin)
+				if hook.InputTokens > 0 {
+					inputTokens = hook.InputTokens
 				}
-				if ot > 0 {
-					outputTokens = ot
+				if hook.OutputTokens > 0 {
+					outputTokens = hook.OutputTokens
 				}
 			}
 			if sid == "" {
@@ -1965,7 +1998,10 @@ func newSessionHooksCmd() *cobra.Command {
 // It does a conservative JSON merge: it reads the file as a raw map so
 // it can't accidentally lose keys it doesn't know about.
 func installSessionHooks(repoRoot, binary string) error {
-	settingsPath := filepath.Join(repoRoot, ".claude", "settings.json")
+	// Use settings.local.json — agents treat settings.json as project config
+	// they can freely edit; settings.local.json is recognised as user/local
+	// config and is less likely to be accidentally modified or deleted.
+	settingsPath := filepath.Join(repoRoot, ".claude", "settings.local.json")
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
 		return err
 	}
@@ -2024,6 +2060,7 @@ func installSessionHooks(repoRoot, binary string) error {
 	fmt.Println("  PostToolUse      → myco session track            (records fallback grep/Read calls)")
 	fmt.Println("  Stop             → myco session annotate --stdin (captures token counts)")
 	fmt.Println()
+	fmt.Println("Note: hooks are in settings.local.json — do not commit this file.")
 	fmt.Println("Restart Claude Code for hooks to take effect.")
 	return nil
 }
@@ -2068,11 +2105,17 @@ func mergeHookList(existing any, entry map[string]any) any {
 
 // ─── session report renderers ─────────────────────────────────────────────────
 
-func printSessionTable(rep telemetry.SessionReport, hook telemetry.HookMeta, hasHook bool, ext []telemetry.ExternalSummary) {
+func printSessionTable(rep telemetry.SessionReport, hook telemetry.HookMeta, hasHook bool, ext []telemetry.ExternalSummary, ts telemetry.TranscriptSummary) {
 	s := rep.Session
 	fmt.Printf("session    %s\n", s.ID)
 	fmt.Printf("name       %s\n", s.Name)
 	fmt.Printf("started    %s\n", s.StartedAt.Format("2006-01-02 15:04:05"))
+	if s.ClaudeSessionID != "" {
+		fmt.Printf("claude_id  %s\n", s.ClaudeSessionID)
+	}
+	if ts.FirstUserMessage != "" {
+		fmt.Printf("task       %s\n", truncate(ts.FirstUserMessage, 80))
+	}
 	fmt.Printf("myco_calls %d\n", rep.TotalCalls)
 	fmt.Printf("in_bytes   %s\n", humanBytes(rep.InputBytes))
 	fmt.Printf("out_bytes  %s\n", humanBytes(rep.OutputBytes))
@@ -2081,6 +2124,14 @@ func printSessionTable(rep telemetry.SessionReport, hook telemetry.HookMeta, has
 	}
 	if hasHook && (hook.InputTokens > 0 || hook.OutputTokens > 0) {
 		fmt.Printf("tokens     in=%d  out=%d\n", hook.InputTokens, hook.OutputTokens)
+	}
+	if ts.ToolCalls > 0 {
+		fmt.Printf("turns      %d\n", ts.Turns)
+		fmt.Printf("all_tools  %d  (myco=%d  edits=%d  agents=%d)\n",
+			ts.ToolCalls, ts.MycoCallsFromTranscript, ts.Edits, ts.AgentSpawns)
+		if ts.PlanModeUsed {
+			fmt.Println("plan_mode  yes")
+		}
 	}
 	if len(rep.Summaries) > 0 {
 		fmt.Println()
@@ -2105,12 +2156,27 @@ func printSessionTable(rep telemetry.SessionReport, hook telemetry.HookMeta, has
 	}
 }
 
-func printSessionMarkdown(rep telemetry.SessionReport, hook telemetry.HookMeta, hasHook bool, ext []telemetry.ExternalSummary) {
+func printSessionMarkdown(rep telemetry.SessionReport, hook telemetry.HookMeta, hasHook bool, ext []telemetry.ExternalSummary, ts telemetry.TranscriptSummary) {
 	s := rep.Session
 	fmt.Printf("## Session: %s\n\n", s.Name)
+	if ts.FirstUserMessage != "" {
+		fmt.Printf("> **Task:** %s\n\n", ts.FirstUserMessage)
+	}
 	fmt.Printf("| field | value |\n|---|---|\n")
 	fmt.Printf("| ID | `%s` |\n", s.ID)
+	if s.ClaudeSessionID != "" {
+		fmt.Printf("| Claude session | `%s` |\n", s.ClaudeSessionID)
+	}
 	fmt.Printf("| Started | %s |\n", s.StartedAt.Format("2006-01-02 15:04:05"))
+	if ts.Turns > 0 {
+		fmt.Printf("| Conversation turns | %d |\n", ts.Turns)
+		fmt.Printf("| All tool calls | %d |\n", ts.ToolCalls)
+		fmt.Printf("| File edits | %d |\n", ts.Edits)
+		if ts.AgentSpawns > 0 {
+			fmt.Printf("| Agent spawns | %d |\n", ts.AgentSpawns)
+		}
+		fmt.Printf("| Plan mode | %v |\n", ts.PlanModeUsed)
+	}
 	fmt.Printf("| myco calls | %d |\n", rep.TotalCalls)
 	fmt.Printf("| Input bytes | %s |\n", humanBytes(rep.InputBytes))
 	fmt.Printf("| Output bytes | %s |\n", humanBytes(rep.OutputBytes))
@@ -2140,19 +2206,20 @@ func printSessionMarkdown(rep telemetry.SessionReport, hook telemetry.HookMeta, 
 }
 
 type sessionExportJSON struct {
-	Session                  telemetry.SessionMeta      `json:"session"`
-	TotalMycoCalls           int                        `json:"total_myco_calls"`
-	InputBytes               int64                      `json:"input_bytes"`
-	OutputBytes              int64                      `json:"output_bytes"`
-	CallSpanMS               int64                      `json:"call_span_ms,omitempty"`
-	InputTokens              int                        `json:"input_tokens,omitempty"`
-	OutputTokens             int                        `json:"output_tokens,omitempty"`
-	FallbackExploratoryTotal int                        `json:"fallback_exploratory_total"`
-	MycoTools                []telemetry.Summary        `json:"myco_tools"`
+	Session                  telemetry.SessionMeta       `json:"session"`
+	TotalMycoCalls           int                         `json:"total_myco_calls"`
+	InputBytes               int64                       `json:"input_bytes"`
+	OutputBytes              int64                       `json:"output_bytes"`
+	CallSpanMS               int64                       `json:"call_span_ms,omitempty"`
+	InputTokens              int                         `json:"input_tokens,omitempty"`
+	OutputTokens             int                         `json:"output_tokens,omitempty"`
+	FallbackExploratoryTotal int                         `json:"fallback_exploratory_total"`
+	MycoTools                []telemetry.Summary         `json:"myco_tools"`
 	FallbackTools            []telemetry.ExternalSummary `json:"fallback_tools"`
+	Transcript               *telemetry.TranscriptSummary `json:"transcript,omitempty"`
 }
 
-func printSessionJSON(rep telemetry.SessionReport, hook telemetry.HookMeta, hasHook bool, ext []telemetry.ExternalSummary) error {
+func printSessionJSON(rep telemetry.SessionReport, hook telemetry.HookMeta, hasHook bool, ext []telemetry.ExternalSummary, ts telemetry.TranscriptSummary) error {
 	out := sessionExportJSON{
 		Session:                  rep.Session,
 		TotalMycoCalls:           rep.TotalCalls,
@@ -2169,6 +2236,9 @@ func printSessionJSON(rep telemetry.SessionReport, hook telemetry.HookMeta, hasH
 		out.InputTokens = hook.InputTokens
 		out.OutputTokens = hook.OutputTokens
 	}
+	if ts.ToolCalls > 0 || ts.Turns > 0 {
+		out.Transcript = &ts
+	}
 	b, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {
 		return err
@@ -2177,7 +2247,7 @@ func printSessionJSON(rep telemetry.SessionReport, hook telemetry.HookMeta, hasH
 	return nil
 }
 
-func printSessionCompare(a, b telemetry.SessionReport, hookA, hookB telemetry.HookMeta, extA, extB []telemetry.ExternalSummary) {
+func printSessionCompare(a, b telemetry.SessionReport, hookA, hookB telemetry.HookMeta, extA, extB []telemetry.ExternalSummary, tsA, tsB telemetry.TranscriptSummary) {
 	nameA := truncate(a.Session.Name, 20)
 	nameB := truncate(b.Session.Name, 20)
 	fmt.Printf("%-26s  %20s  %20s  %10s\n", "metric", nameA, nameB, "delta")
@@ -2187,6 +2257,12 @@ func printSessionCompare(a, b telemetry.SessionReport, hookA, hookB telemetry.Ho
 	printCompareBytes("myco_out_bytes", a.OutputBytes, b.OutputBytes)
 	printCompareDur("myco_call_span", a.CallDuration, b.CallDuration)
 	printCompareInt("fallback_exploratory", int64(telemetry.TotalExploratory(extA)), int64(telemetry.TotalExploratory(extB)))
+	if tsA.ToolCalls > 0 || tsB.ToolCalls > 0 {
+		printCompareInt("turns", int64(tsA.Turns), int64(tsB.Turns))
+		printCompareInt("all_tool_calls", int64(tsA.ToolCalls), int64(tsB.ToolCalls))
+		printCompareInt("edits", int64(tsA.Edits), int64(tsB.Edits))
+		printCompareInt("agent_spawns", int64(tsA.AgentSpawns), int64(tsB.AgentSpawns))
+	}
 
 	if hookA.InputTokens > 0 || hookB.InputTokens > 0 {
 		printCompareInt("input_tokens", int64(hookA.InputTokens), int64(hookB.InputTokens))

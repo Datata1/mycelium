@@ -123,7 +123,7 @@ func TestSession_RoundTrip(t *testing.T) {
 	sessionFile := filepath.Join(dir, "current_session.json")
 
 	// Start session A.
-	metaA, err := StartSession(jsonl, sessionFile, "task-alpha")
+	metaA, err := StartSession(jsonl, sessionFile, "task-alpha", "", "")
 	if err != nil {
 		t.Fatalf("StartSession A: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestSession_RoundTrip(t *testing.T) {
 	}
 
 	// Start session B — daemon picks it up on next Record().
-	metaB, err := StartSession(jsonl, sessionFile, "task-beta")
+	metaB, err := StartSession(jsonl, sessionFile, "task-beta", "", "")
 	if err != nil {
 		t.Fatalf("StartSession B: %v", err)
 	}
@@ -219,17 +219,23 @@ func TestSession_HookMeta(t *testing.T) {
 // name hint and token counts from a JSON payload.
 func TestParseHookStdin(t *testing.T) {
 	t.Parallel()
-	payload := `{"prompt":"implement the telemetry export feature for myco","usage":{"input_tokens":3000,"output_tokens":1500}}`
+	payload := `{"session_id":"abc-123","transcript_path":"/tmp/abc.jsonl","prompt":"implement the telemetry export feature for myco","usage":{"input_tokens":3000,"output_tokens":1500}}`
 	r := strings.NewReader(payload)
-	name, in, out := ParseHookStdin(r)
-	if name == "" {
+	d := ParseHookStdin(r)
+	if d.Name == "" {
 		t.Error("expected non-empty name hint")
 	}
-	if in != 3000 {
-		t.Errorf("input_tokens: got %d, want 3000", in)
+	if d.InputTokens != 3000 {
+		t.Errorf("input_tokens: got %d, want 3000", d.InputTokens)
 	}
-	if out != 1500 {
-		t.Errorf("output_tokens: got %d, want 1500", out)
+	if d.OutputTokens != 1500 {
+		t.Errorf("output_tokens: got %d, want 1500", d.OutputTokens)
+	}
+	if d.ClaudeSessionID != "abc-123" {
+		t.Errorf("claude_session_id: got %q, want abc-123", d.ClaudeSessionID)
+	}
+	if d.TranscriptPath != "/tmp/abc.jsonl" {
+		t.Errorf("transcript_path: got %q, want /tmp/abc.jsonl", d.TranscriptPath)
 	}
 }
 
@@ -368,7 +374,7 @@ func TestSession_SessionIDPropagation(t *testing.T) {
 	_ = rec.Record(Record{Tool: "stats", OK: true})
 
 	// Start session.
-	meta, err := StartSession(jsonl, sessionFile, "tagged")
+	meta, err := StartSession(jsonl, sessionFile, "tagged", "", "")
 	if err != nil {
 		t.Fatalf("StartSession: %v", err)
 	}

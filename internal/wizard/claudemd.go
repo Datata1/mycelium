@@ -6,19 +6,24 @@ import (
 )
 
 // primingSnippet is the block appended to CLAUDE.md. It is intentionally
-// short — one paragraph of orientation, not a manual. The MCP tool
-// descriptions (rewritten in v3.1) carry the per-tool details.
+// short — one paragraph of orientation plus one explicit anti-pattern. The
+// MCP tool descriptions carry the per-tool details; this block handles the
+// one failure mode that descriptions alone don't prevent: agents using
+// search_lexical as a general-purpose grep.
 const primingSnippet = `
 ## mycelium (myco)
 
 myco is a local code knowledge base exposed as MCP tools. Reach for it
 **before** ` + "`Bash(grep)`" + ` or ` + "`Read`" + ` for any code navigation task.
 
-Key tools: ` + "`find_symbol`" + ` · ` + "`get_references`" + ` · ` + "`read_focused`" + ` ·
-` + "`get_neighborhood`" + ` · ` + "`search_lexical`" + ` · ` + "`impact_analysis`" + `
+**Navigation:** ` + "`find_symbol`" + ` (definitions) · ` + "`get_references`" + ` (callers) ·
+` + "`read_focused`" + ` (read a file with irrelevant symbols collapsed) ·
+` + "`get_neighborhood`" + ` (local call graph) · ` + "`impact_analysis`" + ` (what depends on X)
 
-Check ` + "`myco stats`" + ` (index health) and ` + "`myco doctor`" + ` (quality signals)
-when results look wrong. Skills tree at ` + "`.mycelium/skills/`" + ` if compiled.
+**Rule:** when you have an identifier name, use ` + "`find_symbol`" + ` — not
+` + "`search_lexical`" + `. ` + "`search_lexical`" + ` is for literal strings and regex patterns
+only (log messages, route paths, magic constants). Using it for symbol names
+misses renames, aliases, and qualified forms.
 `
 
 // primingMarker is a stable string inside primingSnippet used to detect

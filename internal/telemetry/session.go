@@ -19,10 +19,16 @@ import (
 // session_start JSONL marker. Kept small: the JSONL is the source of
 // truth for call data; this file just tells the daemon which session is
 // active right now.
+//
+// ClaudeSessionID and TranscriptPath are set when the session was started
+// via a Claude Code UserPromptSubmit hook — they link the myco session to
+// the agent's conversation so the export can include transcript metrics.
 type SessionMeta struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	StartedAt time.Time `json:"started_at"`
+	ID              string    `json:"id"`
+	Name            string    `json:"name"`
+	StartedAt       time.Time `json:"started_at"`
+	ClaudeSessionID string    `json:"claude_session_id,omitempty"`
+	TranscriptPath  string    `json:"transcript_path,omitempty"`
 }
 
 // SessionReport is the result of AggregateSession: per-tool stats plus
@@ -53,15 +59,19 @@ type HookMeta struct {
 // name may be empty; a timestamp slug is used in that case.
 // sessionFilePath is the path of the .mycelium/current_session.json
 // sidecar; jsonlPath is the telemetry log.
-func StartSession(jsonlPath, sessionFilePath, name string) (SessionMeta, error) {
+// claudeSessionID and transcriptPath are optional; pass empty strings when
+// starting a session manually rather than via a Claude Code hook.
+func StartSession(jsonlPath, sessionFilePath, name, claudeSessionID, transcriptPath string) (SessionMeta, error) {
 	if name == "" {
 		name = time.Now().Format("2006-01-02 15:04")
 	}
 	id := newSessionID()
 	meta := SessionMeta{
-		ID:        id,
-		Name:      name,
-		StartedAt: time.Now(),
+		ID:              id,
+		Name:            name,
+		StartedAt:       time.Now(),
+		ClaudeSessionID: claudeSessionID,
+		TranscriptPath:  transcriptPath,
 	}
 
 	// Write the JSONL marker first so the log is consistent even if the
@@ -148,12 +158,23 @@ func ReadHookMeta(dir, sessionID string) (HookMeta, bool) {
 	return m, true
 }
 
-// ParseHookStdin attempts to extract a name hint and token counts from
-// the JSON that Claude Code pipes to hooks via stdin. Fields it doesn't
-// recognize are silently ignored — the caller should always have a
-// fallback name.
-func ParseHookStdin(r io.Reader) (name string, inputTokens, outputTokens int) {
+// HookStdinData is the parsed result of a Claude Code hook's stdin payload.
+// All fields are best-effort — hook versions and contexts vary.
+type HookStdinData struct {
+	Name           string // first 8 words of the prompt, for session naming
+	InputTokens    int
+	OutputTokens   int
+	ClaudeSessionID string // Claude Code's UUID for this conversation
+	TranscriptPath  string // absolute path to the conversation JSONL
+}
+
+// ParseHookStdin extracts all useful fields from the JSON that Claude Code
+// pipes to hooks via stdin. Fields it doesn't recognise are silently ignored.
+func ParseHookStdin(r io.Reader) HookStdinData {
 	var payload struct {
+		// Common fields across hook types
+		SessionID      string `json:"session_id"`
+		TranscriptPath string `json:"transcript_path"`
 		// UserPromptSubmit fields
 		Prompt string `json:"prompt"`
 		// Some Claude Code versions nest the message
@@ -171,11 +192,15 @@ func ParseHookStdin(r io.Reader) (name string, inputTokens, outputTokens int) {
 	}
 	b, err := io.ReadAll(r)
 	if err != nil || len(b) == 0 {
-		return "", 0, 0
+		return HookStdinData{}
 	}
 	_ = json.Unmarshal(b, &payload)
 
-	// Build a name hint from the first ~60 chars of the prompt text.
+	var d HookStdinData
+	d.ClaudeSessionID = payload.SessionID
+	d.TranscriptPath = payload.TranscriptPath
+
+	// Build a name hint from the first ~8 words of the prompt text.
 	text := payload.Prompt
 	if text == "" {
 		text = payload.Message.Content
@@ -186,18 +211,18 @@ func ParseHookStdin(r io.Reader) (name string, inputTokens, outputTokens int) {
 		if len(words) > 8 {
 			words = words[:8]
 		}
-		name = strings.Join(words, " ")
+		d.Name = strings.Join(words, " ")
 	}
 
-	it := payload.Usage.InputTokens
-	if it == 0 {
-		it = payload.InputTokens
+	d.InputTokens = payload.Usage.InputTokens
+	if d.InputTokens == 0 {
+		d.InputTokens = payload.InputTokens
 	}
-	ot := payload.Usage.OutputTokens
-	if ot == 0 {
-		ot = payload.OutputTokens
+	d.OutputTokens = payload.Usage.OutputTokens
+	if d.OutputTokens == 0 {
+		d.OutputTokens = payload.OutputTokens
 	}
-	return name, it, ot
+	return d
 }
 
 // ─── internals ───────────────────────────────────────────────────────────────

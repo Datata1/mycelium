@@ -15,6 +15,7 @@ import (
 
 	"github.com/jdwiederstein/mycelium/internal/config"
 	"github.com/jdwiederstein/mycelium/internal/query"
+	"github.com/jdwiederstein/mycelium/internal/telemetry"
 )
 
 // Level classifies a check result.
@@ -83,6 +84,15 @@ type Thresholds struct {
 	// tiny project).
 	EmptyProjectFail int
 	EmptyProjectWarn int
+	// Adoption thresholds: fired when the telemetry log has >= MinAdoptionCalls
+	// total calls and the agent appears to be in the "search_lexical only"
+	// failure mode (using myco as a faster grep instead of a graph navigator).
+	// LexicalDominanceWarn is the search_lexical fraction that triggers a warn;
+	// StructuralMinWarn is the floor for structural-tool fraction below which
+	// the warn also fires. Both conditions must be true simultaneously.
+	MinAdoptionCalls      int
+	LexicalDominanceWarn  float64
+	StructuralMinWarn     float64
 }
 
 func DefaultThresholds() Thresholds {
@@ -99,6 +109,9 @@ func DefaultThresholds() Thresholds {
 		InotifyFail:      0.90,
 		EmptyProjectFail: 1,
 		EmptyProjectWarn: 10,
+		MinAdoptionCalls:     20,
+		LexicalDominanceWarn: 0.60,
+		StructuralMinWarn:    0.10,
 	}
 }
 
@@ -370,7 +383,90 @@ func Run(ctx context.Context, r *query.Reader, embedderProvider string, th Thres
 		}
 	}
 
+	// Adoption check: only runs when repoRoot is set and telemetry is present.
+	if repoRoot != "" {
+		if c := checkAdoption(repoRoot, th); c != nil {
+			add(*c)
+		}
+	}
+
 	return rep, nil
+}
+
+// checkAdoption reads the telemetry log and returns a Check when the agent
+// appears to be in the "search_lexical only" failure mode. Returns nil when
+// the log is absent, has too few calls, or telemetry is not configured.
+func checkAdoption(repoRoot string, th Thresholds) *Check {
+	logPath := filepath.Join(repoRoot, ".mycelium", "telemetry.jsonl")
+	summaries, err := telemetry.Aggregate(logPath)
+	if err != nil || len(summaries) == 0 {
+		return nil
+	}
+
+	// Find the "all" rollup for total call count, and individual tools.
+	var total, lexical, structural int
+	structuralTools := map[string]bool{
+		"find_symbol":     true,
+		"get_references":  true,
+		"get_neighborhood": true,
+		"impact_analysis": true,
+		"critical_path":   true,
+		"get_definition":  true,
+	}
+	for _, s := range summaries {
+		if s.Tool == "all" {
+			total = s.Count
+			continue
+		}
+		if s.Tool == "search_lexical" {
+			lexical = s.Count
+		}
+		if structuralTools[s.Tool] {
+			structural += s.Count
+		}
+	}
+	if total < th.MinAdoptionCalls {
+		return nil
+	}
+
+	lexicalRatio := float64(lexical) / float64(total)
+	structuralRatio := float64(structural) / float64(total)
+
+	if lexicalRatio <= th.LexicalDominanceWarn || structuralRatio >= th.StructuralMinWarn {
+		return &Check{
+			Name:  "adoption_tool_diversity",
+			Level: LevelPass,
+			Message: fmt.Sprintf(
+				"tool diversity ok: search_lexical=%.0f%% structural=%.0f%% (%d total calls)",
+				lexicalRatio*100, structuralRatio*100, total,
+			),
+			Detail: map[string]any{
+				"total":           total,
+				"lexical":         lexical,
+				"structural":      structural,
+				"lexical_ratio":   lexicalRatio,
+				"structural_ratio": structuralRatio,
+			},
+		}
+	}
+
+	return &Check{
+		Name:  "adoption_tool_diversity",
+		Level: LevelWarn,
+		Message: fmt.Sprintf(
+			"agent is using myco as grep: search_lexical=%.0f%% structural=%.0f%% (%d calls) — "+
+				"add 'prefer find_symbol for identifiers' to CLAUDE.md",
+			lexicalRatio*100, structuralRatio*100, total,
+		),
+		Detail: map[string]any{
+			"total":            total,
+			"lexical":          lexical,
+			"structural":       structural,
+			"lexical_ratio":    lexicalRatio,
+			"structural_ratio": structuralRatio,
+			"hint":             "run: myco init (choose 'append to CLAUDE.md') to add the priming snippet",
+		},
+	}
 }
 
 // countSkillFiles walks <skills>/packages/**/SKILL.md and returns the

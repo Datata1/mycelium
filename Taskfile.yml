@@ -2,15 +2,20 @@ version: '3'
 
 vars:
   TAGS: sqlite_fts5
-  BIN: /tmp/myco
+  # BIN resolves to ~/.local/bin/myco — persistent across reboots and
+  # usable as `myco` once ~/.local/bin is in PATH. Override with:
+  #   task build BIN=/usr/local/bin/myco
+  BIN:
+    sh: echo "$HOME/.local/bin/myco"
 
 tasks:
 
   # ── build ────────────────────────────────────────────────────────────────────
 
   build:
-    desc: Build the myco binary to {{.BIN}}
+    desc: Build the myco binary to ~/.local/bin/myco
     cmds:
+      - mkdir -p "$(dirname {{.BIN}})"
       - go build -tags {{.TAGS}} -o {{.BIN}} ./cmd/myco
     sources:
       - '**/*.go'

@@ -123,11 +123,40 @@ func DetectSubprojects(root string) ([]Subproject, error) {
 		out = append(out, Subproject{
 			RelDir:        relDir,
 			MarkerFile:    d.Name(),
-			SuggestedName: filepath.Base(relDir),
+			SuggestedName: SuggestProjectName(relDir),
 		})
 		return nil
 	})
 	return out, err
+}
+
+// genericNames are base directory names so common they convey no unique
+// identity on their own. When detected, the parent directory is prepended.
+// Deliberately narrow: service-level names (api, web, server…) are kept
+// as-is because they are usually unique within a repo.
+var genericNames = map[string]bool{
+	"common": true, "shared": true,
+	"lib": true, "libs": true,
+	"core": true, "node": true,
+	"utils": true, "util": true,
+	"pkg": true, "src": true,
+}
+
+// SuggestProjectName returns a project name for a sub-directory. When
+// the base directory name is generic (common, node, shared, …) it
+// prepends the parent component so xxx-service/common → xxx-service-common
+// instead of the ambiguous "common".
+func SuggestProjectName(relDir string) string {
+	parts := strings.Split(filepath.ToSlash(relDir), "/")
+	base := parts[len(parts)-1]
+	if genericNames[strings.ToLower(base)] && len(parts) >= 2 {
+		parent := parts[len(parts)-2]
+		// Strip common suffixes from parent to keep names concise.
+		parent = strings.TrimSuffix(parent, "-service")
+		parent = strings.TrimSuffix(parent, "-svc")
+		return parent + "-" + base
+	}
+	return base
 }
 
 // langFromExt maps a filename to a mycelium language identifier.
