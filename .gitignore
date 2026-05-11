@@ -5,6 +5,8 @@
 /myco
 /dist/
 /bin/
+.task/
+.claude/
 
 # Editor / OS
 .DS_Store

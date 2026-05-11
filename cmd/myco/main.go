@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strings"
 	"syscall"
 	"time"
 
@@ -62,6 +63,7 @@ func main() {
 		newDoctorCmd(),
 		newSkillsCmd(),
 		newReadCmd(),
+		newSessionCmd(),
 	)
 
 	if err := root.Execute(); err != nil {
@@ -1206,6 +1208,8 @@ func runDaemon(ctx context.Context, backendOverride string) error {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[daemon] telemetry disabled: %v\n", err)
 		} else {
+			sessionFile := filepath.Join(rc.Root, ".mycelium", "current_session.json")
+			fr.SetSessionFile(sessionFile)
 			rec = fr
 			fmt.Fprintf(os.Stderr, "[daemon] telemetry on: %s\n", path)
 			defer fr.Close()
@@ -1563,4 +1567,618 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return s[:max] + "..."
+}
+
+// ─── myco session ─────────────────────────────────────────────────────────────
+
+func newSessionCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "session",
+		Short: "Measure and export agent session telemetry (v2.6)",
+	}
+	cmd.AddCommand(
+		newSessionStartCmd(),
+		newSessionListCmd(),
+		newSessionExportCmd(),
+		newSessionCompareCmd(),
+		newSessionAnnotateCmd(),
+		newSessionTrackCmd(),
+		newSessionHooksCmd(),
+	)
+	return cmd
+}
+
+func sessionPaths(rc repoCtx) (jsonlPath, sessionFilePath, hookMetaDir string) {
+	base := filepath.Join(rc.Root, ".mycelium")
+	jsonlPath = rc.Cfg.Telemetry.Path
+	if jsonlPath == "" {
+		jsonlPath = filepath.Join(base, "telemetry.jsonl")
+	}
+	sessionFilePath = filepath.Join(base, "current_session.json")
+	hookMetaDir = base
+	return
+}
+
+func newSessionStartCmd() *cobra.Command {
+	var auto bool
+	cmd := &cobra.Command{
+		Use:   "start [name]",
+		Short: "Begin a new named session (stamps all subsequent telemetry calls with its ID)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rc, err := loadRepoCtx()
+			if err != nil {
+				return err
+			}
+			if !rc.Cfg.Telemetry.Enabled {
+				fmt.Fprintln(os.Stderr,
+					"hint: telemetry.enabled is false — enable it in .mycelium.yml and restart the daemon.")
+			}
+			jsonlPath, sessionFilePath, _ := sessionPaths(rc)
+
+			name := strings.Join(args, " ")
+			if auto {
+				// Read hook stdin for a name hint; fall through to timestamp if empty.
+				hint, _, _ := telemetry.ParseHookStdin(os.Stdin)
+				if hint != "" {
+					name = hint
+				}
+			}
+
+			meta, err := telemetry.StartSession(jsonlPath, sessionFilePath, name)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("started  %s  %q\n", meta.ID, meta.Name)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&auto, "auto", false,
+		"read name hint from Claude Code hook stdin; for UserPromptSubmit hooks")
+	return cmd
+}
+
+func newSessionListCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "list",
+		Short: "List recorded sessions with call counts",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rc, err := loadRepoCtx()
+			if err != nil {
+				return err
+			}
+			jsonlPath, _, _ := sessionPaths(rc)
+			reports, err := telemetry.ListSessions(jsonlPath)
+			if err != nil {
+				return err
+			}
+			if len(reports) == 0 {
+				fmt.Fprintln(os.Stderr, "no sessions recorded (run `myco session start` first)")
+				return nil
+			}
+			fmt.Printf("%-26s  %-20s  %-19s  %6s  %12s\n",
+				"ID", "name", "started", "calls", "out_bytes")
+			for _, r := range reports {
+				fmt.Printf("%-26s  %-20s  %-19s  %6d  %12s\n",
+					r.Session.ID,
+					truncate(r.Session.Name, 20),
+					r.Session.StartedAt.Format("2006-01-02 15:04:05"),
+					r.TotalCalls,
+					humanBytes(r.OutputBytes),
+				)
+			}
+			return nil
+		},
+	}
+}
+
+func newSessionExportCmd() *cobra.Command {
+	var format string
+	cmd := &cobra.Command{
+		Use:   "export <session-id>",
+		Short: "Render a full report for one session",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rc, err := loadRepoCtx()
+			if err != nil {
+				return err
+			}
+			jsonlPath, _, hookMetaDir := sessionPaths(rc)
+			rep, err := telemetry.AggregateSession(jsonlPath, args[0])
+			if err != nil {
+				return err
+			}
+			hook, hasHook := telemetry.ReadHookMeta(hookMetaDir, args[0])
+			ext, _ := telemetry.SummarizeExternal(telemetry.ExternalPath(hookMetaDir, args[0]))
+			switch format {
+			case "json":
+				return printSessionJSON(rep, hook, hasHook, ext)
+			case "markdown", "md":
+				printSessionMarkdown(rep, hook, hasHook, ext)
+			default:
+				printSessionTable(rep, hook, hasHook, ext)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&format, "format", "table", "output format: table | json | markdown")
+	return cmd
+}
+
+func newSessionCompareCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "compare <session-a> <session-b>",
+		Short: "Side-by-side diff of two sessions",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rc, err := loadRepoCtx()
+			if err != nil {
+				return err
+			}
+			jsonlPath, _, hookMetaDir := sessionPaths(rc)
+			a, err := telemetry.AggregateSession(jsonlPath, args[0])
+			if err != nil {
+				return fmt.Errorf("session A: %w", err)
+			}
+			b, err := telemetry.AggregateSession(jsonlPath, args[1])
+			if err != nil {
+				return fmt.Errorf("session B: %w", err)
+			}
+			hookA, _ := telemetry.ReadHookMeta(hookMetaDir, args[0])
+			hookB, _ := telemetry.ReadHookMeta(hookMetaDir, args[1])
+			extA, _ := telemetry.SummarizeExternal(telemetry.ExternalPath(hookMetaDir, args[0]))
+			extB, _ := telemetry.SummarizeExternal(telemetry.ExternalPath(hookMetaDir, args[1]))
+			printSessionCompare(a, b, hookA, hookB, extA, extB)
+			return nil
+		},
+	}
+}
+
+// newSessionTrackCmd is called by the Claude Code PostToolUse hook after
+// every tool call. It records non-myco tool uses so the session export
+// can show how often the agent fell back to grep/Read/etc. instead of
+// using myco — the key signal for evaluating myco's coverage.
+func newSessionTrackCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "track",
+		Short: "Record a non-myco tool call from a PostToolUse hook (reads JSON from stdin)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rc, err := loadRepoCtx()
+			if err != nil {
+				return err
+			}
+			_, sessionFilePath, hookMetaDir := sessionPaths(rc)
+			meta, ok := telemetry.LoadCurrentSession(sessionFilePath)
+			if !ok {
+				// No active session — silently exit. This is normal at
+				// startup before the first session start.
+				return nil
+			}
+			rec, ok := telemetry.ParsePostToolUse(os.Stdin, meta.ID)
+			if !ok {
+				// MCP call or unrecognised payload — skip without error.
+				return nil
+			}
+			extPath := telemetry.ExternalPath(hookMetaDir, meta.ID)
+			return telemetry.AppendExternal(extPath, rec)
+		},
+	}
+}
+
+// newSessionAnnotateCmd is called by the Claude Code Stop hook to attach
+// token usage to the current session's sidecar file.
+func newSessionAnnotateCmd() *cobra.Command {
+	var (
+		inputTokens  int
+		outputTokens int
+		sessionID    string
+		fromStdin    bool
+	)
+	cmd := &cobra.Command{
+		Use:   "annotate",
+		Short: "Attach token/conversation metadata to the current session (for Stop hooks)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rc, err := loadRepoCtx()
+			if err != nil {
+				return err
+			}
+			_, sessionFilePath, hookMetaDir := sessionPaths(rc)
+
+			// Resolve session ID: explicit flag > stdin > current_session.json.
+			sid := sessionID
+			if fromStdin {
+				_, it, ot := telemetry.ParseHookStdin(os.Stdin)
+				if it > 0 {
+					inputTokens = it
+				}
+				if ot > 0 {
+					outputTokens = ot
+				}
+			}
+			if sid == "" {
+				meta, ok := telemetry.LoadCurrentSession(sessionFilePath)
+				if !ok {
+					return fmt.Errorf("no active session; pass --session <id> explicitly")
+				}
+				sid = meta.ID
+			}
+
+			meta := telemetry.HookMeta{
+				SessionID:    sid,
+				InputTokens:  inputTokens,
+				OutputTokens: outputTokens,
+			}
+			if err := telemetry.WriteHookMeta(hookMetaDir, meta); err != nil {
+				return err
+			}
+			fmt.Printf("annotated %s  in=%d out=%d\n", sid, inputTokens, outputTokens)
+			return nil
+		},
+	}
+	cmd.Flags().IntVar(&inputTokens, "input-tokens", 0, "input token count")
+	cmd.Flags().IntVar(&outputTokens, "output-tokens", 0, "output token count")
+	cmd.Flags().StringVar(&sessionID, "session", "", "session ID to annotate (default: current session)")
+	cmd.Flags().BoolVar(&fromStdin, "stdin", false, "parse token counts from Claude Code hook JSON on stdin")
+	return cmd
+}
+
+// newSessionHooksCmd writes Claude Code hook entries to the project
+// .claude/settings.json so sessions start and annotate automatically.
+func newSessionHooksCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "hooks",
+		Short: "Manage Claude Code hook integration for automatic session tracking",
+	}
+	cmd.AddCommand(&cobra.Command{
+		Use:   "install",
+		Short: "Write UserPromptSubmit + Stop hooks to .claude/settings.json",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rc, err := loadRepoCtx()
+			if err != nil {
+				return err
+			}
+			binary, err := os.Executable()
+			if err != nil {
+				binary = "myco"
+			}
+			return installSessionHooks(rc.Root, binary)
+		},
+	})
+	return cmd
+}
+
+// installSessionHooks reads the project .claude/settings.json (creating
+// it if absent), merges the two session hook entries, and writes it back.
+// It does a conservative JSON merge: it reads the file as a raw map so
+// it can't accidentally lose keys it doesn't know about.
+func installSessionHooks(repoRoot, binary string) error {
+	settingsPath := filepath.Join(repoRoot, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		return err
+	}
+
+	// Load existing settings or start from scratch.
+	raw := map[string]any{}
+	if b, err := os.ReadFile(settingsPath); err == nil {
+		_ = json.Unmarshal(b, &raw)
+	}
+
+	// Build the three hook entries we need.
+	startHook := map[string]any{
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": binary + " session start --auto",
+			},
+		},
+	}
+	trackHook := map[string]any{
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": binary + " session track",
+			},
+		},
+	}
+	annotateHook := map[string]any{
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": binary + " session annotate --stdin",
+			},
+		},
+	}
+
+	// Merge into the hooks map without clobbering unrelated entries.
+	hooks, _ := raw["hooks"].(map[string]any)
+	if hooks == nil {
+		hooks = map[string]any{}
+	}
+	hooks["UserPromptSubmit"] = mergeHookList(hooks["UserPromptSubmit"], startHook)
+	hooks["PostToolUse"] = mergeHookList(hooks["PostToolUse"], trackHook)
+	hooks["Stop"] = mergeHookList(hooks["Stop"], annotateHook)
+	raw["hooks"] = hooks
+
+	b, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(settingsPath, append(b, '\n'), 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("wrote %s\n", settingsPath)
+	fmt.Println("  UserPromptSubmit → myco session start --auto    (new session per conversation)")
+	fmt.Println("  PostToolUse      → myco session track            (records fallback grep/Read calls)")
+	fmt.Println("  Stop             → myco session annotate --stdin (captures token counts)")
+	fmt.Println()
+	fmt.Println("Restart Claude Code for hooks to take effect.")
+	return nil
+}
+
+// mergeHookList takes the existing value for a hook event key (which may
+// be nil, a slice, or a single map) and appends our entry if not already
+// present (matched by command string).
+func mergeHookList(existing any, entry map[string]any) any {
+	ourCmd := ""
+	if hooks, ok := entry["hooks"].([]any); ok && len(hooks) > 0 {
+		if h, ok := hooks[0].(map[string]any); ok {
+			ourCmd, _ = h["command"].(string)
+		}
+	}
+
+	var list []any
+	switch v := existing.(type) {
+	case []any:
+		list = v
+	case map[string]any:
+		list = []any{v}
+	}
+
+	// Deduplicate by command string.
+	for _, item := range list {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if hs, ok := m["hooks"].([]any); ok {
+			for _, h := range hs {
+				if hm, ok := h.(map[string]any); ok {
+					if cmd, _ := hm["command"].(string); cmd == ourCmd {
+						return list // already present
+					}
+				}
+			}
+		}
+	}
+	return append(list, entry)
+}
+
+// ─── session report renderers ─────────────────────────────────────────────────
+
+func printSessionTable(rep telemetry.SessionReport, hook telemetry.HookMeta, hasHook bool, ext []telemetry.ExternalSummary) {
+	s := rep.Session
+	fmt.Printf("session    %s\n", s.ID)
+	fmt.Printf("name       %s\n", s.Name)
+	fmt.Printf("started    %s\n", s.StartedAt.Format("2006-01-02 15:04:05"))
+	fmt.Printf("myco_calls %d\n", rep.TotalCalls)
+	fmt.Printf("in_bytes   %s\n", humanBytes(rep.InputBytes))
+	fmt.Printf("out_bytes  %s\n", humanBytes(rep.OutputBytes))
+	if rep.CallDuration > 0 {
+		fmt.Printf("call_span  %s\n", rep.CallDuration.Round(time.Millisecond))
+	}
+	if hasHook && (hook.InputTokens > 0 || hook.OutputTokens > 0) {
+		fmt.Printf("tokens     in=%d  out=%d\n", hook.InputTokens, hook.OutputTokens)
+	}
+	if len(rep.Summaries) > 0 {
+		fmt.Println()
+		fmt.Println("── myco tools ──────────────────────────────────────────────────")
+		fmt.Printf("%-22s  %6s  %6s  %12s  %8s\n", "tool", "calls", "ok", "out_bytes", "p50")
+		for _, s := range rep.Summaries {
+			fmt.Printf("%-22s  %6d  %6d  %12s  %8s\n",
+				s.Tool, s.Count, s.OK, humanBytes(s.OutputBytes), s.P50Duration)
+		}
+	}
+	if len(ext) > 0 {
+		exploratory := telemetry.TotalExploratory(ext)
+		fmt.Println()
+		fmt.Printf("── fallback tools (non-myco)  exploratory=%d ────────────────────\n", exploratory)
+		fmt.Printf("%-28s  %-12s  %6s\n", "tool", "category", "calls")
+		for _, e := range ext {
+			fmt.Printf("%-28s  %-12s  %6d\n", e.Tool, e.Category, e.Count)
+		}
+	} else {
+		fmt.Println()
+		fmt.Println("── fallback tools: none recorded ────────────────────────────────")
+	}
+}
+
+func printSessionMarkdown(rep telemetry.SessionReport, hook telemetry.HookMeta, hasHook bool, ext []telemetry.ExternalSummary) {
+	s := rep.Session
+	fmt.Printf("## Session: %s\n\n", s.Name)
+	fmt.Printf("| field | value |\n|---|---|\n")
+	fmt.Printf("| ID | `%s` |\n", s.ID)
+	fmt.Printf("| Started | %s |\n", s.StartedAt.Format("2006-01-02 15:04:05"))
+	fmt.Printf("| myco calls | %d |\n", rep.TotalCalls)
+	fmt.Printf("| Input bytes | %s |\n", humanBytes(rep.InputBytes))
+	fmt.Printf("| Output bytes | %s |\n", humanBytes(rep.OutputBytes))
+	if rep.CallDuration > 0 {
+		fmt.Printf("| Call span | %s |\n", rep.CallDuration.Round(time.Millisecond))
+	}
+	if hasHook && (hook.InputTokens > 0 || hook.OutputTokens > 0) {
+		fmt.Printf("| Input tokens | %d |\n", hook.InputTokens)
+		fmt.Printf("| Output tokens | %d |\n", hook.OutputTokens)
+	}
+	fmt.Printf("| Fallback exploratory calls | %d |\n", telemetry.TotalExploratory(ext))
+	if len(rep.Summaries) > 0 {
+		fmt.Printf("\n### myco tools\n\n")
+		fmt.Printf("| tool | calls | ok | out_bytes | p50 |\n|---|---|---|---|---|\n")
+		for _, s := range rep.Summaries {
+			fmt.Printf("| %s | %d | %d | %s | %s |\n",
+				s.Tool, s.Count, s.OK, humanBytes(s.OutputBytes), s.P50Duration)
+		}
+	}
+	if len(ext) > 0 {
+		fmt.Printf("\n### Fallback tools (non-myco)\n\n")
+		fmt.Printf("| tool | category | calls |\n|---|---|---|\n")
+		for _, e := range ext {
+			fmt.Printf("| %s | %s | %d |\n", e.Tool, e.Category, e.Count)
+		}
+	}
+}
+
+type sessionExportJSON struct {
+	Session                  telemetry.SessionMeta      `json:"session"`
+	TotalMycoCalls           int                        `json:"total_myco_calls"`
+	InputBytes               int64                      `json:"input_bytes"`
+	OutputBytes              int64                      `json:"output_bytes"`
+	CallSpanMS               int64                      `json:"call_span_ms,omitempty"`
+	InputTokens              int                        `json:"input_tokens,omitempty"`
+	OutputTokens             int                        `json:"output_tokens,omitempty"`
+	FallbackExploratoryTotal int                        `json:"fallback_exploratory_total"`
+	MycoTools                []telemetry.Summary        `json:"myco_tools"`
+	FallbackTools            []telemetry.ExternalSummary `json:"fallback_tools"`
+}
+
+func printSessionJSON(rep telemetry.SessionReport, hook telemetry.HookMeta, hasHook bool, ext []telemetry.ExternalSummary) error {
+	out := sessionExportJSON{
+		Session:                  rep.Session,
+		TotalMycoCalls:           rep.TotalCalls,
+		InputBytes:               rep.InputBytes,
+		OutputBytes:              rep.OutputBytes,
+		MycoTools:                rep.Summaries,
+		FallbackTools:            ext,
+		FallbackExploratoryTotal: telemetry.TotalExploratory(ext),
+	}
+	if rep.CallDuration > 0 {
+		out.CallSpanMS = rep.CallDuration.Milliseconds()
+	}
+	if hasHook {
+		out.InputTokens = hook.InputTokens
+		out.OutputTokens = hook.OutputTokens
+	}
+	b, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(b))
+	return nil
+}
+
+func printSessionCompare(a, b telemetry.SessionReport, hookA, hookB telemetry.HookMeta, extA, extB []telemetry.ExternalSummary) {
+	nameA := truncate(a.Session.Name, 20)
+	nameB := truncate(b.Session.Name, 20)
+	fmt.Printf("%-26s  %20s  %20s  %10s\n", "metric", nameA, nameB, "delta")
+	fmt.Println(strings.Repeat("─", 82))
+
+	printCompareInt("myco_calls", int64(a.TotalCalls), int64(b.TotalCalls))
+	printCompareBytes("myco_out_bytes", a.OutputBytes, b.OutputBytes)
+	printCompareDur("myco_call_span", a.CallDuration, b.CallDuration)
+	printCompareInt("fallback_exploratory", int64(telemetry.TotalExploratory(extA)), int64(telemetry.TotalExploratory(extB)))
+
+	if hookA.InputTokens > 0 || hookB.InputTokens > 0 {
+		printCompareInt("input_tokens", int64(hookA.InputTokens), int64(hookB.InputTokens))
+	}
+	if hookA.OutputTokens > 0 || hookB.OutputTokens > 0 {
+		printCompareInt("output_tokens", int64(hookA.OutputTokens), int64(hookB.OutputTokens))
+	}
+
+	// myco per-tool breakdown.
+	allMyco := map[string]struct{}{}
+	byToolA := map[string]telemetry.Summary{}
+	byToolB := map[string]telemetry.Summary{}
+	for _, s := range a.Summaries {
+		allMyco[s.Tool] = struct{}{}
+		byToolA[s.Tool] = s
+	}
+	for _, s := range b.Summaries {
+		allMyco[s.Tool] = struct{}{}
+		byToolB[s.Tool] = s
+	}
+	if len(allMyco) > 0 {
+		fmt.Println()
+		fmt.Printf("%-26s  %20s  %20s  %10s\n", "myco tool", "calls-A", "calls-B", "delta")
+		fmt.Println(strings.Repeat("─", 82))
+		tools := make([]string, 0, len(allMyco))
+		for t := range allMyco {
+			tools = append(tools, t)
+		}
+		sort.Strings(tools)
+		for _, t := range tools {
+			ca := int64(byToolA[t].Count)
+			cb := int64(byToolB[t].Count)
+			d := cb - ca
+			sign := "+"
+			if d < 0 {
+				sign = ""
+			}
+			fmt.Printf("%-26s  %20d  %20d  %s%d\n", t, ca, cb, sign, d)
+		}
+	}
+
+	// Fallback tool breakdown.
+	allFallback := map[string]struct{}{}
+	byExtA := map[string]int{}
+	byExtB := map[string]int{}
+	for _, e := range extA {
+		allFallback[e.Tool] = struct{}{}
+		byExtA[e.Tool] = e.Count
+	}
+	for _, e := range extB {
+		allFallback[e.Tool] = struct{}{}
+		byExtB[e.Tool] = e.Count
+	}
+	if len(allFallback) > 0 {
+		fmt.Println()
+		fmt.Printf("%-26s  %20s  %20s  %10s\n", "fallback tool", "calls-A", "calls-B", "delta")
+		fmt.Println(strings.Repeat("─", 82))
+		tools := make([]string, 0, len(allFallback))
+		for t := range allFallback {
+			tools = append(tools, t)
+		}
+		sort.Strings(tools)
+		for _, t := range tools {
+			ca := int64(byExtA[t])
+			cb := int64(byExtB[t])
+			d := cb - ca
+			sign := "+"
+			if d < 0 {
+				sign = ""
+			}
+			fmt.Printf("%-26s  %20d  %20d  %s%d\n", t, ca, cb, sign, d)
+		}
+	}
+}
+
+func printCompareInt(label string, a, b int64) {
+	d := b - a
+	sign := "+"
+	if d < 0 {
+		sign = ""
+	}
+	fmt.Printf("%-22s  %20d  %20d  %s%d\n", label, a, b, sign, d)
+}
+
+func printCompareBytes(label string, a, b int64) {
+	d := b - a
+	sign := "+"
+	if d < 0 {
+		sign = ""
+	}
+	fmt.Printf("%-22s  %20s  %20s  %s%s\n", label, humanBytes(a), humanBytes(b), sign, humanBytes(abs64(d)))
+}
+
+func printCompareDur(label string, a, b time.Duration) {
+	d := b - a
+	sign := "+"
+	if d < 0 {
+		sign = ""
+	}
+	fmt.Printf("%-22s  %20s  %20s  %s%s\n", label,
+		a.Round(time.Millisecond), b.Round(time.Millisecond), sign, d.Round(time.Millisecond))
+}
+
+func abs64(n int64) int64 {
+	if n < 0 {
+		return -n
+	}
+	return n
 }

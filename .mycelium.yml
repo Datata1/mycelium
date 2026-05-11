@@ -45,4 +45,6 @@ index:
         extension_path: ""
         auto_create: true
         ef_search: 0
+telemetry:
+    enabled: true
 projects: []

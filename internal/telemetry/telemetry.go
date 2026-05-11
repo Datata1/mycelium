@@ -33,6 +33,11 @@ import (
 // Record is one row in the JSONL log. Field names are short and stable
 // because they're the wire format for `myco stats --telemetry` and any
 // future analysis tooling.
+//
+// Kind is empty for normal tool calls (the common case — omitting it
+// keeps the log compact). "session_start" marks a new session boundary.
+// SessionID is the ID of the session that was active when the call was
+// dispatched; empty means no session was running.
 type Record struct {
 	Timestamp   time.Time `json:"ts"`
 	Tool        string    `json:"tool"`
@@ -40,6 +45,8 @@ type Record struct {
 	OutputBytes int       `json:"out_bytes"`
 	DurationMS  int64     `json:"dur_ms"`
 	OK          bool      `json:"ok"`
+	SessionID   string    `json:"sid,omitempty"`
+	Kind        string    `json:"kind,omitempty"`
 }
 
 // Recorder is the interface every dispatcher consumes. Two
@@ -60,10 +67,15 @@ func (Disabled) Close() error        { return nil }
 // Open returns an error if the path can't be created or opened in append
 // mode; the daemon falls back to Disabled in that case rather than
 // failing startup.
+//
+// When sessionFile is set (via SetSessionFile), each Record() reads that
+// file to inject the current session ID. The read is an OS-cached stat on
+// a tiny JSON file — negligible overhead relative to the log write itself.
 type FileRecorder struct {
-	mu   sync.Mutex
-	f    *os.File
-	path string
+	mu          sync.Mutex
+	f           *os.File
+	path        string
+	sessionFile string
 }
 
 // Open creates parent directories if needed and opens path in append
@@ -88,13 +100,16 @@ func (r *FileRecorder) Record(rec Record) error {
 	if rec.Timestamp.IsZero() {
 		rec.Timestamp = time.Now()
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if rec.SessionID == "" {
+		rec.SessionID = r.readCurrentSessionID()
+	}
 	b, err := json.Marshal(rec)
 	if err != nil {
 		return nil
 	}
 	b = append(b, '\n')
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	_, err = r.f.Write(b)
 	return err
 }
@@ -116,3 +131,32 @@ func (r *FileRecorder) Close() error {
 // `myco stats --telemetry` to find the log when telemetry is configured
 // but the daemon isn't running.
 func (r *FileRecorder) Path() string { return r.path }
+
+// SetSessionFile configures the path to the current-session sidecar
+// (.mycelium/current_session.json). Once set, every subsequent Record()
+// call reads that file and stamps its SessionID onto the record. This
+// lets `myco session start` signal the daemon without an IPC round-trip.
+func (r *FileRecorder) SetSessionFile(path string) {
+	r.mu.Lock()
+	r.sessionFile = path
+	r.mu.Unlock()
+}
+
+// readCurrentSessionID reads the session sidecar and returns the ID,
+// or "" if the file is absent or unparseable. Called under r.mu.
+func (r *FileRecorder) readCurrentSessionID() string {
+	if r.sessionFile == "" {
+		return ""
+	}
+	b, err := os.ReadFile(r.sessionFile)
+	if err != nil {
+		return ""
+	}
+	var m struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(b, &m); err != nil {
+		return ""
+	}
+	return m.ID
+}

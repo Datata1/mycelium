@@ -1,0 +1,103 @@
+version: '3'
+
+vars:
+  TAGS: sqlite_fts5
+  BIN: /tmp/myco
+
+tasks:
+
+  # ── build ────────────────────────────────────────────────────────────────────
+
+  build:
+    desc: Build the myco binary to {{.BIN}}
+    cmds:
+      - go build -tags {{.TAGS}} -o {{.BIN}} ./cmd/myco
+    sources:
+      - '**/*.go'
+      - go.mod
+      - go.sum
+    generates:
+      - '{{.BIN}}'
+
+  # ── quality ──────────────────────────────────────────────────────────────────
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet -tags {{.TAGS}} ./...
+
+  test:
+    desc: Run the full test suite with the race detector
+    cmds:
+      - go test -tags {{.TAGS}} -race ./...
+
+  test-pkg:
+    desc: Test a single package  (task test-pkg -- ./internal/telemetry/...)
+    cmds:
+      - go test -tags {{.TAGS}} -race -v {{.CLI_ARGS}}
+
+  check:
+    desc: vet + test (run before every push)
+    deps: [vet, test]
+
+  tidy:
+    desc: go mod tidy
+    cmds:
+      - go mod tidy
+
+  # ── dev ──────────────────────────────────────────────────────────────────────
+
+  smoke:
+    desc: Wipe index, re-index, run doctor — fastest correctness loop
+    deps: [build]
+    cmds:
+      - rm -rf .mycelium
+      - '{{.BIN}} index'
+      - '{{.BIN}} doctor'
+
+  daemon:
+    desc: Build then start the daemon (blocks; Ctrl-C to stop)
+    deps: [build]
+    cmds:
+      - '{{.BIN}} daemon'
+
+  index:
+    desc: One-shot index of the repo (daemon must not be running)
+    deps: [build]
+    cmds:
+      - '{{.BIN}} index'
+
+  doctor:
+    desc: Run health checks against the current index
+    cmds:
+      - '{{.BIN}} doctor'
+
+  # ── session / telemetry ──────────────────────────────────────────────────────
+
+  session-list:
+    desc: List all recorded agent sessions
+    cmds:
+      - '{{.BIN}} session list'
+
+  session-export:
+    desc: Export a session report  (task session-export -- <session-id> [--format markdown])
+    cmds:
+      - '{{.BIN}} session export {{.CLI_ARGS}}'
+
+  session-compare:
+    desc: Side-by-side diff of two sessions  (task session-compare -- <id-a> <id-b>)
+    cmds:
+      - '{{.BIN}} session compare {{.CLI_ARGS}}'
+
+  session-stats:
+    desc: Aggregate telemetry across all calls (requires telemetry.enabled in .mycelium.yml)
+    cmds:
+      - '{{.BIN}} stats --telemetry'
+
+  # ── hooks ────────────────────────────────────────────────────────────────────
+
+  hooks-install:
+    desc: Write Claude Code UserPromptSubmit/PostToolUse/Stop hooks to .claude/settings.json
+    deps: [build]
+    cmds:
+      - '{{.BIN}} session hooks install'
