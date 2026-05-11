@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"time"
 
+	"runtime/debug"
+
 	"github.com/spf13/cobra"
 
 	"github.com/jdwiederstein/mycelium/internal/config"
@@ -40,9 +42,45 @@ import (
 	"github.com/jdwiederstein/mycelium/internal/watch"
 )
 
-// version is set at build time via -ldflags "-X main.version=v1.0.0".
-// Falls back to "dev" when built without ldflags (go run, plain go build).
+// version is set at release build time via -ldflags "-X main.version=v3.x.y".
+// In dev builds it falls back to a "dev-<commit>[-dirty]" string derived
+// from the VCS metadata Go embeds automatically since Go 1.18.
 var version = "dev"
+
+func init() {
+	if version == "dev" {
+		version = devVersion()
+	}
+}
+
+// devVersion reads the git commit hash (and dirty flag) that Go embeds in
+// every binary when built inside a git working tree. Returns "dev" when VCS
+// info is unavailable (e.g. built from a source tarball with no .git dir).
+func devVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "dev"
+	}
+	var commit, dirty string
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			if len(s.Value) >= 8 {
+				commit = s.Value[:8]
+			} else {
+				commit = s.Value
+			}
+		case "vcs.modified":
+			if s.Value == "true" {
+				dirty = "-dirty"
+			}
+		}
+	}
+	if commit != "" {
+		return "dev-" + commit + dirty
+	}
+	return "dev"
+}
 
 func main() {
 	root := &cobra.Command{
