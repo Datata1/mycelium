@@ -8,7 +8,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 )
 
 // TranscriptSummary is the evaluation-oriented extract of a Claude Code
@@ -86,6 +88,56 @@ func TranscriptPathFromSessionID(repoRoot, claudeSessionID string) string {
 	slug := strings.ReplaceAll(repoRoot, "/", "-")
 	slug = strings.TrimPrefix(slug, "-")
 	return filepath.Join(home, ".claude", "projects", slug, claudeSessionID+".jsonl")
+}
+
+// DiscoverTranscripts scans the Claude Code project directory for transcript
+// files (*.jsonl) whose modification time falls within the session's time
+// window. Returns candidate paths sorted newest-first.
+//
+// This is the fallback when sessions were started before the hook captured
+// transcript_path, or when the user wants to try a different transcript.
+func DiscoverTranscripts(repoRoot string, sessionStartedAt time.Time) []string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return nil
+	}
+	slug := strings.ReplaceAll(repoRoot, "/", "-")
+	slug = strings.TrimPrefix(slug, "-")
+	dir := filepath.Join(home, ".claude", "projects", slug)
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+
+	// Accept files modified within ±4 hours of the session start, excluding
+	// the chat.jsonl aggregate (Claude Code maintains that separately).
+	window := 4 * time.Hour
+	var candidates []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") || e.Name() == "chat.jsonl" {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		diff := info.ModTime().Sub(sessionStartedAt)
+		if diff < -window || diff > window {
+			continue
+		}
+		candidates = append(candidates, filepath.Join(dir, e.Name()))
+	}
+	// Sort newest-modified first.
+	sort.Slice(candidates, func(i, j int) bool {
+		ii, _ := os.Stat(candidates[i])
+		jj, _ := os.Stat(candidates[j])
+		if ii == nil || jj == nil {
+			return false
+		}
+		return ii.ModTime().After(jj.ModTime())
+	})
+	return candidates
 }
 
 func parseTranscriptReader(r io.Reader) (TranscriptSummary, error) {
