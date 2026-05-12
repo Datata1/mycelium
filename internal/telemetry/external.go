@@ -16,29 +16,42 @@ import (
 // (.mycelium/session_<id>_external.jsonl). It captures every non-myco
 // tool call so the export can show whether the agent fell back to raw
 // filesystem exploration when myco's output wasn't sufficient.
+//
+// InputSize and OutputSize are byte counts, not token counts. They are
+// the raw JSON-payload lengths the agent sent (input) and received
+// (output) — the agent's LLM ultimately tokenises both, so byte length
+// is a directional proxy for token cost. v3.4 A2 turns these bytes into
+// a configurable chars-per-token estimate.
 type ExternalRecord struct {
-	Timestamp time.Time `json:"ts"`
-	SessionID string    `json:"sid"`
-	ToolName  string    `json:"tool"`           // "Bash", "Read", "WebSearch", …
-	Category  string    `json:"category"`       // "exploratory" | "action" | "other"
-	Detail    string    `json:"detail"`         // command keyword for Bash, empty otherwise
-	InputSize int       `json:"input_size"`     // rough byte count of tool input
+	Timestamp  time.Time `json:"ts"`
+	SessionID  string    `json:"sid"`
+	ToolName   string    `json:"tool"`             // "Bash", "Read", "WebSearch", …
+	Category   string    `json:"category"`         // "exploratory" | "action" | "other"
+	Detail     string    `json:"detail"`           // command keyword for Bash, empty otherwise
+	InputSize  int       `json:"input_size"`       // rough byte count of tool input
+	OutputSize int       `json:"output_size,omitempty"` // v3.4 A1: raw bytes of tool response payload
 }
 
-// ExternalSummary is the per-tool-or-category rollup shown in session export.
+// ExternalSummary is the per-tool-or-category rollup shown in session
+// export. v3.4 A1 added InputBytes/OutputBytes so callers can answer
+// "how many bytes did this tool category cost the agent's context?".
 type ExternalSummary struct {
-	Tool     string `json:"tool"`
-	Category string `json:"category"`
-	Count    int    `json:"count"`
+	Tool        string `json:"tool"`
+	Category    string `json:"category"`
+	Count       int    `json:"count"`
+	InputBytes  int    `json:"input_bytes,omitempty"`
+	OutputBytes int    `json:"output_bytes,omitempty"`
 }
 
 // postToolUsePayload is the JSON Claude Code pipes to PostToolUse hooks.
-// Field names follow the Claude Code hook spec; unknown fields are ignored.
+// Field names follow the Claude Code hook spec; unknown fields are
+// ignored. ToolResponse is the agent-visible result (file contents for
+// Read, stdout+stderr for Bash, etc.) — its byte length is the
+// telemetry's output-side signal.
 type postToolUsePayload struct {
-	ToolName  string          `json:"tool_name"`
-	ToolInput json.RawMessage `json:"tool_input"`
-	// We don't use tool_response — we only need the tool name and input
-	// to classify the call.
+	ToolName     string          `json:"tool_name"`
+	ToolInput    json.RawMessage `json:"tool_input"`
+	ToolResponse json.RawMessage `json:"tool_response"`
 }
 
 // ParsePostToolUse reads the Claude Code PostToolUse hook payload from r
@@ -65,12 +78,13 @@ func ParsePostToolUse(r io.Reader, sessionID string) (ExternalRecord, bool) {
 	category := classifyTool(p.ToolName, detail)
 
 	return ExternalRecord{
-		Timestamp: time.Now(),
-		SessionID: sessionID,
-		ToolName:  p.ToolName,
-		Category:  category,
-		Detail:    detail,
-		InputSize: len(p.ToolInput),
+		Timestamp:  time.Now(),
+		SessionID:  sessionID,
+		ToolName:   p.ToolName,
+		Category:   category,
+		Detail:     detail,
+		InputSize:  len(p.ToolInput),
+		OutputSize: len(p.ToolResponse),
 	}, true
 }
 
@@ -118,7 +132,10 @@ func SummarizeExternal(path string) ([]ExternalSummary, error) {
 	defer f.Close()
 
 	type key struct{ tool, category string }
-	counts := map[key]int{}
+	type agg struct {
+		count, inBytes, outBytes int
+	}
+	rollup := map[key]*agg{}
 
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 1*1024*1024)
@@ -135,15 +152,29 @@ func SummarizeExternal(path string) ([]ExternalSummary, error) {
 		if r.Detail != "" {
 			label = r.ToolName + "/" + r.Detail
 		}
-		counts[key{tool: label, category: r.Category}]++
+		k := key{tool: label, category: r.Category}
+		a, ok := rollup[k]
+		if !ok {
+			a = &agg{}
+			rollup[k] = a
+		}
+		a.count++
+		a.inBytes += r.InputSize
+		a.outBytes += r.OutputSize
 	}
 	if err := sc.Err(); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("read external log: %w", err)
 	}
 
-	out := make([]ExternalSummary, 0, len(counts))
-	for k, n := range counts {
-		out = append(out, ExternalSummary{Tool: k.tool, Category: k.category, Count: n})
+	out := make([]ExternalSummary, 0, len(rollup))
+	for k, a := range rollup {
+		out = append(out, ExternalSummary{
+			Tool:        k.tool,
+			Category:    k.category,
+			Count:       a.count,
+			InputBytes:  a.inBytes,
+			OutputBytes: a.outBytes,
+		})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Count != out[j].Count {
@@ -152,6 +183,18 @@ func SummarizeExternal(path string) ([]ExternalSummary, error) {
 		return out[i].Tool < out[j].Tool
 	})
 	return out, nil
+}
+
+// TotalExternalBytes returns (input, output) byte totals across every
+// summary row. Lets callers compute a session-level "how much did
+// fallback tools cost in raw bytes" number without re-streaming the
+// JSONL.
+func TotalExternalBytes(summaries []ExternalSummary) (input, output int) {
+	for _, s := range summaries {
+		input += s.InputBytes
+		output += s.OutputBytes
+	}
+	return
 }
 
 // ExternalPath returns the conventional path for a session's external log.

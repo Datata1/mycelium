@@ -356,6 +356,354 @@ func TestExternalRoundTrip(t *testing.T) {
 	}
 }
 
+// TestParsePostToolUse_CapturesOutputSize is the v3.4 A1 contract: when
+// Claude Code pipes a `tool_response` field alongside `tool_name` and
+// `tool_input`, ParsePostToolUse records its byte length so A2 can
+// build a session-cost estimate.
+func TestParsePostToolUse_CapturesOutputSize(t *testing.T) {
+	t.Parallel()
+
+	// Read tool result: a file's contents inlined in the JSON.
+	readPayload := `{
+		"tool_name":"Read",
+		"tool_input":{"file_path":"main.go"},
+		"tool_response":{"file":{"contents":"package main\nfunc main(){}\n"}}
+	}`
+	rec, ok := ParsePostToolUse(strings.NewReader(readPayload), "ses_test")
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if rec.OutputSize == 0 {
+		t.Fatal("OutputSize is 0; A1 contract requires non-zero when tool_response present")
+	}
+	// Sanity: the response payload is the inner JSON object; should be
+	// at least the length of the literal "package main\nfunc main(){}\n".
+	if rec.OutputSize < 30 {
+		t.Errorf("OutputSize = %d, expected ≥ 30 (file contents present)", rec.OutputSize)
+	}
+
+	// Bash with stdout/stderr.
+	bashPayload := `{
+		"tool_name":"Bash",
+		"tool_input":{"command":"grep -r foo ."},
+		"tool_response":{"stdout":"line1\nline2\nline3\n","stderr":"","interrupted":false}
+	}`
+	rec, ok = ParsePostToolUse(strings.NewReader(bashPayload), "ses_test")
+	if !ok {
+		t.Fatal("expected ok=true for Bash")
+	}
+	if rec.OutputSize == 0 {
+		t.Error("Bash: OutputSize is 0")
+	}
+
+	// Legacy payload without tool_response (e.g. older Claude Code, or
+	// tools we haven't accounted for) → OutputSize 0, still recorded.
+	legacyPayload := `{"tool_name":"Bash","tool_input":{"command":"ls"}}`
+	rec, ok = ParsePostToolUse(strings.NewReader(legacyPayload), "ses_test")
+	if !ok {
+		t.Fatal("expected ok=true on legacy payload")
+	}
+	if rec.OutputSize != 0 {
+		t.Errorf("legacy payload: OutputSize = %d, want 0", rec.OutputSize)
+	}
+	if rec.InputSize == 0 {
+		t.Error("legacy payload: InputSize is 0, should still record input")
+	}
+}
+
+// TestSummarizeExternal_AggregatesBytes is the v3.4 A1 aggregator
+// contract: per-tool summaries sum input_size and output_size across
+// all records so callers can produce a "this tool category cost N
+// bytes" line without re-streaming the JSONL.
+func TestSummarizeExternal_AggregatesBytes(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	sid := "ses_bytes"
+	path := ExternalPath(dir, sid)
+
+	records := []ExternalRecord{
+		{ToolName: "Read", Category: "exploratory", SessionID: sid, InputSize: 50, OutputSize: 1000},
+		{ToolName: "Read", Category: "exploratory", SessionID: sid, InputSize: 50, OutputSize: 2000},
+		{ToolName: "Bash", Category: "exploratory", Detail: "grep", SessionID: sid, InputSize: 30, OutputSize: 500},
+		{ToolName: "Edit", Category: "action", SessionID: sid, InputSize: 200, OutputSize: 10},
+	}
+	for _, r := range records {
+		if err := AppendExternal(path, r); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+
+	summaries, err := SummarizeExternal(path)
+	if err != nil {
+		t.Fatalf("summarize: %v", err)
+	}
+
+	byTool := map[string]ExternalSummary{}
+	for _, s := range summaries {
+		byTool[s.Tool] = s
+	}
+	if got := byTool["Read"].OutputBytes; got != 3000 {
+		t.Errorf("Read OutputBytes = %d, want 3000", got)
+	}
+	if got := byTool["Read"].InputBytes; got != 100 {
+		t.Errorf("Read InputBytes = %d, want 100", got)
+	}
+	if got := byTool["Bash/grep"].OutputBytes; got != 500 {
+		t.Errorf("Bash/grep OutputBytes = %d, want 500", got)
+	}
+
+	inBytes, outBytes := TotalExternalBytes(summaries)
+	if inBytes != 50+50+30+200 {
+		t.Errorf("TotalExternalBytes input = %d, want %d", inBytes, 50+50+30+200)
+	}
+	if outBytes != 1000+2000+500+10 {
+		t.Errorf("TotalExternalBytes output = %d, want %d", outBytes, 1000+2000+500+10)
+	}
+}
+
+// TestComputeSessionCost_RollsBytesAndTokens is the v3.4 A2 contract:
+// myco summaries + fallback summaries fold into a single cost block
+// with byte totals split by source plus a token estimate via the
+// configurable chars-per-token ratio. The "all" rollup row in the myco
+// summaries is excluded so it doesn't double-count.
+func TestComputeSessionCost_RollsBytesAndTokens(t *testing.T) {
+	t.Parallel()
+	myco := []Summary{
+		{Tool: "find_symbol", Count: 5, InputBytes: 100, OutputBytes: 5_000},
+		{Tool: "read_focused", Count: 3, InputBytes: 60, OutputBytes: 30_000},
+		// Synthetic "all" rollup the aggregator appends; ComputeSessionCost
+		// must skip this row.
+		{Tool: "all", Count: 8, InputBytes: 160, OutputBytes: 35_000},
+	}
+	fallback := []ExternalSummary{
+		{Tool: "Read", Category: "exploratory", Count: 4, InputBytes: 40, OutputBytes: 20_000},
+		{Tool: "Bash/grep", Category: "exploratory", Count: 1, InputBytes: 10, OutputBytes: 500},
+	}
+
+	got := ComputeSessionCost(myco, fallback, 4.0)
+
+	if got.CharsPerToken != 4.0 {
+		t.Errorf("CharsPerToken = %v, want 4.0", got.CharsPerToken)
+	}
+	if got.MycoOutputBytes != 35_000 {
+		t.Errorf("MycoOutputBytes = %d, want 35000", got.MycoOutputBytes)
+	}
+	if got.MycoInputBytes != 160 {
+		t.Errorf("MycoInputBytes = %d, want 160 (must exclude 'all' row)", got.MycoInputBytes)
+	}
+	if got.FallbackOutputBytes != 20_500 {
+		t.Errorf("FallbackOutputBytes = %d, want 20500", got.FallbackOutputBytes)
+	}
+	if got.TotalBytes != 160+35_000+50+20_500 {
+		t.Errorf("TotalBytes = %d, want %d", got.TotalBytes, 160+35_000+50+20_500)
+	}
+	wantTokens := int64((float64(got.TotalBytes) / 4.0) + 0.5)
+	if got.EstimatedTokens != wantTokens {
+		t.Errorf("EstimatedTokens = %d, want %d", got.EstimatedTokens, wantTokens)
+	}
+	if got.MycoTokens+got.FallbackTokens != got.EstimatedTokens {
+		t.Errorf("token split %d+%d != total %d",
+			got.MycoTokens, got.FallbackTokens, got.EstimatedTokens)
+	}
+
+	// Per-tool rows: one per non-"all" source. Ranked by TotalBytes desc.
+	if n := len(got.PerTool); n != 4 {
+		t.Fatalf("PerTool len = %d, want 4", n)
+	}
+	if got.PerTool[0].Tool != "read_focused" {
+		t.Errorf("top tool = %q, want read_focused (largest TotalBytes)",
+			got.PerTool[0].Tool)
+	}
+	if got.PerTool[0].Source != "myco" {
+		t.Errorf("top tool source = %q, want myco", got.PerTool[0].Source)
+	}
+	for _, p := range got.PerTool {
+		if p.Tool == "all" {
+			t.Error("PerTool should not contain the synthetic 'all' row")
+		}
+		if p.TotalBytes != p.InputBytes+p.OutputBytes {
+			t.Errorf("%s: TotalBytes %d != %d+%d",
+				p.Tool, p.TotalBytes, p.InputBytes, p.OutputBytes)
+		}
+	}
+}
+
+// TestComputeSessionCost_DefaultRatio: a non-positive charsPerToken
+// falls back to 4.0 silently so callers can pass cfg.Telemetry.CharsPerToken
+// unconditionally without a nil-check.
+func TestComputeSessionCost_DefaultRatio(t *testing.T) {
+	t.Parallel()
+	myco := []Summary{{Tool: "find_symbol", Count: 1, OutputBytes: 4000}}
+	cost := ComputeSessionCost(myco, nil, 0)
+	if cost.CharsPerToken != 4.0 {
+		t.Errorf("CharsPerToken = %v, want 4.0 fallback", cost.CharsPerToken)
+	}
+	if cost.EstimatedTokens != 1000 {
+		t.Errorf("EstimatedTokens = %d, want 1000 (4000 bytes / 4)",
+			cost.EstimatedTokens)
+	}
+
+	costNeg := ComputeSessionCost(myco, nil, -2.5)
+	if costNeg.CharsPerToken != 4.0 {
+		t.Errorf("negative ratio: CharsPerToken = %v, want 4.0", costNeg.CharsPerToken)
+	}
+}
+
+// TestEstimateCounterfactual_KnownAndUnknown is the v3.4 A3 contract for
+// the per-tool model: known tools return (multiplier × outputBytes,
+// quality), unknown tools return {0, none}, and zero-multiplier tools
+// (stats / ping) return {0, none}.
+func TestEstimateCounterfactual_KnownAndUnknown(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		tool        string
+		out         int64
+		wantBytes   int64
+		wantQuality EstimateQuality
+	}{
+		{"find_symbol", 5_000, 4_000, EstimateQualityMedium},  // 5000 × 0.8
+		{"read_focused", 10_000, 10_000, EstimateQualityHigh}, // 10000 × 1.0 (calibrated parity)
+		{"search_lexical", 3_000, 3_000, EstimateQualityHigh}, // 3000 × 1.0
+		{"get_neighborhood", 1_000, 2_500, EstimateQualityLow},
+		{"stats", 500, 0, EstimateQualityNone},        // zero multiplier → no estimate
+		{"unknown_tool", 1_000, 0, EstimateQualityNone}, // missing entry → no estimate
+	}
+	for _, tc := range cases {
+		got := EstimateCounterfactual(tc.tool, tc.out)
+		if got.Bytes != tc.wantBytes {
+			t.Errorf("%s: bytes = %d, want %d", tc.tool, got.Bytes, tc.wantBytes)
+		}
+		if got.Quality != tc.wantQuality {
+			t.Errorf("%s: quality = %q, want %q", tc.tool, got.Quality, tc.wantQuality)
+		}
+	}
+}
+
+// TestComputeSessionCost_Counterfactual is the v3.4 A3 aggregator
+// contract: per-row counterfactual estimates roll up into
+// MycoCounterfactualBytes / WithoutMycoEstimateBytes / EstimatedSavingsBytes
+// / SavingsRatio, and the quality-mix map counts each call by its
+// estimate quality so renderers can surface the trust level.
+func TestComputeSessionCost_Counterfactual(t *testing.T) {
+	t.Parallel()
+	myco := []Summary{
+		{Tool: "find_symbol", Count: 5, OutputBytes: 5_000},   // 0.8 medium → 4000
+		{Tool: "read_focused", Count: 3, OutputBytes: 30_000}, // 1.0 high → 30000 (calibrated parity)
+		{Tool: "stats", Count: 2, OutputBytes: 200},           // 0 none → skipped
+	}
+	fallback := []ExternalSummary{
+		{Tool: "Read", Count: 4, InputBytes: 40, OutputBytes: 20_000},
+	}
+
+	cost := ComputeSessionCost(myco, fallback, 4.0)
+
+	// Per-row counterfactual on PerTool entries.
+	byTool := map[string]ToolCost{}
+	for _, p := range cost.PerTool {
+		byTool[p.Tool] = p
+	}
+	if got := byTool["find_symbol"].CounterfactualBytes; got != 4_000 {
+		t.Errorf("find_symbol cf = %d, want 4000", got)
+	}
+	if got := byTool["find_symbol"].EstimateQuality; got != EstimateQualityMedium {
+		t.Errorf("find_symbol quality = %q, want medium", got)
+	}
+	if got := byTool["read_focused"].CounterfactualBytes; got != 30_000 {
+		t.Errorf("read_focused cf = %d, want 30000", got)
+	}
+	if got := byTool["stats"].CounterfactualBytes; got != 0 {
+		t.Errorf("stats cf = %d, want 0 (no fallback)", got)
+	}
+	// Fallback rows should never carry a counterfactual — they ARE the
+	// fallback.
+	if got := byTool["Read"].CounterfactualBytes; got != 0 {
+		t.Errorf("Read (fallback) cf = %d, want 0", got)
+	}
+
+	// Aggregate counterfactual sums. find_symbol → 4000, read_focused → 30000.
+	if cost.MycoCounterfactualBytes != 34_000 {
+		t.Errorf("MycoCounterfactualBytes = %d, want 34000", cost.MycoCounterfactualBytes)
+	}
+	wantWithout := int64(34_000 + 40 + 20_000)
+	if cost.WithoutMycoEstimateBytes != wantWithout {
+		t.Errorf("WithoutMycoEstimateBytes = %d, want %d",
+			cost.WithoutMycoEstimateBytes, wantWithout)
+	}
+	wantSavings := wantWithout - cost.TotalBytes
+	if cost.EstimatedSavingsBytes != wantSavings {
+		t.Errorf("EstimatedSavingsBytes = %d, want %d",
+			cost.EstimatedSavingsBytes, wantSavings)
+	}
+	// With read_focused at parity (1.0×), counterfactual no longer
+	// over-credits myco — the modelled total is *smaller* than actual,
+	// so savings goes negative. That's the honest output: this fixture
+	// (find_symbol + read_focused + a Read fallback) shows myco doesn't
+	// save bytes once read_focused is calibrated to its no-focus reality.
+	if cost.SavingsRatio >= 0 {
+		t.Errorf("SavingsRatio = %v, want < 0 (calibrated read_focused → no savings on this fixture)",
+			cost.SavingsRatio)
+	}
+	if cost.MycoCounterfactualTokens == 0 {
+		t.Error("MycoCounterfactualTokens should be > 0 once cf bytes are non-zero")
+	}
+
+	// Quality mix counts calls per quality bucket. find_symbol contributes
+	// 5 medium, read_focused contributes 3 high. stats has none, so no entry.
+	if got := cost.CounterfactualQualityMix[EstimateQualityMedium]; got != 5 {
+		t.Errorf("quality mix medium = %d, want 5", got)
+	}
+	if got := cost.CounterfactualQualityMix[EstimateQualityHigh]; got != 3 {
+		t.Errorf("quality mix high = %d, want 3", got)
+	}
+	if _, ok := cost.CounterfactualQualityMix[EstimateQualityNone]; ok {
+		t.Error("quality mix should not include 'none' bucket")
+	}
+}
+
+// TestComputeSessionCost_NegativeSavings codifies the honest-output case:
+// when every myco call is `stats` (no fallback exists) and there are no
+// real fallback calls, the modelled "without-myco" cost is 0 while the
+// actual myco cost is positive — savings goes negative. Renderers must
+// not silently clamp it; the negative number is the signal that myco
+// added overhead without saving anything (e.g. adoption-fixed-point gap).
+func TestComputeSessionCost_NegativeSavings(t *testing.T) {
+	t.Parallel()
+	myco := []Summary{
+		{Tool: "stats", Count: 3, InputBytes: 30, OutputBytes: 1_500},
+	}
+	cost := ComputeSessionCost(myco, nil, 4.0)
+	if cost.MycoCounterfactualBytes != 0 {
+		t.Errorf("MycoCounterfactualBytes = %d, want 0 (stats has no fallback)",
+			cost.MycoCounterfactualBytes)
+	}
+	if cost.EstimatedSavingsBytes >= 0 {
+		t.Errorf("EstimatedSavingsBytes = %d, want < 0 (myco-only cost should look like a loss vs zero counterfactual)",
+			cost.EstimatedSavingsBytes)
+	}
+	if cost.SavingsRatio != 0 {
+		// WithoutMycoEstimateBytes is 0, so SavingsRatio stays 0 by the
+		// guard in ComputeSessionCost. The renderer treats 0 as "no
+		// comparison possible"; the EstimatedSavingsBytes carries the
+		// honest negative number.
+		t.Errorf("SavingsRatio = %v, want 0 when WithoutMycoEstimateBytes is 0",
+			cost.SavingsRatio)
+	}
+}
+
+// TestComputeSessionCost_EmptyInputs: zero summaries → zero costs, no
+// panics, no division-by-zero in the token conversion.
+func TestComputeSessionCost_EmptyInputs(t *testing.T) {
+	t.Parallel()
+	cost := ComputeSessionCost(nil, nil, 4.0)
+	if cost.TotalBytes != 0 || cost.EstimatedTokens != 0 {
+		t.Errorf("empty inputs: TotalBytes=%d EstimatedTokens=%d, want 0/0",
+			cost.TotalBytes, cost.EstimatedTokens)
+	}
+	if len(cost.PerTool) != 0 {
+		t.Errorf("empty inputs: PerTool len = %d, want 0", len(cost.PerTool))
+	}
+}
+
 // TestClaudeProjectSlug pins the directory-name convention Claude Code uses
 // under ~/.claude/projects/. A regression here previously caused every
 // `myco session transcript` auto-discovery to fail: an earlier version

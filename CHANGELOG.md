@@ -6,38 +6,157 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Added
+Accumulated work since v2.0.0-rc1. Organised into named milestones
+below so the chronology survives the still-open release tag. Tags
+will be cut once the v3.4 prerequisite field test on a non-TS,
+non-Go codebase lands (Python/Django, Rust/Axum, or Java/Spring
+candidates — see `tickets/v3.4-non-ts-field-test-findings.md` for
+status). Inside each milestone, the usual Keep-a-Changelog
+categories (Added / Changed / Fixed / Measured) apply.
 
-- **`myco uninstall` self-command.** Mirrors `myco init` in reverse:
-  prompts Y/N for each component init writes — session-tracking hook
-  entries in `.claude/settings.local.json`, the post-commit git hook
-  (restoring any `.mycelium-backup`), the `mycelium` entry in
-  `~/.claude.json`, and the `.mycelium/` index directory — then removes
-  the `myco` binaries last so the running process stays executable
-  through the run. New helpers: `wizard.RemoveClaudeCodeMCP` and
-  `hook.UninstallPostCommit`. Flags: `-y`/`--yes` (non-interactive),
-  `--dry-run` (preview without changes), `--keep-binary` (unwire project
-  state only), `--purge` (also remove `.mycelium.yml`). Binary removal
-  walks `$PATH` plus the currently-running binary (and one level of
-  symlink target so a release-binary install at `/opt/myco-<platform>/`
-  is cleared together with its `/usr/local/bin/myco` symlink); when a
-  removal needs root, the command prints the `sudo rm` invocation
-  instead of escalating itself. Closes the install/uninstall asymmetry
-  that left users hand-rolling `rm`s across `/opt`, `/usr/local/bin`,
-  `~/.local/bin`, and `/tmp`.
-- **`task install`.** Companion to `task build` that resolves
-  `command -v myco`, follows one level of symlink, and overwrites the
-  target so a freshly built dev binary always replaces the one `myco`
-  actually runs from. Falls back to `/usr/local/bin/myco` when no
-  existing install is on PATH, and uses `sudo` only when the target
-  directory is not user-writable. Fixes the long-standing footgun where
-  `task build` wrote to `~/.local/bin/myco` but the macOS PATH order
-  silently shadowed it with whatever `/usr/local/bin/myco` already
-  contained — the README's release-binary install path. CLAUDE.md and
-  the README "From source" section now point at `task build && task
-  install` as the canonical dev install flow.
+### v3.4 — Adoption fixed-point (in progress)
 
-### Added
+Gated on a non-TS field test for the route-literal + new-language
+work. Today's contribution is one telemetry-darkspot doctor warning
+that closes the G5 finding from the Go dogfooding pass.
+
+#### Added
+
+- **A3 follow-up — `myco bench-counterfactual` calibration harness.**
+  New top-level subcommand that closes the calibration loop the A3
+  ticket described: runs each myco tool against the live daemon, runs
+  the equivalent shell fallback (`grep -rn`, `wc -c`, `find -name`),
+  and compares the measured byte ratio against the modelled
+  multiplier in `internal/telemetry/counterfactual.go`. Drift > 50%
+  (configurable via `--drift-threshold`) on any tool exits with status
+  1, except low-quality entries (graph walks the model already
+  self-tags as rough) which print `info` instead of failing — a single
+  corpus point shouldn't break CI on a tool that never claimed
+  precision. Stale-daemon errors (`unknown method`) get a dedicated
+  message pointing at the fix instead of looking like a calibration
+  regression. Output formats: human-readable table (default) and
+  `--format json` for machine consumption. Corpus is hard-coded
+  (`ComputeSessionCost` symbol, `internal/telemetry/aggregate.go` file)
+  so re-runs across machines are comparable.
+
+  **First run surfaced four real calibration mistakes** in the v3.4
+  A3 ship — the multiplier table was guessed-not-measured, and the
+  bench told us where:
+
+  | tool | pre-bench | measured | post-bench | quality |
+  |---|---|---|---|---|
+  | `read_focused` | 2.0× | 0.87× | **1.0×** | high |
+  | `get_file_outline` | 10.0× | 2.49× | **2.5×** | medium → high |
+  | `get_file_summary` | 30.0× | 2.85× | **3.0×** | medium → high |
+  | `list_files` | 1.0× | 0.13× | **0.2×** | medium |
+  | `find_symbol` | 0.8× | 0.84× | 0.8× (kept) | medium ✓ |
+  | `search_lexical` | 1.0× | 0.72× | 1.0× (kept) | high ✓ |
+  | `get_references` | 1.2× | 1.65× | 1.2× (kept) | medium ✓ |
+
+  The `read_focused` finding is the headline G2 adoption-fixed-point
+  signal made measurable: when `focus` isn't set, myco's read_focused
+  output is *heavier* than a plain Read (14 KiB vs. 12 KiB on the
+  bench file) because of the JSON envelope and line markers. The
+  initial 2.0× guess assumed every call sets focus and harvests the
+  v2.4 byte-reduction story; reality at v3.4 is closer to parity, so
+  the model now stops over-crediting myco for a tool that's
+  net-negative when used wrong. Block B will address the tool-side fix.
+
+  Outline and summary were honestly wishful — a Go file with extensive
+  doc comments doesn't compress to 5-15% the way the original guess
+  assumed. `list_files` was the headline surprise: myco is genuinely
+  *heavier* than `find` on this surface because it returns structured
+  metadata (language, path, line counts) per row, while `find` emits
+  bare paths. The model now reflects that honest negative-savings
+  signal.
+
+  New `internal/telemetry/calibration_test.go` pins every multiplier
+  + quality tag in `counterfactualModel`. Editing the table without
+  also updating the pinned test fails loudly in CI — prevents the
+  silent "bumped a constant, retroactively changed every session's
+  recorded savings" regression. The pinned test also catches the
+  reverse case: a new tool added to the model without an entry in
+  the test list. `task check` green; live `myco bench-counterfactual`
+  reproduces the calibrated table on the self-index.
+
+- **A3 — counterfactual cost model (without-myco estimate).** Answers
+  the second long-term question: *"how expensive would the same session
+  have been **without** myco?"*. New `internal/telemetry/counterfactual.go`
+  carries a per-tool multiplier table (`find_symbol` 0.8×, `read_focused`
+  2.0×, `get_file_summary` 30×, `get_neighborhood` 2.5×, `stats` 0×, etc.)
+  with each entry tagged `EstimateQualityHigh|Medium|Low|None` so callers
+  can downweight graph-tool guesses. `EstimateCounterfactual(tool, outputBytes)`
+  is the per-call estimator; `ComputeSessionCost` now sums the estimates
+  into `MycoCounterfactualBytes`, derives `WithoutMycoEstimateBytes`
+  (= counterfactual + actual fallback, treated as a lower bound),
+  `EstimatedSavingsBytes` (with honest negatives when myco cost more
+  than the modelled alternative — the G2 adoption-fixed-point signal),
+  and a `SavingsRatio` headline number in `[-1.0, 1.0]`. A
+  `CounterfactualQualityMix` map counts calls per quality bucket so
+  the renderer can warn when savings come mostly from low-quality
+  estimates. **Modelled, not measured** — running real `grep`/`Read` in
+  parallel during each myco call would 10× latency, kill the v2.4 speed
+  promise, and contend with the user's editor; a v4 `--bench` mode
+  could opt into the slow path. The estimate lives at the aggregate
+  pass, not the write path: no schema change to `telemetry.jsonl`, so
+  every existing session's savings number is recomputable. `myco session
+  export` (table, markdown, json) now shows a *Modelled savings vs.
+  fallback-only* trio (with-myco actual, without-myco modelled,
+  estimated savings ± %), the quality-mix caveat, and a `cf bytes`
+  column on the per-tool Top Contributors table. The markdown export
+  surfaces an extra honesty paragraph when savings go negative
+  (usually the agent reaching for myco where a single grep would have
+  been cheaper). Three tests pin the math:
+  `TestEstimateCounterfactual_KnownAndUnknown` (multipliers + zero
+  multiplier + missing-tool fallback),
+  `TestComputeSessionCost_Counterfactual` (full rollup, per-row cf
+  bytes, savings sign, quality mix counts),
+  `TestComputeSessionCost_NegativeSavings` (stats-only session →
+  negative savings, ratio stays at 0 when WithoutMyco is 0).
+  `task check` green; live `myco session export --format markdown`
+  on a fallback-only session correctly shows `+0.0%` savings (no
+  myco calls → no modelled saving).
+
+- **A2 — session cost aggregator (with-myco baseline).** Answers
+  *"how expensive was this session, with myco?"*. New
+  `telemetry.SessionCost` + `ComputeSessionCost(myco, fallback,
+  charsPerToken)` rolls per-tool byte totals (from A1) into a single
+  cost block: split by source (myco vs. fallback), input vs. output,
+  total bytes, and a directional token estimate via a configurable
+  chars-per-token ratio. New config field
+  `telemetry.chars_per_token` in `.mycelium.yml` (default 4.0, also
+  exposed as `config.DefaultCharsPerToken`); non-positive values fall
+  back to the default at use time. `myco session export` (markdown,
+  json, table) now appends a *Cost estimate* section with the
+  per-source breakdown, total bytes, estimated tokens, and a Top
+  Contributors table that ranks every tool (myco + fallback) by
+  byte contribution. Token numbers are explicitly documented as
+  directional — for trend-watching, not billing. The "all" rollup
+  row from the myco summaries is excluded from the cost calculation
+  so it doesn't double-count. Three tests pin the contract:
+  `TestComputeSessionCost_RollsBytesAndTokens` (full aggregation +
+  ordering),
+  `TestComputeSessionCost_DefaultRatio` (fallback to 4.0 on 0/negative
+  inputs), `TestComputeSessionCost_EmptyInputs` (zero costs, no
+  divide-by-zero). Live-tested against a fresh session: 9 Edit calls
+  + 4 Bash + 6 Read = 5,960 estimated tokens, confirming the
+  fallback-tool side now produces actionable numbers. Foundational
+  for A3 (counterfactual savings model).
+
+- **A1 — fallback tool output-byte telemetry.** The session-tracking
+  hook recorded `input_size` for every fallback tool call (Read, Bash,
+  Edit, …) but explicitly ignored `tool_response`. That left exactly
+  half of the byte budget invisible — myco output was in
+  `telemetry.jsonl` but Read/Bash output bytes weren't anywhere. Now
+  `ExternalRecord` carries `output_size` (raw `tool_response` byte
+  length), the JSONL line includes it, and `SummarizeExternal`
+  aggregates per-tool `InputBytes`/`OutputBytes`. New helper
+  `TotalExternalBytes(summaries)` returns the session-level total.
+  `myco session export <id> --format markdown` gains an `out_bytes`
+  column in the fallback-tools table and a `Fallback total bytes`
+  summary line. Foundational for A2 (session cost) and A3 (modelled
+  counterfactual savings). Legacy session files (without
+  `output_size`) parse silently with OutputSize=0.
 
 - **`telemetry_dark_spot` doctor check.** Closes the v3.4 G5
   field-test finding: a session-tracking-active but
@@ -51,6 +170,15 @@ to [Semantic Versioning](https://semver.org/).
   detector is filesystem-only (no DB read, no telemetry parse) so
   it costs zero on every doctor invocation. Three new tests pin
   the three states (flag / quiet-when-both / quiet-on-fresh).
+
+### v3.3 — Documents surface
+
+A parallel track to the symbol graph for files whose value is in
+their `(key, value)` pairs rather than callable structure. Motivated
+by F3 from the v3.1 field test: agents fell to `Bash(grep -rn)` to
+find i18n keys because mycelium only indexed code symbols.
+
+#### Added
 
 - **v3.3 documents surface (B3) — `package.json` + `go.mod` kinds + doctor coverage.**
   Closes v3.3 with two more document parsers and the doctor check.
@@ -111,15 +239,10 @@ to [Semantic Versioning](https://semver.org/).
   no-op on already-primed projects).
 
 - **v3.3 documents surface (B1) — schema + parser infrastructure + i18n JSON kind.**
-  A parallel track to the symbol graph for files whose value is in
-  their `(key, value)` pairs rather than callable structure. Motivated
-  by F3 from the v3.1 field test: agents fell to `Bash(grep -rn)` to
-  find i18n keys because mycelium only indexed code symbols. The
-  documents track has no refs and never participates in `find_symbol`
-  / `get_references` / `get_neighborhood`; agents reach entries via
-  the (forthcoming) `find_document_key` tool and via the existing
+  The architectural commitment. Documents do not participate in
+  `find_symbol` / `get_references` / `get_neighborhood`; agents
+  reach entries via `find_document_key` (B2) and via the existing
   `search_lexical` over file content. New surfaces:
-
   - New migration `0007_documents.sql`: `documents` table (file_id,
     kind, key, value, line) with FTS5 trigram index over key+value,
     plus a new nullable `files.document_kind` column (NULL for code
@@ -134,29 +257,68 @@ to [Semantic Versioning](https://semver.org/).
     encodes array indices in the key (`items.0`), tracks the leaf
     string's source line via byte-offset binary search.
   - New `Index.UpsertDocumentFile` + `Index.ReplaceFileDocumentEntries`
-    write helpers mirroring the symbol path (delete-then-insert per
-    file; content-hash short-circuit; project-membership refresh on
-    unchanged files).
+    write helpers mirroring the symbol path.
   - Pipeline: new `Pipeline.Documents *document.Registry` field. When
     set, after the main symbol pass `RunOnce` runs a second walker per
     workspace with `documentWalkIncludes = {"**/*.json", "**/go.mod"}`
-    (using the same excludes as the symbol walker so node_modules /
-    dist / .git stay skipped). Files claimed by a symbol parser are
-    skipped at write time. `Report.Documents` reports per-run changed
-    document count. `HandleChange` (watcher path) extended to dispatch
-    to the document registry when no symbol parser claims a changed
-    file. Nil `Documents` keeps the legacy single-surface behaviour
-    byte-for-byte.
+    (using the same excludes as the symbol walker). `Report.Documents`
+    reports per-run changed document count. `HandleChange` (watcher
+    path) extended to dispatch to the document registry when no
+    symbol parser claims a changed file. Nil `Documents` keeps the
+    legacy single-surface behaviour byte-for-byte.
   - New fixture `testdata/fixtures/documents/locales/en.json` and
     integration test `documents_integration_test.go` covering file
     registration, key flattening, line tracking, content-hash
     idempotency, and FTS-index population.
 
-  B2 (`find_document_key` MCP tool) and B3 (`package.json` /
-  `go.mod` parsers + doctor coverage) follow in subsequent tickets;
-  this lands the architectural commitment.
+### v3.2 — Setup wizard polish & install plumbing
 
-- **Helpful "Did you mean" hints on path-not-found errors.** v3.1.2.
+The setup-wizard milestone from the v3.1 plan (C1/C2/C3) plus the
+install-side ergonomics that surfaced from real onboarding pain.
+
+#### Added
+
+- **`myco uninstall` self-command.** Mirrors `myco init` in reverse:
+  prompts Y/N for each component init writes — session-tracking hook
+  entries in `.claude/settings.local.json`, the post-commit git hook
+  (restoring any `.mycelium-backup`), the `mycelium` entry in
+  `~/.claude.json`, and the `.mycelium/` index directory — then removes
+  the `myco` binaries last so the running process stays executable
+  through the run. New helpers: `wizard.RemoveClaudeCodeMCP` and
+  `hook.UninstallPostCommit`. Flags: `-y`/`--yes` (non-interactive),
+  `--dry-run` (preview without changes), `--keep-binary` (unwire project
+  state only), `--purge` (also remove `.mycelium.yml`). Binary removal
+  walks `$PATH` plus the currently-running binary (and one level of
+  symlink target so a release-binary install at `/opt/myco-<platform>/`
+  is cleared together with its `/usr/local/bin/myco` symlink); when a
+  removal needs root, the command prints the `sudo rm` invocation
+  instead of escalating itself. Closes the install/uninstall asymmetry
+  that left users hand-rolling `rm`s across `/opt`, `/usr/local/bin`,
+  `~/.local/bin`, and `/tmp`.
+- **`task install`.** Companion to `task build` that resolves
+  `command -v myco`, follows one level of symlink, and overwrites the
+  target so a freshly built dev binary always replaces the one `myco`
+  actually runs from. Falls back to `/usr/local/bin/myco` when no
+  existing install is on PATH, and uses `sudo` only when the target
+  directory is not user-writable. Fixes the long-standing footgun where
+  `task build` wrote to `~/.local/bin/myco` but the macOS PATH order
+  silently shadowed it with whatever `/usr/local/bin/myco` already
+  contained — the README's release-binary install path. CLAUDE.md and
+  the README "From source" section now point at `task build && task
+  install` as the canonical dev install flow.
+
+### v3.1.2 — Workspace path fixes
+
+The four-ticket bundle that fixed the v3.1 field test's largest
+adoption defect: `read_focused` failing 7/13 times on workspace
+monorepos via a path-doubling bug. v3.1.1 hotfix below only patched
+the SQL match; v3.1.2 completes the disk-side fix and adds the
+preventive surfaces (project annotation, description rewrites,
+did-you-mean hints).
+
+#### Added
+
+- **Helpful "Did you mean" hints on path-not-found errors.**
   When `ReadFocused` can't resolve a path (`sql.ErrNoRows` from the
   index lookup), and when `SearchLexical`'s `path_contains` filter
   eliminates every indexed file, both methods now run a basename
@@ -218,9 +380,9 @@ to [Semantic Versioning](https://semver.org/).
   pass `path` and `project` back verbatim to `read_focused` (or just use
   the existing `project` filter on read queries with confidence).
 
-### Fixed
+#### Fixed
 
-- **v3.1.2 — workspace-mode path-doubling.** A v3.1.1 follow-up.
+- **Workspace-mode path-doubling.** A v3.1.1 follow-up.
   `ReadFocused`'s SQL match accepted both project-relative and
   repo-relative input paths, but the on-disk path reconstruction still
   used the **input** path in `filepath.Join(repoRoot, projectRoot, path)` —
@@ -243,7 +405,14 @@ to [Semantic Versioning](https://semver.org/).
   `ReadFocused`, both forms for `SearchLexical` `path_contains`, and
   pin the (already-correct) behaviour of `GetFileSummary` /
   `GetFileOutline` against future refactors.
-- **v3.1.1 hotfix — workspace-mode disk reads.** `ReadFocused` and
+### v3.1.1 — Workspace-mode disk-read hotfix
+
+Partial fix superseded by v3.1.2. Documented here so the chronology
+of how the bug got resolved survives.
+
+#### Fixed
+
+- **Workspace-mode disk reads.** `ReadFocused` and
   `SearchLexical` both joined `repoRoot` with the index-stored path
   to locate the file on disk, but in workspace mode (v1.5+) the
   index stores **project-relative** paths — the disk file lives at
@@ -261,12 +430,22 @@ to [Semantic Versioning](https://semver.org/).
   Single-project mode (`project_id` NULL) keeps the existing
   `repoRoot + path` join. New regression tests in
   `workspace_integration_test.go` cover both code paths against the
-  existing 3-project fixture.
+  existing 3-project fixture. (Disk-side path construction still
+  used the input path here, not the database value — fully resolved
+  in v3.1.2 above.)
 
-### Added
+### v3.1 — Adoption-driven fixes
 
-- **v3.1 adoption-driven fixes (first slice of the broader-hyphae
-  roadmap).** Three surgical changes targeting the field-test
+First slice of the broader-hyphae roadmap. Three surgical changes
+targeting the field-test findings from a real TS-monorepo session:
+agents fell into the documented "search_lexical only" pattern,
+`find_symbol` returned `null` instead of an empty list with a hint,
+and `read_focused` was never reached for despite multiple full-file
+reads.
+
+#### Added
+
+- **v3.1 adoption-driven fixes (A1 + A3 + A4).** Three surgical changes targeting the field-test
   findings from a real TS-monorepo session: agents fell into the
   documented "search_lexical only" pattern, `find_symbol` returned
   `null` instead of an empty list with a hint, and `read_focused`
@@ -318,7 +497,7 @@ to [Semantic Versioning](https://semver.org/).
     `before`/`after`) for every tool, plus a stricter contrast
     assertion for the five high-priority tools.
 
-### Changed
+#### Changed
 
 - **`Reader.FindSymbol` return shape.** `[]SymbolHit, error` →
   `FindSymbolResult, error`. Direct callers in this repo
@@ -329,6 +508,15 @@ to [Semantic Versioning](https://semver.org/).
   their bare-list shape — extending the envelope to them is a v3.2
   / v3.3 decision once the shape proves itself in the field-test
   re-run.
+
+### v3.0 — Agent-native release & v2.5 incremental skills
+
+Documentation pass, release-binary packaging, and the v2.5 hash-gated
+skills regen. Originally separate releases but bundled here because
+the merge of "agent-native polish" and "skills become cheap to
+regenerate" was the v3.0 story in practice.
+
+#### Changed
 
 - **v3.0-rc polish + docs.** Canonicalises the `docs/` layout (the
   old root `RESEARCH.md` moves to `docs/research.md` and gains a
@@ -395,7 +583,7 @@ to [Semantic Versioning](https://semver.org/).
   rendered bytes differ and prints the same per-call counters the
   daemon logs.
 
-### Measured
+#### Measured
 
 - **v2.5 hash gate on the self-index (Tiger Lake, 105 files / 30
   packages / 35 rendered files).** Cold compile: 35 rendered, 35
@@ -407,7 +595,15 @@ to [Semantic Versioning](https://semver.org/).
   written, 35 skipped — the index hash didn't move, so neither did
   the SKILL.md hash.
 
-- **Focused reads (Pillar I, v2.4 in the v3 plan).** New
+### v2.4 — Focused reads
+
+The token-saving read primitive. Lexical filter, no neural model —
+keeps the single-binary distribution story while picking up the
+"hide irrelevant symbols" pattern from SWE-Pruner.
+
+#### Added
+
+- **Focused reads (Pillar I).** New
   `internal/focus` package implements the deterministic lexical filter
   promised by the v3 roadmap: tokenize a focus string (lowercase,
   stopword-strip), then score candidates against name (3.0 exact / 2.0
@@ -442,7 +638,7 @@ to [Semantic Versioning](https://semver.org/).
   and `myco read <path> --focus "<q>"` (with `--stats` for the
   collapse counters on stderr).
 
-### Measured
+#### Measured
 
 - **`read_focused` byte reduction (self-index, Tiger Lake).** Three
   representative queries on this repo:
@@ -457,7 +653,14 @@ to [Semantic Versioning](https://semver.org/).
   range against a trained reranker; the lexical filter trades
   precision for distribution simplicity.
 
-- **Static skills tree (Pillar L, v2.3 in the v3 plan).** New
+### v2.3 — Static skills tree
+
+The agent-readable static index. Markdown-only, generated from the
+graph, navigable with just `Read`.
+
+#### Added
+
+- **Static skills tree (Pillar L).** New
   `internal/skills` package + `myco skills compile` CLI generate a
   deterministic Markdown tree under `.mycelium/skills/` that an agent
   can navigate with only the `Read` tool. Layout: per-package
@@ -477,7 +680,11 @@ to [Semantic Versioning](https://semver.org/).
   / 88 files / 589 symbols, full tree compiles in ~52ms; tree
   gitignored as a sibling of `index.db`. Incremental hash-gated
   regeneration is v2.5.
-- **Opt-in telemetry log (Pillar K, v2.2 in the v3 plan).** New
+### v2.2 — Opt-in telemetry log
+
+#### Added
+
+- **Opt-in telemetry log (Pillar K).** New
   `internal/telemetry` package with a `Recorder` interface and a
   JSONL `FileRecorder`. Off by default; enabled via
   `telemetry: { enabled: true }` in `.mycelium.yml`. When on, the
@@ -493,7 +700,9 @@ to [Semantic Versioning](https://semver.org/).
   when no records exist yet, so users who flipped the flag but
   haven't generated traffic understand what they're seeing.
 
-### Fixed
+### v2.0.x — Post-rc1 fixes & benchmarks
+
+#### Fixed
 
 - **sqlite-vec extension entrypoint.** `LoadExtension` was being called
   with an empty entry symbol, which makes SQLite derive the symbol name
@@ -502,7 +711,7 @@ to [Semantic Versioning](https://semver.org/).
   failed with an empty `undefined symbol:` error. Now pass the explicit
   entry in `internal/index/vss.go`.
 
-### Measured
+#### Measured
 
 - **Semantic search benchmark matrix** — ran the full grid (10k /
   50k / 100k chunks × 384 / 768 / 1536 dims × {brute-force, vec0})

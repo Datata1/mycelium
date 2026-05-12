@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"sort"
@@ -105,6 +107,7 @@ func main() {
 		newSkillsCmd(),
 		newReadCmd(),
 		newSessionCmd(),
+		newBenchCounterfactualCmd(),
 	)
 
 	if err := root.Execute(); err != nil {
@@ -2246,13 +2249,18 @@ func newSessionExportCmd() *cobra.Command {
 			hook, hasHook := telemetry.ReadHookMeta(hookMetaDir, args[0])
 			ext, _ := telemetry.SummarizeExternal(telemetry.ExternalPath(hookMetaDir, args[0]))
 			ts, _ := telemetry.ParseTranscript(transcriptFor(rep, rc.Root))
+			cpt := rc.Cfg.Telemetry.CharsPerToken
+			if cpt <= 0 {
+				cpt = config.DefaultCharsPerToken
+			}
+			cost := telemetry.ComputeSessionCost(rep.Summaries, ext, cpt)
 			switch format {
 			case "json":
-				return printSessionJSON(rep, hook, hasHook, ext, ts)
+				return printSessionJSON(rep, hook, hasHook, ext, ts, cost)
 			case "markdown", "md":
-				printSessionMarkdown(rep, hook, hasHook, ext, ts)
+				printSessionMarkdown(rep, hook, hasHook, ext, ts, cost)
 			default:
-				printSessionTable(rep, hook, hasHook, ext, ts)
+				printSessionTable(rep, hook, hasHook, ext, ts, cost)
 			}
 			return nil
 		},
@@ -2607,7 +2615,7 @@ func mergeHookList(existing any, entry map[string]any) any {
 
 // ─── session report renderers ─────────────────────────────────────────────────
 
-func printSessionTable(rep telemetry.SessionReport, hook telemetry.HookMeta, hasHook bool, ext []telemetry.ExternalSummary, ts telemetry.TranscriptSummary) {
+func printSessionTable(rep telemetry.SessionReport, hook telemetry.HookMeta, hasHook bool, ext []telemetry.ExternalSummary, ts telemetry.TranscriptSummary, cost telemetry.SessionCost) {
 	s := rep.Session
 	fmt.Printf("session    %s\n", s.ID)
 	fmt.Printf("name       %s\n", s.Name)
@@ -2648,17 +2656,55 @@ func printSessionTable(rep telemetry.SessionReport, hook telemetry.HookMeta, has
 		exploratory := telemetry.TotalExploratory(ext)
 		fmt.Println()
 		fmt.Printf("── fallback tools (non-myco)  exploratory=%d ────────────────────\n", exploratory)
-		fmt.Printf("%-28s  %-12s  %6s\n", "tool", "category", "calls")
+		fmt.Printf("%-28s  %-12s  %6s  %12s\n", "tool", "category", "calls", "out_bytes")
 		for _, e := range ext {
-			fmt.Printf("%-28s  %-12s  %6d\n", e.Tool, e.Category, e.Count)
+			fmt.Printf("%-28s  %-12s  %6d  %12s\n", e.Tool, e.Category, e.Count, humanBytes(int64(e.OutputBytes)))
 		}
 	} else {
 		fmt.Println()
 		fmt.Println("── fallback tools: none recorded ────────────────────────────────")
 	}
+	if cost.TotalBytes > 0 {
+		fmt.Println()
+		fmt.Printf("── cost estimate  (~%.1f chars/token) ───────────────────────────\n", cost.CharsPerToken)
+		fmt.Printf("%-12s  %12s  %12s\n", "source", "bytes", "est. tokens")
+		fmt.Printf("%-12s  %12s  %12s\n", "myco",
+			humanBytes(cost.MycoInputBytes+cost.MycoOutputBytes),
+			humanInt(cost.MycoTokens))
+		fmt.Printf("%-12s  %12s  %12s\n", "fallback",
+			humanBytes(cost.FallbackInputBytes+cost.FallbackOutputBytes),
+			humanInt(cost.FallbackTokens))
+		fmt.Printf("%-12s  %12s  %12s\n", "total",
+			humanBytes(cost.TotalBytes), humanInt(cost.EstimatedTokens))
+
+		// v3.4 A3 — modelled "without myco" estimate. Skipped when there's
+		// no counterfactual to compare against (e.g. session is only
+		// stats/ping calls): the savings line would just be noise.
+		if cost.WithoutMycoEstimateBytes > 0 {
+			fmt.Println()
+			fmt.Printf("── modelled savings  (estimate, see caveats) ───────────────────\n")
+			fmt.Printf("%-22s  %12s  %12s\n", "scenario", "bytes", "est. tokens")
+			fmt.Printf("%-22s  %12s  %12s\n", "with myco (actual)",
+				humanBytes(cost.TotalBytes), humanInt(cost.EstimatedTokens))
+			fmt.Printf("%-22s  %12s  %12s\n", "without myco (modelled)",
+				humanBytes(cost.WithoutMycoEstimateBytes),
+				humanInt(cost.WithoutMycoEstimateTokens))
+			savingsPct := cost.SavingsRatio * 100
+			fmt.Printf("%-22s  %12s  %12s  (%+.1f%%)\n", "estimated savings",
+				humanBytes(cost.EstimatedSavingsBytes),
+				humanInt(cost.EstimatedSavingsTokens),
+				savingsPct)
+			if mix := cost.CounterfactualQualityMix; len(mix) > 0 {
+				fmt.Printf("quality mix: high=%d  medium=%d  low=%d\n",
+					mix[telemetry.EstimateQualityHigh],
+					mix[telemetry.EstimateQualityMedium],
+					mix[telemetry.EstimateQualityLow])
+			}
+		}
+	}
 }
 
-func printSessionMarkdown(rep telemetry.SessionReport, hook telemetry.HookMeta, hasHook bool, ext []telemetry.ExternalSummary, ts telemetry.TranscriptSummary) {
+func printSessionMarkdown(rep telemetry.SessionReport, hook telemetry.HookMeta, hasHook bool, ext []telemetry.ExternalSummary, ts telemetry.TranscriptSummary, cost telemetry.SessionCost) {
 	s := rep.Session
 	fmt.Printf("## Session: %s\n\n", s.Name)
 	if ts.FirstUserMessage != "" {
@@ -2700,28 +2746,123 @@ func printSessionMarkdown(rep telemetry.SessionReport, hook telemetry.HookMeta, 
 	}
 	if len(ext) > 0 {
 		fmt.Printf("\n### Fallback tools (non-myco)\n\n")
-		fmt.Printf("| tool | category | calls |\n|---|---|---|\n")
+		// v3.4 A1: surface input/output bytes alongside the call count
+		// so the export shows the cost half that was previously
+		// invisible. out_bytes is the agent-facing context cost.
+		fmt.Printf("| tool | category | calls | out_bytes |\n|---|---|---|---|\n")
 		for _, e := range ext {
-			fmt.Printf("| %s | %s | %d |\n", e.Tool, e.Category, e.Count)
+			fmt.Printf("| %s | %s | %d | %s |\n",
+				e.Tool, e.Category, e.Count, humanBytes(int64(e.OutputBytes)))
+		}
+		extIn, extOut := telemetry.TotalExternalBytes(ext)
+		fmt.Printf("\n**Fallback total bytes** — in: %s · out: %s\n",
+			humanBytes(int64(extIn)), humanBytes(int64(extOut)))
+	}
+	// v3.4 A2: session cost block. Bytes are exact, tokens are a
+	// directional estimate via the configurable chars-per-token ratio.
+	if cost.TotalBytes > 0 {
+		fmt.Printf("\n### Cost estimate\n\n")
+		fmt.Printf("Estimated at **%.1f chars/token** (override via `telemetry.chars_per_token` in `.mycelium.yml`). Token numbers are directional — for trend-watching, not billing.\n\n", cost.CharsPerToken)
+		fmt.Printf("| source | bytes (in + out) | est. tokens |\n|---|---|---|\n")
+		fmt.Printf("| myco | %s | %s |\n",
+			humanBytes(cost.MycoInputBytes+cost.MycoOutputBytes),
+			humanInt(cost.MycoTokens))
+		fmt.Printf("| fallback (Read/Bash/Edit/…) | %s | %s |\n",
+			humanBytes(cost.FallbackInputBytes+cost.FallbackOutputBytes),
+			humanInt(cost.FallbackTokens))
+		fmt.Printf("| **total** | **%s** | **%s** |\n",
+			humanBytes(cost.TotalBytes), humanInt(cost.EstimatedTokens))
+
+		// v3.4 A3 — modelled "without-myco" estimate. The savings ratio
+		// is the headline trend number; the prose caveat is required so
+		// the reader doesn't mistake it for a measured result.
+		if cost.WithoutMycoEstimateBytes > 0 {
+			fmt.Printf("\n#### Modelled savings vs. fallback-only\n\n")
+			fmt.Printf("**Modelled, not measured.** Per-tool multipliers estimate what the equivalent `grep`/`Read`/`find` operation would have cost in bytes — actual fallback runs would re-traverse the filesystem and contend with editor/build, so we trade accuracy for a per-call estimate good enough to track adoption-cost trends.\n\n")
+			fmt.Printf("| scenario | bytes | est. tokens |\n|---|---|---|\n")
+			fmt.Printf("| with myco (actual) | %s | %s |\n",
+				humanBytes(cost.TotalBytes), humanInt(cost.EstimatedTokens))
+			fmt.Printf("| without myco (modelled) | %s | %s |\n",
+				humanBytes(cost.WithoutMycoEstimateBytes),
+				humanInt(cost.WithoutMycoEstimateTokens))
+			savingsPct := cost.SavingsRatio * 100
+			fmt.Printf("| **estimated savings** | **%s** | **%s** (%+.1f%%) |\n",
+				humanBytes(cost.EstimatedSavingsBytes),
+				humanInt(cost.EstimatedSavingsTokens),
+				savingsPct)
+			if mix := cost.CounterfactualQualityMix; len(mix) > 0 {
+				fmt.Printf("\n_Estimate quality mix: %d high · %d medium · %d low. Low-quality estimates come from graph tools (`get_neighborhood`, `impact_analysis`, `critical_path`) where the fallback would be iterated grep+Read — hard to model from output bytes alone._\n",
+					mix[telemetry.EstimateQualityHigh],
+					mix[telemetry.EstimateQualityMedium],
+					mix[telemetry.EstimateQualityLow])
+			}
+			if cost.EstimatedSavingsBytes < 0 {
+				fmt.Printf("\n_Negative savings means myco's actual byte cost exceeded the modelled fallback cost — usually a sign the agent reached for myco where a single `grep` would have been cheaper, or used a graph tool the model under-counts. Worth digging into per-tool rows below._\n")
+			}
+		}
+
+		if len(cost.PerTool) > 0 {
+			fmt.Printf("\n#### Top contributors\n\n")
+			fmt.Printf("| tool | source | calls | bytes | est. tokens | cf bytes |\n|---|---|---|---|---|---|\n")
+			topN := len(cost.PerTool)
+			if topN > 8 {
+				topN = 8
+			}
+			for _, p := range cost.PerTool[:topN] {
+				cfCell := "—"
+				if p.CounterfactualBytes > 0 {
+					cfCell = humanBytes(p.CounterfactualBytes)
+					if p.EstimateQuality == telemetry.EstimateQualityLow {
+						cfCell += " (low)"
+					}
+				}
+				fmt.Printf("| %s | %s | %d | %s | %s | %s |\n",
+					p.Tool, p.Source, p.Count,
+					humanBytes(p.TotalBytes), humanInt(p.EstimatedTokens),
+					cfCell)
+			}
 		}
 	}
 }
 
+// humanInt formats a non-negative integer with thousands separators
+// for the cost-block tables — "78,500" reads more naturally than "78500"
+// in a markdown export that's meant to be skimmed.
+func humanInt(n int64) string {
+	if n < 0 {
+		return fmt.Sprintf("%d", n)
+	}
+	s := fmt.Sprintf("%d", n)
+	if len(s) <= 3 {
+		return s
+	}
+	// Insert commas every 3 digits from the right.
+	var out []byte
+	for i, c := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			out = append(out, ',')
+		}
+		out = append(out, byte(c))
+	}
+	return string(out)
+}
+
 type sessionExportJSON struct {
-	Session                  telemetry.SessionMeta       `json:"session"`
-	TotalMycoCalls           int                         `json:"total_myco_calls"`
-	InputBytes               int64                       `json:"input_bytes"`
-	OutputBytes              int64                       `json:"output_bytes"`
-	CallSpanMS               int64                       `json:"call_span_ms,omitempty"`
-	InputTokens              int                         `json:"input_tokens,omitempty"`
-	OutputTokens             int                         `json:"output_tokens,omitempty"`
-	FallbackExploratoryTotal int                         `json:"fallback_exploratory_total"`
-	MycoTools                []telemetry.Summary         `json:"myco_tools"`
-	FallbackTools            []telemetry.ExternalSummary `json:"fallback_tools"`
+	Session                  telemetry.SessionMeta        `json:"session"`
+	TotalMycoCalls           int                          `json:"total_myco_calls"`
+	InputBytes               int64                        `json:"input_bytes"`
+	OutputBytes              int64                        `json:"output_bytes"`
+	CallSpanMS               int64                        `json:"call_span_ms,omitempty"`
+	InputTokens              int                          `json:"input_tokens,omitempty"`
+	OutputTokens             int                          `json:"output_tokens,omitempty"`
+	FallbackExploratoryTotal int                          `json:"fallback_exploratory_total"`
+	MycoTools                []telemetry.Summary          `json:"myco_tools"`
+	FallbackTools            []telemetry.ExternalSummary  `json:"fallback_tools"`
+	Cost                     *telemetry.SessionCost       `json:"cost,omitempty"`
 	Transcript               *telemetry.TranscriptSummary `json:"transcript,omitempty"`
 }
 
-func printSessionJSON(rep telemetry.SessionReport, hook telemetry.HookMeta, hasHook bool, ext []telemetry.ExternalSummary, ts telemetry.TranscriptSummary) error {
+func printSessionJSON(rep telemetry.SessionReport, hook telemetry.HookMeta, hasHook bool, ext []telemetry.ExternalSummary, ts telemetry.TranscriptSummary, cost telemetry.SessionCost) error {
 	out := sessionExportJSON{
 		Session:                  rep.Session,
 		TotalMycoCalls:           rep.TotalCalls,
@@ -2737,6 +2878,10 @@ func printSessionJSON(rep telemetry.SessionReport, hook telemetry.HookMeta, hasH
 	if hasHook {
 		out.InputTokens = hook.InputTokens
 		out.OutputTokens = hook.OutputTokens
+	}
+	if cost.TotalBytes > 0 {
+		c := cost
+		out.Cost = &c
 	}
 	if ts.ToolCalls > 0 || ts.Turns > 0 {
 		out.Transcript = &ts
@@ -2873,4 +3018,274 @@ func abs64(n int64) int64 {
 		return -n
 	}
 	return n
+}
+
+// ─── bench-counterfactual ────────────────────────────────────────────────────
+//
+// `myco bench-counterfactual` measures, per myco tool, the actual byte
+// payload returned by the daemon vs. the byte payload the agent would
+// have absorbed via the equivalent shell fallback (grep / wc -c / find).
+// The measured ratio is compared to the modelled multiplier in
+// internal/telemetry/counterfactual.go; drift > --drift-threshold (default
+// 50%) on any tool exits non-zero so a calibration regression breaks CI
+// loudly instead of silently.
+//
+// Why a separate command, not a Go test: the bench needs a running
+// daemon (the only SQLite reader/writer per architectural rule) and has
+// to shell out to grep against the live filesystem. A unit test can't
+// own those preconditions cleanly; a CLI command can.
+//
+// Corpus is fixed in code (not flag-driven) so re-runs from one machine
+// to another are comparable. The targets are mycelium-self-index
+// symbols/files chosen for stable existence across the codebase.
+
+// benchCase pairs one myco call with its shell-fallback equivalent.
+// Exactly one of FallbackCmd or FallbackFile must be set: FallbackCmd is
+// run via `bash -c` and the stdout byte length is the measurement;
+// FallbackFile is sized via os.Stat (mirrors `wc -c`).
+type benchCase struct {
+	Tool         string
+	Method       string
+	Params       any
+	FallbackCmd  string
+	FallbackFile string
+	Note         string
+}
+
+// benchCorpus is the per-tool fixture set. The targets are picked from
+// the mycelium self-index — picking a target that doesn't exist would
+// silently zero out the myco-side measurement and the drift number
+// would lie. Update only when removing/renaming the target symbol.
+var benchCorpus = []benchCase{
+	{
+		Tool:        "find_symbol",
+		Method:      ipc.MethodFindSymbol,
+		Params:      ipc.FindSymbolParams{Name: "ComputeSessionCost"},
+		FallbackCmd: `grep -rn 'ComputeSessionCost' --include='*.go' .`,
+		Note:        "single Go function, ~6 references in the repo",
+	},
+	{
+		Tool:        "get_references",
+		Method:      ipc.MethodGetReferences,
+		Params:      ipc.GetReferencesParams{Target: "ComputeSessionCost"},
+		FallbackCmd: `grep -rn 'ComputeSessionCost' --include='*.go' .`,
+		Note:        "callers of ComputeSessionCost",
+	},
+	{
+		Tool:         "read_focused",
+		Method:       ipc.MethodReadFocused,
+		Params:       ipc.ReadFocusedParams{Path: "internal/telemetry/aggregate.go"},
+		FallbackFile: "internal/telemetry/aggregate.go",
+		Note:         "no focus → full file; counterfactual = full Read",
+	},
+	{
+		Tool:         "get_file_outline",
+		Method:       ipc.MethodGetFileOutline,
+		Params:       ipc.GetFileOutlineParams{Path: "internal/telemetry/aggregate.go"},
+		FallbackFile: "internal/telemetry/aggregate.go",
+		Note:         "outline vs full Read",
+	},
+	{
+		Tool:         "get_file_summary",
+		Method:       ipc.MethodGetFileSummary,
+		Params:       ipc.GetFileSummaryParams{Path: "internal/telemetry/aggregate.go"},
+		FallbackFile: "internal/telemetry/aggregate.go",
+		Note:         "summary vs full Read",
+	},
+	{
+		Tool:        "search_lexical",
+		Method:      ipc.MethodSearchLexical,
+		Params:      ipc.SearchLexicalParams{Pattern: "telemetry.Record"},
+		FallbackCmd: `grep -rn 'telemetry\.Record' --include='*.go' .`,
+		Note:        "literal-string search, parity case",
+	},
+	{
+		Tool:        "list_files",
+		Method:      ipc.MethodListFiles,
+		Params:      ipc.ListFilesParams{NameContains: "telemetry"},
+		FallbackCmd: `find . -path ./.git -prune -o -path ./.mycelium -prune -o -name '*telemetry*' -print`,
+		Note:        "name-contains filter vs find",
+	},
+	{
+		Tool:        "impact_analysis",
+		Method:      ipc.MethodImpactAnalysis,
+		Params:      ipc.ImpactAnalysisParams{Target: "ComputeSessionCost"},
+		FallbackCmd: `grep -rn 'ComputeSessionCost' --include='*.go' .`,
+		Note:        "transitive callers; grep is a lower bound",
+	},
+	{
+		Tool:        "get_neighborhood",
+		Method:      ipc.MethodGetNeighborhood,
+		Params:      ipc.GetNeighborhoodParams{Target: "ComputeSessionCost", Depth: 1},
+		FallbackCmd: `grep -rn 'ComputeSessionCost' --include='*.go' .`,
+		Note:        "1-hop graph walk; agent would iterate grep+Read",
+	},
+}
+
+// benchRow is one printable line of the bench result.
+type benchRow struct {
+	Tool          string  `json:"tool"`
+	MycoBytes     int64   `json:"myco_bytes"`
+	FallbackBytes int64   `json:"fallback_bytes"`
+	MeasuredRatio float64 `json:"measured_ratio"`
+	ModelRatio    float64 `json:"model_ratio"`
+	Drift         float64 `json:"drift"` // |measured - model| / max(model, 0.01)
+	Quality       string  `json:"quality"`
+	MycoMS        int64   `json:"myco_ms"`
+	FallbackMS    int64   `json:"fallback_ms"`
+	OK            bool    `json:"ok"`
+	Note          string  `json:"note"`
+	Err           string  `json:"error,omitempty"`
+}
+
+func newBenchCounterfactualCmd() *cobra.Command {
+	var (
+		driftThreshold float64
+		format         string
+	)
+	cmd := &cobra.Command{
+		Use:   "bench-counterfactual",
+		Short: "Calibrate the without-myco cost model against the self-index",
+		Long: `Runs each myco tool against the running daemon and the equivalent
+shell fallback (grep / wc -c / find), then compares the measured byte
+ratio against the modelled multiplier in internal/telemetry/counterfactual.go.
+
+Drift exceeding --drift-threshold (default 0.50 = 50%) on any tool
+exits with status 1, so calibration regressions break CI loudly. The
+corpus is hard-coded for repeatable cross-machine comparison; the
+targets are mycelium self-index symbols/files.
+
+Requires a running daemon (start with ` + "`myco daemon`" + `).`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runBenchCounterfactual(driftThreshold, format)
+		},
+	}
+	cmd.Flags().Float64Var(&driftThreshold, "drift-threshold", 0.5,
+		"max allowed |measured-model|/model before exiting non-zero")
+	cmd.Flags().StringVar(&format, "format", "table", "output format: table | json")
+	return cmd
+}
+
+func runBenchCounterfactual(driftThreshold float64, format string) error {
+	rc, err := loadRepoCtx()
+	if err != nil {
+		return err
+	}
+	client, ok := daemonClient(rc)
+	if !ok {
+		return fmt.Errorf("daemon not reachable at %s/%s — start it with `myco daemon`",
+			rc.Root, rc.Cfg.Daemon.Socket)
+	}
+
+	rows := make([]benchRow, 0, len(benchCorpus))
+	for _, bc := range benchCorpus {
+		row := benchRow{Tool: bc.Tool, Note: bc.Note}
+
+		// Myco side: capture raw response bytes — matches what the daemon
+		// records as out_bytes in telemetry.jsonl.
+		var raw json.RawMessage
+		mStart := time.Now()
+		if err := client.Call(bc.Method, bc.Params, &raw); err != nil {
+			msg := err.Error()
+			if strings.Contains(msg, "unknown method") {
+				// The daemon is older than the binary running this bench.
+				// Distinguish from a real RPC failure so the user knows
+				// to restart rather than chase a calibration regression.
+				msg += "  (restart the daemon — its build predates this method)"
+			}
+			row.Err = "myco: " + msg
+			rows = append(rows, row)
+			continue
+		}
+		row.MycoMS = time.Since(mStart).Milliseconds()
+		row.MycoBytes = int64(len(raw))
+
+		// Fallback side: stdout byte count (grep/find) or file size (wc -c).
+		fStart := time.Now()
+		switch {
+		case bc.FallbackFile != "":
+			info, err := os.Stat(filepath.Join(rc.Root, bc.FallbackFile))
+			if err != nil {
+				row.Err = "fallback: " + err.Error()
+				rows = append(rows, row)
+				continue
+			}
+			row.FallbackBytes = info.Size()
+		case bc.FallbackCmd != "":
+			c := exec.Command("bash", "-c", bc.FallbackCmd)
+			c.Dir = rc.Root
+			out, _ := c.Output() // grep returns 1 on no match — we still want the bytes
+			row.FallbackBytes = int64(len(out))
+		}
+		row.FallbackMS = time.Since(fStart).Milliseconds()
+
+		// Compare
+		mul, qual, _ := telemetry.CounterfactualMultiplier(bc.Tool)
+		row.ModelRatio = mul
+		row.Quality = string(qual)
+		if row.MycoBytes > 0 {
+			row.MeasuredRatio = float64(row.FallbackBytes) / float64(row.MycoBytes)
+		}
+		// Drift uses max(model, 0.01) as the denominator so the zero-
+		// multiplier tools (stats/ping, never benched) don't divide by 0
+		// if someone adds them to the corpus by accident.
+		row.Drift = math.Abs(row.MeasuredRatio-mul) / math.Max(mul, 0.01)
+		// Low-quality multipliers self-document as rough — the model
+		// already says "don't trust this much". Treat their drift as
+		// informational so a single corpus point can't break CI on a
+		// graph-walk tool the model never claimed precision for.
+		row.OK = row.Drift <= driftThreshold || qual == telemetry.EstimateQualityLow
+
+		rows = append(rows, row)
+	}
+
+	switch format {
+	case "json":
+		b, err := json.MarshalIndent(rows, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(b))
+	default:
+		printBenchTable(rows, driftThreshold)
+	}
+
+	for _, r := range rows {
+		if !r.OK || r.Err != "" {
+			return fmt.Errorf("calibration drift exceeded threshold (%.0f%%); see table above",
+				driftThreshold*100)
+		}
+	}
+	return nil
+}
+
+func printBenchTable(rows []benchRow, threshold float64) {
+	fmt.Printf("── counterfactual calibration  (drift threshold %.0f%%) ─────────\n",
+		threshold*100)
+	fmt.Printf("%-20s  %10s  %10s  %8s  %8s  %7s  %8s  %s\n",
+		"tool", "myco", "fallback", "measured", "model", "drift", "quality", "status")
+	for _, r := range rows {
+		status := "ok"
+		switch {
+		case r.Err != "":
+			status = "ERR"
+		case !r.OK:
+			status = "DRIFT"
+		case r.Quality == string(telemetry.EstimateQualityLow) && r.Drift > threshold:
+			status = "info" // low-quality drift is expected, not a failure
+		}
+		fmt.Printf("%-20s  %10s  %10s  %8.2f  %8.2f  %6.0f%%  %8s  %s\n",
+			r.Tool,
+			humanBytes(r.MycoBytes), humanBytes(r.FallbackBytes),
+			r.MeasuredRatio, r.ModelRatio, r.Drift*100,
+			r.Quality, status)
+		if r.Err != "" {
+			fmt.Printf("    error: %s\n", r.Err)
+		}
+	}
+	fmt.Println()
+	fmt.Println("measured = fallback_bytes / myco_bytes  (target: should match model)")
+	fmt.Println("drift    = |measured - model| / max(model, 0.01)")
+	fmt.Println("low-quality estimates (graph tools) can drift more than the threshold")
+	fmt.Println("without invalidating the model — interpret with the 'quality' column.")
 }

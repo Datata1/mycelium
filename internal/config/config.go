@@ -90,10 +90,22 @@ type HooksConfig struct {
 // the only knob is whether to log at all and where to put the file. We
 // resist adding sampling rates, retention windows, or per-tool toggles
 // until real usage shows we need them.
+//
+// CharsPerToken (v3.4 A2): byte→token conversion ratio for the session-
+// cost estimate. 4.0 is a sensible default for English-heavy code+JSON
+// flowing through Claude's tokenizer; users who benchmarked against
+// their own tokenizer can override per repo. <= 0 falls back to the
+// default at use time.
 type TelemetryConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	Path    string `yaml:"path"` // empty -> .mycelium/telemetry.jsonl
+	Enabled       bool    `yaml:"enabled"`
+	Path          string  `yaml:"path"`            // empty -> .mycelium/telemetry.jsonl
+	CharsPerToken float64 `yaml:"chars_per_token"` // 0 -> default 4.0; v3.4 A2
 }
+
+// DefaultCharsPerToken is the bytes→tokens conversion used when no
+// override is configured. Exposed as a constant so the aggregator and
+// the config layer don't disagree.
+const DefaultCharsPerToken = 4.0
 
 type IndexConfig struct {
 	Path          string       `yaml:"path"`
