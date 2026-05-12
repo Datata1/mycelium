@@ -2178,10 +2178,12 @@ func newSessionListCmd() *cobra.Command {
 				fmt.Fprintln(os.Stderr, "no sessions recorded (run `myco session start` first)")
 				return nil
 			}
-			fmt.Printf("%-26s  %-20s  %-19s  %6s  %12s\n",
+			// Width 38 fits both `ses_<date>_<8rand>` (20 chars) and a
+			// Claude UUID (36 chars) without truncation.
+			fmt.Printf("%-38s  %-20s  %-19s  %6s  %12s\n",
 				"ID", "name", "started", "calls", "out_bytes")
 			for _, r := range reports {
-				fmt.Printf("%-26s  %-20s  %-19s  %6d  %12s\n",
+				fmt.Printf("%-38s  %-20s  %-19s  %6d  %12s\n",
 					r.Session.ID,
 					truncate(r.Session.Name, 20),
 					r.Session.StartedAt.Format("2006-01-02 15:04:05"),
@@ -2298,50 +2300,63 @@ func newSessionTrackCmd() *cobra.Command {
 //     chose not to use myco. This is the primary evaluation signal.
 //   - --full: renders the complete conversation (messages + all tool calls),
 //     equivalent to the Python extract_chat.py script.
+//
+// The <session-id> arg may be omitted when --transcript <path> is given —
+// useful for rendering a JSONL you already have a path to, without needing
+// myco to have tracked the session.
 func newSessionTranscriptCmd() *cobra.Command {
 	var full bool
 	var explicitPath string
 	cmd := &cobra.Command{
-		Use:   "transcript <session-id>",
+		Use:   "transcript [session-id]",
 		Short: "Render the Claude conversation linked to a session (fallback decision points by default)",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			rc, err := loadRepoCtx()
 			if err != nil {
 				return err
 			}
 			jsonlPath, _, _ := sessionPaths(rc)
-			rep, err := telemetry.AggregateSession(jsonlPath, args[0])
-			if err != nil {
-				return err
+
+			tpath := explicitPath
+			sessionID := ""
+			if len(args) > 0 {
+				sessionID = args[0]
+			}
+			if tpath == "" && sessionID == "" {
+				return fmt.Errorf("provide a session ID, --transcript <path>, or both")
 			}
 
-			// Resolve transcript path: explicit flag → stored link → auto-discover.
-			tpath := explicitPath
+			// If we have a session ID, try to resolve its transcript link;
+			// don't bail if the session isn't known and a path was given.
 			if tpath == "" {
+				rep, err := telemetry.AggregateSession(jsonlPath, sessionID)
+				if err != nil {
+					return err
+				}
 				tpath = transcriptFor(rep, rc.Root)
-			}
-			if tpath == "" {
-				// Auto-discover from the Claude project directory by time window.
-				candidates := telemetry.DiscoverTranscripts(rc.Root, rep.Session.StartedAt)
-				switch len(candidates) {
-				case 0:
-					fmt.Fprintf(os.Stderr,
-						"No transcript found. Options:\n"+
-							"  1. Pass the path explicitly: myco session transcript %s --transcript <path>\n"+
-							"  2. Find it yourself: ls -lt ~/.claude/projects/$(echo %s | tr / -)/\n",
-						args[0], rc.Root)
-					return fmt.Errorf("transcript not found for session %s", args[0])
-				case 1:
-					tpath = candidates[0]
-					fmt.Fprintf(os.Stderr, "auto-discovered transcript: %s\n", tpath)
-				default:
-					fmt.Fprintf(os.Stderr, "Multiple transcripts found near session start time:\n")
-					for i, c := range candidates {
-						fmt.Fprintf(os.Stderr, "  [%d] %s\n", i+1, c)
+				if tpath == "" {
+					candidates := telemetry.DiscoverTranscripts(rc.Root, rep.Session.StartedAt)
+					switch len(candidates) {
+					case 0:
+						fmt.Fprintf(os.Stderr,
+							"No transcript found for session %s.\n"+
+								"  Try one of:\n"+
+								"  1. Pass the path explicitly: myco session transcript --transcript <path>\n"+
+								"  2. Browse manually:           ls -lt ~/.claude/projects/%s/\n",
+							sessionID, telemetry.ClaudeProjectSlug(rc.Root))
+						return fmt.Errorf("transcript not found for session %s", sessionID)
+					case 1:
+						tpath = candidates[0]
+						fmt.Fprintf(os.Stderr, "auto-discovered transcript: %s\n", tpath)
+					default:
+						fmt.Fprintf(os.Stderr, "Multiple transcripts found near session start time:\n")
+						for i, c := range candidates {
+							fmt.Fprintf(os.Stderr, "  [%d] %s\n", i+1, c)
+						}
+						fmt.Fprintf(os.Stderr, "Using newest. Pass --transcript <path> to override.\n")
+						tpath = candidates[0]
 					}
-					fmt.Fprintf(os.Stderr, "Using newest. Pass --transcript <path> to override.\n")
-					tpath = candidates[0]
 				}
 			}
 
@@ -2350,7 +2365,7 @@ func newSessionTranscriptCmd() *cobra.Command {
 				return fmt.Errorf("read transcript %s: %w", tpath, err)
 			}
 			if len(events) == 0 {
-				return fmt.Errorf("transcript at %s is empty or unreadable", tpath)
+				return fmt.Errorf("transcript at %s contained no conversation turns", tpath)
 			}
 			if full {
 				fmt.Print(telemetry.RenderTranscript(events))
@@ -2363,7 +2378,7 @@ func newSessionTranscriptCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&full, "full", false,
 		"render the complete conversation instead of just fallback decision points")
 	cmd.Flags().StringVar(&explicitPath, "transcript", "",
-		"explicit path to a Claude Code conversation JSONL file")
+		"explicit path to a Claude Code conversation JSONL file (no session ID required when set)")
 	return cmd
 }
 

@@ -65,7 +65,14 @@ func StartSession(jsonlPath, sessionFilePath, name, claudeSessionID, transcriptP
 	if name == "" {
 		name = time.Now().Format("2006-01-02 15:04")
 	}
-	id := newSessionID()
+	// When Claude Code's hook handed us a session UUID, use it as the myco
+	// session ID directly so the user can copy-paste the same string across
+	// both systems. Manual `myco session start` (no hook) still gets a
+	// `ses_<date>_<rand>` ID.
+	id := claudeSessionID
+	if id == "" {
+		id = newSessionID()
+	}
 	meta := SessionMeta{
 		ID:              id,
 		Name:            name,
@@ -246,11 +253,13 @@ func appendSessionMarker(jsonlPath string, meta SessionMeta) error {
 	}
 	defer f.Close()
 	r := Record{
-		Timestamp: meta.StartedAt,
-		Tool:      meta.Name,
-		Kind:      "session_start",
-		SessionID: meta.ID,
-		OK:        true,
+		Timestamp:       meta.StartedAt,
+		Tool:            meta.Name,
+		Kind:            "session_start",
+		SessionID:       meta.ID,
+		OK:              true,
+		ClaudeSessionID: meta.ClaudeSessionID,
+		TranscriptPath:  meta.TranscriptPath,
 	}
 	b, err := json.Marshal(r)
 	if err != nil {
@@ -333,9 +342,11 @@ func buildReports(records []Record) []SessionReport {
 		if r.Kind == "session_start" {
 			b := &bucket{
 				meta: SessionMeta{
-					ID:        r.SessionID,
-					Name:      r.Tool,
-					StartedAt: r.Timestamp,
+					ID:              r.SessionID,
+					Name:            r.Tool,
+					StartedAt:       r.Timestamp,
+					ClaudeSessionID: r.ClaudeSessionID,
+					TranscriptPath:  r.TranscriptPath,
 				},
 			}
 			buckets = append(buckets, b)

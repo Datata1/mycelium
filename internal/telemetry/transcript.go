@@ -41,18 +41,50 @@ type TranscriptSummary struct {
 }
 
 // transcriptLine is a single JSON object in the Claude Code conversation JSONL.
-// Only the fields needed for evaluation metrics are decoded.
+//
+// Claude Code's modern format nests role + content under `message`:
+//   {"type":"user", "message":{"role":"user", "content":[...]}, ...}
+// Older / non-conversation lines may carry role + content at the top level,
+// or be unrelated bookkeeping (type: "queue-operation" etc.). normalize()
+// folds both shapes into Role + Content and returns false for lines that
+// don't represent a conversation turn.
 type transcriptLine struct {
-	Type    string            `json:"type"`
-	Role    string            `json:"role"`
-	Content json.RawMessage   `json:"content"`
+	Type    string          `json:"type"`
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
+	Message *nestedMessage  `json:"message"`
+}
+
+type nestedMessage struct {
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
+}
+
+// normalize lifts the nested {message:{role,content}} shape onto Role and
+// Content, and falls back to Type for role when both are missing (Claude
+// Code's `type:"user"` / `type:"assistant"` is the canonical role hint).
+// Returns false for bookkeeping lines with no usable role.
+func (l *transcriptLine) normalize() bool {
+	if l.Message != nil {
+		if l.Role == "" {
+			l.Role = l.Message.Role
+		}
+		if len(l.Content) == 0 {
+			l.Content = l.Message.Content
+		}
+	}
+	if l.Role == "" && (l.Type == "user" || l.Type == "assistant") {
+		l.Role = l.Type
+	}
+	return l.Role == "user" || l.Role == "assistant"
 }
 
 type contentBlock struct {
-	Type  string          `json:"type"`
-	Text  string          `json:"text"`
-	Name  string          `json:"name"` // tool_use: tool name
-	Input json.RawMessage `json:"input"`
+	Type    string          `json:"type"`
+	Text    string          `json:"text"`
+	Name    string          `json:"name"`    // tool_use: tool name
+	Input   json.RawMessage `json:"input"`   // tool_use: input payload
+	Content json.RawMessage `json:"content"` // tool_result: result payload
 }
 
 // ParseTranscript reads a Claude Code conversation JSONL file and returns
@@ -84,10 +116,16 @@ func TranscriptPathFromSessionID(repoRoot, claudeSessionID string) string {
 	if err != nil || home == "" {
 		return ""
 	}
-	// Claude Code slug: strip leading slash, replace remaining / with -
-	slug := strings.ReplaceAll(repoRoot, "/", "-")
-	slug = strings.TrimPrefix(slug, "-")
-	return filepath.Join(home, ".claude", "projects", slug, claudeSessionID+".jsonl")
+	return filepath.Join(home, ".claude", "projects", ClaudeProjectSlug(repoRoot), claudeSessionID+".jsonl")
+}
+
+// ClaudeProjectSlug returns the directory name Claude Code uses for a given
+// absolute repo path under ~/.claude/projects/. Every "/" is replaced with
+// "-", which means an absolute path keeps its leading "-" (e.g.
+// /Users/x/repo → -Users-x-repo). An earlier version stripped that leading
+// dash, which made every transcript lookup miss.
+func ClaudeProjectSlug(repoRoot string) string {
+	return strings.ReplaceAll(repoRoot, "/", "-")
 }
 
 // DiscoverTranscripts scans the Claude Code project directory for transcript
@@ -101,9 +139,7 @@ func DiscoverTranscripts(repoRoot string, sessionStartedAt time.Time) []string {
 	if err != nil || home == "" {
 		return nil
 	}
-	slug := strings.ReplaceAll(repoRoot, "/", "-")
-	slug = strings.TrimPrefix(slug, "-")
-	dir := filepath.Join(home, ".claude", "projects", slug)
+	dir := filepath.Join(home, ".claude", "projects", ClaudeProjectSlug(repoRoot))
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -158,6 +194,9 @@ func parseTranscriptReader(r io.Reader) (TranscriptSummary, error) {
 		}
 		var msg transcriptLine
 		if err := json.Unmarshal(line, &msg); err != nil {
+			continue
+		}
+		if !msg.normalize() {
 			continue
 		}
 
@@ -256,6 +295,9 @@ func ParseTranscriptEvents(path string) ([]TranscriptEvent, error) {
 		if err := json.Unmarshal(line, &msg); err != nil {
 			continue
 		}
+		if !msg.normalize() {
+			continue
+		}
 
 		role := msg.Role
 
@@ -294,36 +336,7 @@ func ParseTranscriptEvents(path string) ([]TranscriptEvent, error) {
 					IsFallback: isFallback,
 				})
 			case "tool_result":
-				var resultText string
-				switch {
-				case len(b.Input) > 0 && b.Input[0] == '"':
-					_ = json.Unmarshal(b.Input, &resultText)
-				default:
-					// content field holds the result
-					var res struct {
-						Content any `json:"content"`
-					}
-					if json.Unmarshal(line, &res) == nil {
-						switch v := res.Content.(type) {
-						case string:
-							resultText = v
-						case []any:
-							var parts []string
-							for _, item := range v {
-								if m, ok := item.(map[string]any); ok {
-									if t, ok := m["text"].(string); ok {
-										parts = append(parts, t)
-									}
-								}
-							}
-							resultText = strings.Join(parts, "\n")
-						}
-					}
-				}
-				if resultText == "" {
-					// last resort: raw JSON
-					resultText = string(b.Input)
-				}
+				resultText := extractToolResultText(b.Content)
 				events = append(events, TranscriptEvent{
 					Role:       role,
 					ToolResult: truncateStr(resultText, 400),
@@ -430,6 +443,40 @@ func truncateStr(s string, max int) string {
 		return s
 	}
 	return s[:max] + "…"
+}
+
+// extractToolResultText flattens a tool_result block's `content` field into
+// human-readable text. Claude Code shapes the field three ways: a plain
+// string, a single text block, or an array of typed blocks (text, image,
+// tool_reference, …). For the array form we concatenate the text payloads.
+func extractToolResultText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	switch raw[0] {
+	case '"':
+		var s string
+		_ = json.Unmarshal(raw, &s)
+		return s
+	case '[':
+		var blocks []contentBlock
+		if json.Unmarshal(raw, &blocks) != nil {
+			return string(raw)
+		}
+		var parts []string
+		for _, b := range blocks {
+			if b.Text != "" {
+				parts = append(parts, b.Text)
+			}
+		}
+		return strings.Join(parts, "\n")
+	case '{':
+		var b contentBlock
+		if json.Unmarshal(raw, &b) == nil && b.Text != "" {
+			return b.Text
+		}
+	}
+	return string(raw)
 }
 
 func extractFirstText(raw json.RawMessage) string {

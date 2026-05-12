@@ -356,6 +356,140 @@ func TestExternalRoundTrip(t *testing.T) {
 	}
 }
 
+// TestClaudeProjectSlug pins the directory-name convention Claude Code uses
+// under ~/.claude/projects/. A regression here previously caused every
+// `myco session transcript` auto-discovery to fail: an earlier version
+// stripped the leading "-", so /Users/x/repo was looked up as
+// "Users-x-repo" instead of the real "-Users-x-repo".
+func TestClaudeProjectSlug(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		"/Users/codesphere/monorepo-4": "-Users-codesphere-monorepo-4",
+		"/home/jd/work/myco":           "-home-jd-work-myco",
+		"/tmp":                         "-tmp",
+	}
+	for in, want := range cases {
+		if got := ClaudeProjectSlug(in); got != want {
+			t.Errorf("ClaudeProjectSlug(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestSession_ClaudeIDAsSessionID checks that when StartSession is given a
+// Claude session UUID it adopts that UUID as the primary session ID — the
+// UX fix that lets users copy-paste the same ID across myco and Claude Code.
+// When no UUID is provided, the generated `ses_<date>_<rand>` ID is used.
+func TestSession_ClaudeIDAsSessionID(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	jsonl := filepath.Join(dir, "telemetry.jsonl")
+	sf := filepath.Join(dir, "current_session.json")
+
+	uuid := "5641b7bd-7435-4a86-8550-945511108cda"
+	tpath := "/tmp/transcript.jsonl"
+	meta, err := StartSession(jsonl, sf, "hooked", uuid, tpath)
+	if err != nil {
+		t.Fatalf("StartSession with UUID: %v", err)
+	}
+	if meta.ID != uuid {
+		t.Errorf("ID = %q, want Claude UUID %q", meta.ID, uuid)
+	}
+	if meta.TranscriptPath != tpath {
+		t.Errorf("TranscriptPath = %q, want %q", meta.TranscriptPath, tpath)
+	}
+
+	// And: the JSONL marker carries both fields so `myco session transcript`
+	// can resolve them after the active-session sidecar has been overwritten.
+	rep, err := AggregateSession(jsonl, uuid)
+	if err != nil {
+		t.Fatalf("AggregateSession: %v", err)
+	}
+	if rep.Session.ClaudeSessionID != uuid {
+		t.Errorf("aggregated ClaudeSessionID = %q, want %q", rep.Session.ClaudeSessionID, uuid)
+	}
+	if rep.Session.TranscriptPath != tpath {
+		t.Errorf("aggregated TranscriptPath = %q, want %q", rep.Session.TranscriptPath, tpath)
+	}
+
+	// No-UUID path keeps the generated ses_ ID.
+	meta2, err := StartSession(jsonl, sf, "manual", "", "")
+	if err != nil {
+		t.Fatalf("StartSession no UUID: %v", err)
+	}
+	if !strings.HasPrefix(meta2.ID, "ses_") {
+		t.Errorf("manual session ID = %q, want ses_ prefix", meta2.ID)
+	}
+}
+
+// TestParseTranscript_NestedFormat verifies the parser understands the
+// current Claude Code JSONL schema where role + content live under a
+// nested `message` object. A regression here previously made every
+// transcript export return "empty or unreadable" — the parser walked
+// real conversations but never matched a role and skipped every line.
+func TestParseTranscript_NestedFormat(t *testing.T) {
+	t.Parallel()
+	jsonl := strings.Join([]string{
+		`{"type":"queue-operation","operation":"enqueue"}`,
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"find the bug"}]}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"mcp__mycelium__find_symbol","input":{"name":"foo"}}]}}`,
+		`{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"x","content":[{"type":"text","text":"matched 3 symbols"}]}]}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"grep -r foo ."}}]}}`,
+	}, "\n")
+
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	if err := os.WriteFile(path, []byte(jsonl), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	// Summary
+	s, err := ParseTranscript(path)
+	if err != nil {
+		t.Fatalf("ParseTranscript: %v", err)
+	}
+	if s.ToolCalls != 2 {
+		t.Errorf("ToolCalls = %d, want 2", s.ToolCalls)
+	}
+	if s.MycoCallsFromTranscript != 1 {
+		t.Errorf("MycoCallsFromTranscript = %d, want 1", s.MycoCallsFromTranscript)
+	}
+	if !strings.Contains(s.FirstUserMessage, "find the bug") {
+		t.Errorf("FirstUserMessage = %q, want it to contain 'find the bug'", s.FirstUserMessage)
+	}
+
+	// Events
+	events, err := ParseTranscriptEvents(path)
+	if err != nil {
+		t.Fatalf("ParseTranscriptEvents: %v", err)
+	}
+	var sawText, sawMyco, sawFallback, sawResult bool
+	for _, e := range events {
+		if e.Text == "find the bug" {
+			sawText = true
+		}
+		if e.IsMCO {
+			sawMyco = true
+		}
+		if e.IsFallback && e.ToolName == "Bash" {
+			sawFallback = true
+		}
+		if strings.Contains(e.ToolResult, "matched 3 symbols") {
+			sawResult = true
+		}
+	}
+	if !sawText {
+		t.Error("expected to see the first user text in events")
+	}
+	if !sawMyco {
+		t.Error("expected to see the mcp__mycelium__ tool_use as IsMCO")
+	}
+	if !sawFallback {
+		t.Error("expected to see the Bash grep call as IsFallback")
+	}
+	if !sawResult {
+		t.Error("expected to extract text from the tool_result block")
+	}
+}
+
 // TestSession_SessionIDPropagation checks that the FileRecorder stamps
 // the correct session ID onto records when the session sidecar changes.
 func TestSession_SessionIDPropagation(t *testing.T) {

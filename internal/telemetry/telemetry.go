@@ -47,6 +47,13 @@ type Record struct {
 	OK          bool      `json:"ok"`
 	SessionID   string    `json:"sid,omitempty"`
 	Kind        string    `json:"kind,omitempty"`
+
+	// Only set on Kind=="session_start" markers. Persisting them in the
+	// JSONL (rather than only in the .mycelium/current_session.json one-slot
+	// sidecar) is what lets `myco session transcript` resolve the right
+	// Claude conversation for historical sessions.
+	ClaudeSessionID string `json:"claude_sid,omitempty"`
+	TranscriptPath  string `json:"transcript_path,omitempty"`
 }
 
 // Recorder is the interface every dispatcher consumes. Two
