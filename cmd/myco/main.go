@@ -1089,7 +1089,20 @@ func runWizard(yes, doctorAfter bool) error {
 			"  Enable telemetry? (records tool call stats; powers `myco doctor` adoption check)",
 			true, yes,
 		)
-		cfg := buildConfig(chosenLangs, projects, enableTelemetry)
+		watcherBackend := ""
+		if wmPath, ok := wizard.WatchmanAvailable(); ok {
+			fmt.Printf("  watchman found at %s\n", wmPath)
+			opts := []string{
+				"fsnotify  (built-in, zero dependencies)",
+				"watchman  (opt-in, lower latency on large repos)",
+			}
+			if wizard.Choice("  File watcher backend:", opts, yes) == 1 {
+				watcherBackend = "watchman"
+			}
+		} else {
+			wizard.Skip("file watcher: fsnotify (watchman not installed)")
+		}
+		cfg := buildConfig(chosenLangs, projects, enableTelemetry, watcherBackend)
 		if err := config.Write(cfgPath, cfg); err != nil {
 			return fmt.Errorf("write config: %w", err)
 		}
@@ -1213,11 +1226,12 @@ func runWizard(yes, doctorAfter bool) error {
 }
 
 // buildConfig constructs a Config populated from wizard choices.
-func buildConfig(langs []string, projects []config.ProjectConfig, telemetry bool) config.Config {
+func buildConfig(langs []string, projects []config.ProjectConfig, telemetry bool, watcherBackend string) config.Config {
 	cfg := config.Default()
 	cfg.Languages = langs
 	cfg.Projects = projects
 	cfg.Telemetry.Enabled = telemetry
+	cfg.Watcher.Backend = watcherBackend
 	return cfg
 }
 

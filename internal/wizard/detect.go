@@ -4,6 +4,7 @@ package wizard
 import (
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -171,6 +172,13 @@ func langFromExt(name string) string {
 		return "python"
 	}
 	return ""
+}
+
+// WatchmanAvailable returns the absolute path to the watchman binary and true
+// when watchman is found on PATH, or ("", false) when it is not installed.
+func WatchmanAvailable() (string, bool) {
+	p, err := exec.LookPath("watchman")
+	return p, err == nil
 }
 
 // HomeDir returns the user's home directory. Used by MCP detection.
