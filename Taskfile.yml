@@ -49,8 +49,18 @@ tasks:
           target="/usr/local/bin/myco"
           echo "No existing myco on PATH — installing to $target"
         else
-          echo "Existing myco resolves to $target — overwriting"
+          echo "Existing myco resolves to $target"
         fi
+        # If src and target are literally the same file, `task build` already
+        # wrote the new binary in place — nothing left to do.
+        src_real="$(cd "$(dirname "$src")" && pwd)/$(basename "$src")"
+        target_real="$(cd "$(dirname "$target")" 2>/dev/null && pwd)/$(basename "$target")" || target_real="$target"
+        if [ "$src_real" = "$target_real" ]; then
+          echo "  (PATH already points at the build target — $src)"
+          echo "  version: $("$target" --version)"
+          exit 0
+        fi
+        echo "  → overwriting"
         dest_dir="$(dirname "$target")"
         mkdir -p "$dest_dir" 2>/dev/null || true
         if [ -w "$dest_dir" ] || { [ -e "$target" ] && [ -w "$target" ]; }; then
