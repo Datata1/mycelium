@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -161,6 +162,215 @@ func parseTranscriptReader(r io.Reader) (TranscriptSummary, error) {
 		s.Turns = 1
 	}
 	return s, nil
+}
+
+// ─── human-readable renderers ─────────────────────────────────────────────────
+
+// TranscriptEvent is one decoded moment in a conversation: a message, a tool
+// call, or a tool result. Used by the renderers below.
+type TranscriptEvent struct {
+	Role       string // "user" | "assistant"
+	Text       string // non-empty for text blocks
+	ToolName   string // non-empty for tool_use blocks
+	ToolInput  string // JSON-formatted input for tool_use
+	ToolResult string // non-empty for tool_result blocks
+	IsMCO      bool   // true when ToolName starts with mcp__mycelium__
+	IsFallback bool   // true when tool is an exploratory non-myco call
+}
+
+// ParseTranscriptEvents decodes the conversation JSONL into a flat event
+// slice. This is the foundation for both the full render and the filtered
+// fallback-only render.
+func ParseTranscriptEvents(path string) ([]TranscriptEvent, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+
+	var events []TranscriptEvent
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 256*1024), 8*1024*1024)
+
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var msg transcriptLine
+		if err := json.Unmarshal(line, &msg); err != nil {
+			continue
+		}
+
+		role := msg.Role
+
+		// String content (some older transcript formats)
+		if len(msg.Content) > 0 && msg.Content[0] == '"' {
+			var text string
+			if json.Unmarshal(msg.Content, &text) == nil && text != "" {
+				events = append(events, TranscriptEvent{Role: role, Text: text})
+			}
+			continue
+		}
+
+		var blocks []contentBlock
+		if len(msg.Content) > 0 && msg.Content[0] == '[' {
+			_ = json.Unmarshal(msg.Content, &blocks)
+		}
+
+		for _, b := range blocks {
+			switch b.Type {
+			case "text":
+				if b.Text != "" {
+					events = append(events, TranscriptEvent{Role: role, Text: b.Text})
+				}
+			case "tool_use":
+				inp := "{}"
+				if len(b.Input) > 0 {
+					inp = string(b.Input)
+				}
+				isMCO := strings.HasPrefix(b.Name, "mcp__mycelium__")
+				isFallback := isFallbackTool(b.Name, inp)
+				events = append(events, TranscriptEvent{
+					Role:       role,
+					ToolName:   b.Name,
+					ToolInput:  inp,
+					IsMCO:      isMCO,
+					IsFallback: isFallback,
+				})
+			case "tool_result":
+				var resultText string
+				switch {
+				case len(b.Input) > 0 && b.Input[0] == '"':
+					_ = json.Unmarshal(b.Input, &resultText)
+				default:
+					// content field holds the result
+					var res struct {
+						Content any `json:"content"`
+					}
+					if json.Unmarshal(line, &res) == nil {
+						switch v := res.Content.(type) {
+						case string:
+							resultText = v
+						case []any:
+							var parts []string
+							for _, item := range v {
+								if m, ok := item.(map[string]any); ok {
+									if t, ok := m["text"].(string); ok {
+										parts = append(parts, t)
+									}
+								}
+							}
+							resultText = strings.Join(parts, "\n")
+						}
+					}
+				}
+				if resultText == "" {
+					// last resort: raw JSON
+					resultText = string(b.Input)
+				}
+				events = append(events, TranscriptEvent{
+					Role:       role,
+					ToolResult: truncateStr(resultText, 400),
+				})
+			}
+		}
+	}
+	return events, sc.Err()
+}
+
+// isFallbackTool returns true when the tool call looks like raw exploration
+// that myco should have covered.
+func isFallbackTool(name, input string) bool {
+	switch name {
+	case "Read", "WebSearch", "WebFetch":
+		return true
+	case "Bash":
+		for _, cmd := range []string{"grep", "rg", "find", "fd", "cat", "head", "tail", "ls", "tree", "ag", "wc"} {
+			if strings.Contains(input, `"`+cmd) || strings.Contains(input, " "+cmd+" ") ||
+				strings.HasPrefix(input, cmd+" ") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// RenderTranscript formats the full conversation as Markdown — equivalent to
+// the Python extract_chat.py script but produced natively by myco.
+func RenderTranscript(events []TranscriptEvent) string {
+	var sb strings.Builder
+	for _, e := range events {
+		switch {
+		case e.ToolName != "":
+			label := e.ToolName
+			if e.IsMCO {
+				label = "🔍 myco/" + strings.TrimPrefix(e.ToolName, "mcp__mycelium__")
+			} else if e.IsFallback {
+				label = "⚠️  fallback/" + e.ToolName
+			}
+			sb.WriteString("\n**Tool:** `" + label + "`\n```json\n")
+			sb.WriteString(e.ToolInput)
+			sb.WriteString("\n```\n")
+		case e.ToolResult != "":
+			sb.WriteString("\n> **Result:** " + strings.ReplaceAll(e.ToolResult, "\n", "\n> ") + "\n")
+		case e.Text != "":
+			if e.Role == "user" {
+				sb.WriteString("\n---\n**User:** " + e.Text + "\n")
+			} else {
+				sb.WriteString("\n" + e.Text + "\n")
+			}
+		}
+	}
+	return sb.String()
+}
+
+// RenderFallbackContext returns only the events around fallback tool calls:
+// the assistant message immediately before the fallback (shows the reasoning),
+// the fallback call itself, and its result. This makes it easy to see exactly
+// when and why the agent gave up on myco.
+func RenderFallbackContext(events []TranscriptEvent) string {
+	var sb strings.Builder
+	sb.WriteString("# Fallback decision points\n\n")
+	sb.WriteString("Each section shows the agent text immediately before a fallback tool call,\n")
+	sb.WriteString("the fallback call, and its result. This is where myco wasn't sufficient.\n\n")
+
+	n := 0
+	for i, e := range events {
+		if !e.IsFallback {
+			continue
+		}
+		n++
+		sb.WriteString("---\n\n")
+		sb.WriteString("## Fallback #" + itoa(n) + " — `" + e.ToolName + "`\n\n")
+
+		// Look back up to 3 events for the last assistant text (the reasoning).
+		for j := i - 1; j >= 0 && j >= i-3; j-- {
+			if events[j].Text != "" && events[j].Role == "assistant" {
+				sb.WriteString("**Agent reasoning before fallback:**\n\n")
+				sb.WriteString("> " + strings.ReplaceAll(truncateStr(events[j].Text, 600), "\n", "\n> ") + "\n\n")
+				break
+			}
+		}
+
+		sb.WriteString("**Fallback call:**\n```json\n" + e.ToolInput + "\n```\n\n")
+
+		// Show the result if the next event is a tool_result.
+		if i+1 < len(events) && events[i+1].ToolResult != "" {
+			sb.WriteString("**Result:**\n> " + strings.ReplaceAll(events[i+1].ToolResult, "\n", "\n> ") + "\n\n")
+		}
+	}
+	if n == 0 {
+		sb.WriteString("No fallback calls detected.\n")
+	}
+	return sb.String()
+}
+
+func itoa(n int) string {
+	return strings.TrimSpace(strings.ReplaceAll(fmt.Sprintf("%4d", n), " ", ""))
 }
 
 func truncateStr(s string, max int) string {

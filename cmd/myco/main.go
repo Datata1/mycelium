@@ -2092,6 +2092,7 @@ func newSessionCmd() *cobra.Command {
 		newSessionCompareCmd(),
 		newSessionAnnotateCmd(),
 		newSessionTrackCmd(),
+		newSessionTranscriptCmd(),
 		newSessionHooksCmd(),
 	)
 	return cmd
@@ -2287,6 +2288,54 @@ func newSessionTrackCmd() *cobra.Command {
 			return telemetry.AppendExternal(extPath, rec)
 		},
 	}
+}
+
+// newSessionTranscriptCmd renders the Claude Code conversation transcript
+// linked to a session. Two modes:
+//
+//   - default ("fallbacks"): shows only the agent reasoning + tool call around
+//     each fallback (grep/Read/etc.) — the decision points where the agent
+//     chose not to use myco. This is the primary evaluation signal.
+//   - --full: renders the complete conversation (messages + all tool calls),
+//     equivalent to the Python extract_chat.py script.
+func newSessionTranscriptCmd() *cobra.Command {
+	var full bool
+	cmd := &cobra.Command{
+		Use:   "transcript <session-id>",
+		Short: "Render the Claude conversation linked to a session (fallback decision points by default)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rc, err := loadRepoCtx()
+			if err != nil {
+				return err
+			}
+			jsonlPath, _, _ := sessionPaths(rc)
+			rep, err := telemetry.AggregateSession(jsonlPath, args[0])
+			if err != nil {
+				return err
+			}
+			tpath := transcriptFor(rep, rc.Root)
+			if tpath == "" {
+				return fmt.Errorf("no transcript linked to session %s — session must have been started via the UserPromptSubmit hook", args[0])
+			}
+			events, err := telemetry.ParseTranscriptEvents(tpath)
+			if err != nil {
+				return fmt.Errorf("read transcript %s: %w", tpath, err)
+			}
+			if len(events) == 0 {
+				return fmt.Errorf("transcript not found at %s", tpath)
+			}
+			if full {
+				fmt.Print(telemetry.RenderTranscript(events))
+			} else {
+				fmt.Print(telemetry.RenderFallbackContext(events))
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&full, "full", false,
+		"render the complete conversation instead of just fallback decision points")
+	return cmd
 }
 
 // newSessionAnnotateCmd is called by the Claude Code Stop hook to attach
