@@ -17,11 +17,20 @@ Always build with the `sqlite_fts5` tag — it enables FTS5 in the embedded
 SQLite driver, without which migrations fail.
 
 ```bash
-task build          # go build -tags sqlite_fts5 -o /tmp/myco ./cmd/myco
+task build          # → ~/.local/bin/myco  (dev artifact, no sudo)
+task install        # → overwrites the system-wide `myco` on PATH
 task check          # go vet + go test -race ./...
 task smoke          # wipe index → re-index → myco doctor (fastest loop)
 task daemon         # build + start daemon (blocks)
 ```
+
+`task install` is the only correct way to "install the dev build" over a
+prior install. It resolves `command -v myco`, follows one level of symlink,
+and overwrites the target — so a build always replaces the binary that
+`myco` actually runs from. A bare `task build` only writes to
+`~/.local/bin/myco`, which is shadowed on macOS where `/usr/local/bin`
+precedes `~/.local/bin` in PATH (the layout the README's release-binary
+install produces).
 
 `task` is installed via `go install github.com/go-task/task/v3/cmd/task@latest`
 and lives at `$(go env GOPATH)/bin/task`. Run `task --list` for all targets.
@@ -163,3 +172,17 @@ Persistent project memory lives at
 when you learn something durable (architectural decisions, user preferences,
 baseline numbers). Don't duplicate CHANGELOG/README content there — memory
 is for facts that aren't obvious from reading the code or git log.
+
+## mycelium (myco)
+
+myco is a local code knowledge base exposed as MCP tools. Reach for it
+**before** `Bash(grep)` or `Read` for any code navigation task.
+
+**Navigation:** `find_symbol` (definitions) · `get_references` (callers) ·
+`read_focused` (read a file with irrelevant symbols collapsed) ·
+`get_neighborhood` (local call graph) · `impact_analysis` (what depends on X)
+
+**Rule:** when you have an identifier name, use `find_symbol` — not
+`search_lexical`. `search_lexical` is for literal strings and regex patterns
+only (log messages, route paths, magic constants). Using it for symbol names
+misses renames, aliases, and qualified forms.

@@ -2,9 +2,11 @@ version: '3'
 
 vars:
   TAGS: sqlite_fts5
-  # BIN resolves to ~/.local/bin/myco — persistent across reboots and
-  # usable as `myco` once ~/.local/bin is in PATH. Override with:
-  #   task build BIN=/usr/local/bin/myco
+  # BIN is the dev build target. It deliberately writes to ~/.local/bin
+  # (no sudo, no system pollution). To make this build the system-wide
+  # `myco`, run `task install` after `task build` — that overwrites
+  # whichever `myco` is currently on PATH, following one level of symlink.
+  # Override the build target with: task build BIN=/some/other/path
   BIN:
     sh: echo "$HOME/.local/bin/myco"
 
@@ -23,6 +25,44 @@ tasks:
       - go.sum
     generates:
       - '{{.BIN}}'
+
+  install:
+    desc: |
+      Install the freshly built binary over whichever `myco` is on PATH.
+      Resolves `command -v myco`, follows one level of symlink, and overwrites
+      the target. Falls back to /usr/local/bin/myco if no existing myco exists.
+      Use this after `task build` to make the dev binary the system-wide myco.
+    deps: [build]
+    cmds:
+      - |
+        set -eu
+        src="{{.BIN}}"
+        target="$(command -v myco 2>/dev/null || true)"
+        if [ -n "$target" ] && [ -L "$target" ]; then
+          linkval="$(readlink "$target")"
+          case "$linkval" in
+            /*) target="$linkval" ;;
+            *)  target="$(cd "$(dirname "$target")" && pwd)/$linkval" ;;
+          esac
+        fi
+        if [ -z "$target" ]; then
+          target="/usr/local/bin/myco"
+          echo "No existing myco on PATH — installing to $target"
+        else
+          echo "Existing myco resolves to $target — overwriting"
+        fi
+        dest_dir="$(dirname "$target")"
+        mkdir -p "$dest_dir" 2>/dev/null || true
+        if [ -w "$dest_dir" ] || { [ -e "$target" ] && [ -w "$target" ]; }; then
+          cp "$src" "$target"
+        else
+          echo "Need sudo to write $target"
+          sudo cp "$src" "$target"
+        fi
+        echo "installed myco to $target"
+        runs_from="$(command -v myco 2>/dev/null || true)"
+        echo "  PATH resolves \`myco\` to: ${runs_from:-<not on PATH>}"
+        echo "  version: $("$target" --version)"
 
   # ── quality ──────────────────────────────────────────────────────────────────
 

@@ -190,7 +190,21 @@ Requires Go 1.25+ (for `golang.org/x/tools`) and a C toolchain (tree-sitter uses
 ```bash
 git clone https://github.com/jdwiederstein/mycelium
 cd mycelium
-go build -tags sqlite_fts5 -o /usr/local/bin/myco ./cmd/myco
+task build       # → ~/.local/bin/myco          (dev artifact)
+task install     # → overwrites whichever myco is on PATH (uses sudo if needed)
+```
+
+`task install` follows one level of symlink, so if you previously installed
+via the release-binary recipe above, `task install` replaces the binary at
+`/opt/myco-<platform>/myco` and the `/usr/local/bin/myco` symlink keeps
+working. Without `task install`, the build at `~/.local/bin/myco` is
+shadowed by any earlier-on-PATH `myco` (e.g. `/usr/local/bin/myco`).
+
+`task` is from https://taskfile.dev. If you don't have it installed, the
+equivalent single command is:
+
+```bash
+go build -tags sqlite_fts5 -o /usr/local/bin/myco ./cmd/myco   # may need sudo
 ```
 
 **The `sqlite_fts5` build tag is required** — it enables FTS5 in the

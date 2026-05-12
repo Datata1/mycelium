@@ -1,5 +1,6 @@
 # Mycelium local state (index + daemon socket + logs)
 .mycelium/
+.mycelium.yml
 
 # Build output
 /myco

@@ -6,6 +6,37 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`myco uninstall` self-command.** Mirrors `myco init` in reverse:
+  prompts Y/N for each component init writes — session-tracking hook
+  entries in `.claude/settings.local.json`, the post-commit git hook
+  (restoring any `.mycelium-backup`), the `mycelium` entry in
+  `~/.claude.json`, and the `.mycelium/` index directory — then removes
+  the `myco` binaries last so the running process stays executable
+  through the run. New helpers: `wizard.RemoveClaudeCodeMCP` and
+  `hook.UninstallPostCommit`. Flags: `-y`/`--yes` (non-interactive),
+  `--dry-run` (preview without changes), `--keep-binary` (unwire project
+  state only), `--purge` (also remove `.mycelium.yml`). Binary removal
+  walks `$PATH` plus the currently-running binary (and one level of
+  symlink target so a release-binary install at `/opt/myco-<platform>/`
+  is cleared together with its `/usr/local/bin/myco` symlink); when a
+  removal needs root, the command prints the `sudo rm` invocation
+  instead of escalating itself. Closes the install/uninstall asymmetry
+  that left users hand-rolling `rm`s across `/opt`, `/usr/local/bin`,
+  `~/.local/bin`, and `/tmp`.
+- **`task install`.** Companion to `task build` that resolves
+  `command -v myco`, follows one level of symlink, and overwrites the
+  target so a freshly built dev binary always replaces the one `myco`
+  actually runs from. Falls back to `/usr/local/bin/myco` when no
+  existing install is on PATH, and uses `sudo` only when the target
+  directory is not user-writable. Fixes the long-standing footgun where
+  `task build` wrote to `~/.local/bin/myco` but the macOS PATH order
+  silently shadowed it with whatever `/usr/local/bin/myco` already
+  contained — the README's release-binary install path. CLAUDE.md and
+  the README "From source" section now point at `task build && task
+  install` as the canonical dev install flow.
+
 ### Fixed
 
 - **v3.1.1 hotfix — workspace-mode disk reads.** `ReadFocused` and

@@ -83,6 +83,45 @@ func WriteClaudeCodeMCP(configPath, binary, repoRoot string) error {
 	return os.WriteFile(configPath, append(b, '\n'), 0o644)
 }
 
+// RemoveClaudeCodeMCP reads ~/.claude.json, removes the mycelium entry
+// from mcpServers, and writes the file back. Returns (removed, error)
+// where removed=true means the entry was present and stripped. Idempotent:
+// missing entry or missing file is a no-op (removed=false, err=nil).
+func RemoveClaudeCodeMCP(configPath string) (bool, error) {
+	b, err := os.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	raw := map[string]any{}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return false, fmt.Errorf("parse claude config: %w", err)
+	}
+	servers, _ := raw["mcpServers"].(map[string]any)
+	if servers == nil {
+		return false, nil
+	}
+	if _, ok := servers["mycelium"]; !ok {
+		return false, nil
+	}
+	delete(servers, "mycelium")
+	if len(servers) == 0 {
+		delete(raw, "mcpServers")
+	} else {
+		raw["mcpServers"] = servers
+	}
+	out, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return false, fmt.Errorf("marshal claude config: %w", err)
+	}
+	if err := os.WriteFile(configPath, append(out, '\n'), 0o644); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // MCPSnippet returns the JSON block the user should paste into their
 // agent client config. Used as a fallback when auto-write is declined.
 func MCPSnippet(binary, repoRoot string) string {

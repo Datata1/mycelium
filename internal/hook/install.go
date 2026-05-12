@@ -47,6 +47,40 @@ func InstallPostCommit(repoRoot string) (bool, error) {
 	return true, nil
 }
 
+// UninstallPostCommit removes the mycelium-managed post-commit hook. If a
+// .mycelium-backup sibling exists it is restored in place; otherwise the
+// hook is simply deleted. Returns (removed, error) where removed=true
+// means the hook was ours and has been removed (or replaced by the backup).
+// If the existing hook is foreign (not managed by myco), the function is
+// a no-op and returns (false, nil) so we never clobber user content.
+func UninstallPostCommit(repoRoot string) (bool, error) {
+	target := filepath.Join(repoRoot, ".git", "hooks", "post-commit")
+	existing, err := os.ReadFile(target)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read hook: %w", err)
+	}
+	if !isMyceliumScript(existing) {
+		return false, nil
+	}
+	backup := target + ".mycelium-backup"
+	if b, err := os.ReadFile(backup); err == nil {
+		if err := os.WriteFile(target, b, 0o755); err != nil {
+			return false, fmt.Errorf("restore hook backup: %w", err)
+		}
+		if err := os.Remove(backup); err != nil {
+			return false, fmt.Errorf("remove backup file: %w", err)
+		}
+		return true, nil
+	}
+	if err := os.Remove(target); err != nil {
+		return false, fmt.Errorf("remove hook: %w", err)
+	}
+	return true, nil
+}
+
 func isMyceliumScript(content []byte) bool {
 	return len(content) > 0 && containsBytes(content, []byte("Managed by mycelium"))
 }
