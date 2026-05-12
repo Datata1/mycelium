@@ -84,7 +84,8 @@ func TestSuggestProjectName(t *testing.T) {
 		{"yyy-svc/shared", "yyy-svc-shared"},          // generic → parent-base
 		{"packages/lib", "packages-lib"},     // generic → parent-base
 		{"backend", "backend"},               // single component → as-is
-		{"apps/dashboard", "dashboard"},      // non-generic → as-is
+		{"xxx-service/browser", "xxx-service-browser"}, // generic → parent-base
+		{"apps/dashboard", "dashboard"},                // non-generic → as-is
 		{"services/worker", "worker"},        // non-generic → as-is
 	}
 	for _, tc := range cases {

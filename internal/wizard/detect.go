@@ -140,6 +140,7 @@ var genericNames = map[string]bool{
 	"core": true, "node": true,
 	"utils": true, "util": true,
 	"pkg": true, "src": true,
+	"browser": true,
 }
 
 // SuggestProjectName returns a project name for a sub-directory. When
