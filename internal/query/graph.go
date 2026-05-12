@@ -28,11 +28,15 @@ const DefaultCriticalPathK = 5
 // ImpactHit is one transitive caller of the seed symbol, ranked by
 // distance. Lower distance = closer to the seed (distance 1 = direct
 // caller).
+//
+// `Project` (v3.1.2+) is the workspace project the caller's file
+// belongs to, or "" in single-project mode.
 type ImpactHit struct {
 	ID        int64  `json:"id"`
 	Qualified string `json:"qualified"`
 	Kind      string `json:"kind"`
 	Path      string `json:"path"`
+	Project   string `json:"project,omitempty"`
 	StartLine int    `json:"start_line"`
 	Distance  int    `json:"distance"`
 }
@@ -117,11 +121,12 @@ func (r *Reader) ImpactAnalysis(ctx context.Context, target, kind, project strin
 		    JOIN walk w ON r.dst_symbol_id = w.symbol_id
 		    WHERE r.src_symbol_id IS NOT NULL AND w.depth < ?
 		)
-		SELECT s.id, s.qualified, s.kind, f.path, s.start_line,
-		       MIN(w.depth) AS distance
+		SELECT s.id, s.qualified, s.kind, f.path, COALESCE(p.name, ''),
+		       s.start_line, MIN(w.depth) AS distance
 		FROM walk w
 		JOIN symbols s ON s.id = w.symbol_id
 		JOIN files f ON f.id = s.file_id
+		LEFT JOIN projects p ON p.id = f.project_id
 		WHERE 1=1` + kindClause + scope + pathClause + `
 		GROUP BY s.id
 		ORDER BY distance, s.qualified`
@@ -132,7 +137,7 @@ func (r *Reader) ImpactAnalysis(ctx context.Context, target, kind, project strin
 	defer rows.Close()
 	for rows.Next() {
 		var h ImpactHit
-		if err := rows.Scan(&h.ID, &h.Qualified, &h.Kind, &h.Path, &h.StartLine, &h.Distance); err != nil {
+		if err := rows.Scan(&h.ID, &h.Qualified, &h.Kind, &h.Path, &h.Project, &h.StartLine, &h.Distance); err != nil {
 			return result, err
 		}
 		result.Hits = append(result.Hits, h)
@@ -141,11 +146,15 @@ func (r *Reader) ImpactAnalysis(ctx context.Context, target, kind, project strin
 }
 
 // PathVertex is one step in a CriticalPath result.
+//
+// `Project` (v3.1.2+) is the workspace project the vertex's file
+// belongs to, or "" in single-project mode.
 type PathVertex struct {
 	ID        int64  `json:"id"`
 	Qualified string `json:"qualified"`
 	Kind      string `json:"kind"`
 	Path      string `json:"path"`
+	Project   string `json:"project,omitempty"`
 	StartLine int    `json:"start_line"`
 }
 
@@ -280,8 +289,9 @@ func (r *Reader) CriticalPath(ctx context.Context, from, to, project string, dep
 	}
 	placeholders := "?" + strings.Repeat(",?", len(idList)-1)
 	vRows, err := r.db.QueryContext(ctx, `
-		SELECT s.id, s.qualified, s.kind, f.path, s.start_line
+		SELECT s.id, s.qualified, s.kind, f.path, COALESCE(p.name, ''), s.start_line
 		FROM symbols s JOIN files f ON f.id = s.file_id
+		         LEFT JOIN projects p ON p.id = f.project_id
 		WHERE s.id IN (`+placeholders+`)`, idList...)
 	if err != nil {
 		return result, err
@@ -290,7 +300,7 @@ func (r *Reader) CriticalPath(ctx context.Context, from, to, project string, dep
 	byID := make(map[int64]PathVertex, len(idList))
 	for vRows.Next() {
 		var v PathVertex
-		if err := vRows.Scan(&v.ID, &v.Qualified, &v.Kind, &v.Path, &v.StartLine); err != nil {
+		if err := vRows.Scan(&v.ID, &v.Qualified, &v.Kind, &v.Path, &v.Project, &v.StartLine); err != nil {
 			return result, err
 		}
 		byID[v.ID] = v
@@ -328,6 +338,6 @@ func splitPath(s string) []int64 {
 func nodeAsVertex(n NeighborNode) PathVertex {
 	return PathVertex{
 		ID: n.ID, Qualified: n.Qualified, Kind: n.Kind,
-		Path: n.Path, StartLine: n.StartLine,
+		Path: n.Path, Project: n.Project, StartLine: n.StartLine,
 	}
 }

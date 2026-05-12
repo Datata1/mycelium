@@ -34,10 +34,14 @@ type Searcher struct {
 }
 
 // SemanticHit is a single result from a semantic search.
+//
+// `Project` (v3.1.2+) is the workspace project the chunk's file
+// belongs to, or "" in single-project mode.
 type SemanticHit struct {
 	ChunkID    int64   `json:"chunk_id"`
 	Score      float32 `json:"score"` // cosine similarity in [-1, 1]; higher is closer
 	Path       string  `json:"path"`
+	Project    string  `json:"project,omitempty"`
 	StartLine  int     `json:"start_line"`
 	EndLine    int     `json:"end_line"`
 	SymbolID   int64   `json:"symbol_id,omitempty"`
@@ -195,10 +199,11 @@ func (s *Searcher) hydrateHits(ctx context.Context, scored []scoredID, k int) ([
 	placeholders := "?" + strings.Repeat(",?", len(scored)-1)
 	hydrateSQL := `
 		SELECT c.id, c.start_line, c.end_line, c.content,
-		       f.path, COALESCE(c.symbol_id, 0),
+		       f.path, COALESCE(p.name, ''), COALESCE(c.symbol_id, 0),
 		       COALESCE(sym.qualified, ''), COALESCE(sym.kind, ''), COALESCE(sym.signature, '')
 		FROM chunks c
 		JOIN files f ON f.id = c.file_id
+		LEFT JOIN projects p ON p.id = f.project_id
 		LEFT JOIN symbols sym ON sym.id = c.symbol_id
 		WHERE c.id IN (` + placeholders + `)`
 	rows, err := s.Reader.db.QueryContext(ctx, hydrateSQL, ids...)
@@ -211,7 +216,7 @@ func (s *Searcher) hydrateHits(ctx context.Context, scored []scoredID, k int) ([
 		var h SemanticHit
 		var content string
 		if err := rows.Scan(&h.ChunkID, &h.StartLine, &h.EndLine, &content,
-			&h.Path, &h.SymbolID, &h.Qualified, &h.Kind, &h.Signature); err != nil {
+			&h.Path, &h.Project, &h.SymbolID, &h.Qualified, &h.Kind, &h.Signature); err != nil {
 			return nil, err
 		}
 		h.Snippet = firstLines(content, 8)
@@ -252,12 +257,13 @@ func (s *Searcher) searchViaVSS(ctx context.Context, qPacked []byte, k int) ([]S
 		    WHERE embedding MATCH ? AND k = ?
 		)
 		SELECT c.id, c.start_line, c.end_line, c.content,
-		       f.path, COALESCE(c.symbol_id, 0),
+		       f.path, COALESCE(p.name, ''), COALESCE(c.symbol_id, 0),
 		       COALESCE(sym.qualified, ''), COALESCE(sym.kind, ''), COALESCE(sym.signature, ''),
 		       knn.distance
 		FROM knn
 		JOIN chunks c ON c.id = knn.chunk_id
 		JOIN files f ON f.id = c.file_id
+		LEFT JOIN projects p ON p.id = f.project_id
 		LEFT JOIN symbols sym ON sym.id = c.symbol_id
 		ORDER BY knn.distance`, s.VSSTable)
 
@@ -277,7 +283,7 @@ func (s *Searcher) searchViaVSS(ctx context.Context, qPacked []byte, k int) ([]S
 			dist    float64
 		)
 		if err := rows.Scan(&h.ChunkID, &h.StartLine, &h.EndLine, &content,
-			&h.Path, &h.SymbolID, &h.Qualified, &h.Kind, &h.Signature, &dist); err != nil {
+			&h.Path, &h.Project, &h.SymbolID, &h.Qualified, &h.Kind, &h.Signature, &dist); err != nil {
 			return nil, false, err
 		}
 		// L2 -> approximate cosine for unit vectors. Higher-is-better.

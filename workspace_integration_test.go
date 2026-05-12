@@ -151,6 +151,35 @@ func TestIntegration_WorkspaceMode(t *testing.T) {
 		}
 	})
 
+	// v3.1.2: ReadFocused must accept all three path forms agents commonly
+	// produce — project-relative (from find_symbol), repo-relative (from
+	// the user's own `cd` context), and absolute (from explicit
+	// constructions). The pre-fix version doubled the project prefix when
+	// fed repo-relative paths and produced ENOENT.
+	t.Run("read_focused_accepts_repo_relative_path", func(t *testing.T) {
+		rf, err := reader.ReadFocused(ctx, dst, "services/api/server.go", "")
+		if err != nil {
+			t.Fatalf("ReadFocused (repo-relative): %v", err)
+		}
+		if rf.Stats.OriginalBytes == 0 {
+			t.Fatalf("expected non-empty read; got 0 bytes")
+		}
+		if !strings.Contains(rf.Content, "APIOnlySymbol") {
+			t.Errorf("expected APIOnlySymbol in content; got %q", rf.Content)
+		}
+	})
+
+	t.Run("read_focused_accepts_absolute_path", func(t *testing.T) {
+		abs := filepath.Join(dst, "services/api/server.go")
+		rf, err := reader.ReadFocused(ctx, dst, abs, "")
+		if err != nil {
+			t.Fatalf("ReadFocused (absolute): %v", err)
+		}
+		if rf.Stats.OriginalBytes == 0 {
+			t.Fatalf("expected non-empty read; got 0 bytes")
+		}
+	})
+
 	t.Run("search_lexical_reads_workspace_files", func(t *testing.T) {
 		hits, err := reader.SearchLexical(ctx, "APIOnlySymbol", "", "", 10, dst, nil)
 		if err != nil {
@@ -168,6 +197,192 @@ func TestIntegration_WorkspaceMode(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("expected hit at path 'server.go'; got %+v", hits)
+		}
+	})
+
+	// v3.1.2: path_contains must match both project-relative and
+	// repo-relative substrings. Pre-fix, only project-relative matched
+	// (filter against f.path only), so an agent narrowing a search to
+	// "services/api" got zero hits even though server.go was indexed.
+	t.Run("search_lexical_path_contains_accepts_repo_relative", func(t *testing.T) {
+		hits, err := reader.SearchLexical(ctx, "APIOnlySymbol", "services/api", "", 10, dst, nil)
+		if err != nil {
+			t.Fatalf("SearchLexical with repo-relative path_contains: %v", err)
+		}
+		if len(hits) == 0 {
+			t.Errorf("expected hits when filtering by repo-relative substring; got 0")
+		}
+	})
+
+	t.Run("search_lexical_path_contains_accepts_project_relative", func(t *testing.T) {
+		hits, err := reader.SearchLexical(ctx, "APIOnlySymbol", "server.go", "", 10, dst, nil)
+		if err != nil {
+			t.Fatalf("SearchLexical with project-relative path_contains: %v", err)
+		}
+		if len(hits) == 0 {
+			t.Errorf("expected hits when filtering by project-relative substring; got 0")
+		}
+	})
+
+	// v3.1.2: every path-bearing result type carries a Project annotation
+	// so agents can disambiguate when the same path exists in multiple
+	// workspace projects. omitempty drops it when project is "" so
+	// single-project users see no JSON shape change.
+	t.Run("symbol_hit_carries_project", func(t *testing.T) {
+		res, err := reader.FindSymbol(ctx, "APIOnlySymbol", "", "", 10, nil, "")
+		if err != nil {
+			t.Fatalf("find_symbol: %v", err)
+		}
+		if len(res.Matches) == 0 {
+			t.Fatalf("expected at least one hit")
+		}
+		if res.Matches[0].Project != "api" {
+			t.Errorf("SymbolHit.Project: got %q, want %q", res.Matches[0].Project, "api")
+		}
+	})
+
+	t.Run("file_hit_carries_project", func(t *testing.T) {
+		files, err := reader.ListFiles(ctx, "", "", "", 100, nil)
+		if err != nil {
+			t.Fatalf("list_files: %v", err)
+		}
+		got := map[string]string{}
+		for _, f := range files {
+			got[f.Path] = f.Project
+		}
+		want := map[string]string{
+			"server.go":  "api",
+			"src/app.ts": "web",
+			"job.py":     "worker",
+		}
+		for p, proj := range want {
+			if got[p] != proj {
+				t.Errorf("FileHit(%q).Project: got %q, want %q", p, got[p], proj)
+			}
+		}
+	})
+
+	t.Run("file_summary_carries_project", func(t *testing.T) {
+		s, err := reader.GetFileSummary(ctx, "server.go")
+		if err != nil {
+			t.Fatalf("GetFileSummary: %v", err)
+		}
+		if s.Project != "api" {
+			t.Errorf("FileSummary.Project: got %q, want %q", s.Project, "api")
+		}
+	})
+
+	t.Run("lexical_hit_carries_project", func(t *testing.T) {
+		hits, err := reader.SearchLexical(ctx, "APIOnlySymbol", "", "", 10, dst, nil)
+		if err != nil {
+			t.Fatalf("SearchLexical: %v", err)
+		}
+		if len(hits) == 0 {
+			t.Fatalf("expected at least one hit")
+		}
+		if hits[0].Project != "api" {
+			t.Errorf("LexicalHit.Project: got %q, want %q", hits[0].Project, "api")
+		}
+	})
+
+	// v3.1.2: helpful "Did you mean" hints for paths that don't resolve.
+	// ReadFocused runs a basename match against the index and appends up
+	// to 3 suggestions to its ENOENT error. SearchLexical does the same
+	// when path_contains filters to zero candidate files (previously a
+	// silent empty result).
+	t.Run("read_focused_typo_includes_suggestion", func(t *testing.T) {
+		// "servr.go" is a typo of "server.go" — basename match should
+		// surface it.
+		_, err := reader.ReadFocused(ctx, dst, "servr.go", "")
+		if err == nil {
+			t.Fatalf("expected error for typo'd path")
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "file not in index") {
+			t.Errorf("expected 'file not in index' headline; got %q", msg)
+		}
+		// Basename "servr.go" has no real near-match in the fixture, so
+		// no Did-you-mean tail. Re-test below with a real typo case.
+		if strings.Contains(msg, "Did you mean") {
+			t.Errorf("unexpected suggestion tail for non-matching typo: %q", msg)
+		}
+	})
+
+	t.Run("read_focused_typo_with_near_match_suggests", func(t *testing.T) {
+		// Pass a wrong directory but a real filename — basename match
+		// should find server.go and suggest it with project annotation.
+		_, err := reader.ReadFocused(ctx, dst, "wrong/dir/server.go", "")
+		if err == nil {
+			t.Fatalf("expected error for non-existent path")
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "Did you mean") {
+			t.Fatalf("expected 'Did you mean' tail; got %q", msg)
+		}
+		if !strings.Contains(msg, "server.go") {
+			t.Errorf("expected suggestion to include 'server.go'; got %q", msg)
+		}
+		if !strings.Contains(msg, "project: api") {
+			t.Errorf("expected suggestion to include 'project: api'; got %q", msg)
+		}
+	})
+
+	t.Run("search_lexical_zero_candidates_errors_with_suggestion", func(t *testing.T) {
+		// path_contains filters to a substring that matches no indexed
+		// files — basename match on "no-such-dir" finds nothing, but
+		// the error itself must surface so the agent doesn't read the
+		// empty result as "pattern not present in matching files."
+		_, err := reader.SearchLexical(ctx, "anything", "no-such-dir", "", 10, dst, nil)
+		if err == nil {
+			t.Fatalf("expected error for path_contains with zero matches")
+		}
+		if !strings.Contains(err.Error(), `no indexed files match path_contains="no-such-dir"`) {
+			t.Errorf("expected 'no indexed files match' headline; got %q", err.Error())
+		}
+	})
+
+	t.Run("search_lexical_zero_candidates_with_near_match_suggests", func(t *testing.T) {
+		// "srver.go" basename doesn't match anything, but
+		// path_contains="server.go" (matching the real file) is the
+		// success case — verify the typo path produces a suggestion.
+		_, err := reader.SearchLexical(ctx, "anything", "wrong/server.go", "", 10, dst, nil)
+		if err == nil {
+			t.Fatalf("expected error for typo'd path_contains")
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "Did you mean") {
+			t.Fatalf("expected suggestion tail for near-match typo; got %q", msg)
+		}
+		if !strings.Contains(msg, "server.go") {
+			t.Errorf("expected 'server.go' in suggestion; got %q", msg)
+		}
+	})
+
+	// v3.1.2 regression-pin: GetFileSummary and GetFileOutline are DB-only
+	// (no disk read), so the path-doubling bug doesn't affect them. But
+	// they share the same OR-match pattern in SQL — pin both path forms
+	// here so future refactors can't regress workspace-mode coverage.
+	t.Run("get_file_summary_accepts_both_path_forms", func(t *testing.T) {
+		for _, p := range []string{"server.go", "services/api/server.go"} {
+			s, err := reader.GetFileSummary(ctx, p)
+			if err != nil {
+				t.Fatalf("GetFileSummary(%q): %v", p, err)
+			}
+			if s.SymbolCount == 0 {
+				t.Errorf("GetFileSummary(%q): expected symbols; got 0", p)
+			}
+		}
+	})
+
+	t.Run("get_file_outline_accepts_both_path_forms", func(t *testing.T) {
+		for _, p := range []string{"server.go", "services/api/server.go"} {
+			items, err := reader.GetFileOutline(ctx, p, "")
+			if err != nil {
+				t.Fatalf("GetFileOutline(%q): %v", p, err)
+			}
+			if len(items) == 0 {
+				t.Errorf("GetFileOutline(%q): expected outline items; got 0", p)
+			}
 		}
 	})
 

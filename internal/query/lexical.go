@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -13,8 +15,12 @@ import (
 )
 
 // LexicalHit is one matching line in a file.
+//
+// `Project` (v3.1.2+) is the workspace project the file belongs to, or
+// "" in single-project mode.
 type LexicalHit struct {
 	Path    string `json:"path"`
+	Project string `json:"project,omitempty"`
 	Line    int    `json:"line"`
 	Snippet string `json:"snippet"`
 }
@@ -41,6 +47,15 @@ func (r *Reader) SearchLexical(ctx context.Context, pattern, pathContains, proje
 	if err != nil {
 		return nil, err
 	}
+	// When the caller's path_contains filter eliminates every indexed
+	// file, the worker pool would silently return zero hits and the
+	// agent can't distinguish that from "pattern not found in matching
+	// files." Surface it as an explicit error with basename-match
+	// suggestions so the agent can correct the filter on the next call.
+	if pathContains != "" && len(paths) == 0 {
+		return nil, fmt.Errorf("no indexed files match path_contains=%q%s",
+			pathContains, formatPathSuggestions(suggestPaths(ctx, r.db, pathContains, 3)))
+	}
 
 	// Bounded worker pool. Four concurrent file reads is a good balance for
 	// SSD-backed disks without starving the tree-sitter / parser workers that
@@ -56,8 +71,17 @@ func (r *Reader) SearchLexical(ctx context.Context, pattern, pathContains, proje
 			defer wg.Done()
 			for j := range jobs {
 				abs := filepath.Join(repoRoot, j.projectRoot, j.rel)
-				if err := scanFile(ctx, abs, j.rel, re, hitsCh); err != nil {
-					// silent: skip unreadable files
+				if err := scanFile(ctx, abs, j.rel, j.projectName, re, hitsCh); err != nil {
+					// ENOENT means the index is stale or the path
+					// reconstruction is wrong — both are bugs the
+					// caller should know about, not silently empty
+					// results. Log to stderr so daemon logs surface
+					// it; keep going so a single bad file doesn't
+					// break the whole search.
+					if errors.Is(err, fs.ErrNotExist) {
+						fmt.Fprintf(os.Stderr,
+							"[search_lexical] file in index but not on disk: %s\n", abs)
+					}
 					continue
 				}
 			}
@@ -99,9 +123,13 @@ func (r *Reader) SearchLexical(ctx context.Context, pattern, pathContains, proje
 // workspace mode) with the project root that needs to prefix it on
 // disk. projectRoot is empty for files outside any explicit project
 // (single-project mode where files.project_id is NULL).
+//
+// projectName (v3.1.2+) is carried through to LexicalHit so callers
+// can disambiguate hits across workspace projects.
 type candidatePath struct {
 	rel         string
 	projectRoot string
+	projectName string
 }
 
 func (r *Reader) candidatePaths(ctx context.Context, pathContains, project string, pathsIn []string) ([]candidatePath, error) {
@@ -116,14 +144,19 @@ func (r *Reader) candidatePaths(ctx context.Context, pathContains, project strin
 	// candidatePaths builds its own SELECT so the scope clause needs a
 	// valid WHERE anchor; start with 1=1 and AND everything in. LEFT
 	// JOIN to projects so single-project (NULL project_id) files keep
-	// participating with an empty projectRoot.
-	q := `SELECT f.path, COALESCE(p.root, '')
+	// participating with an empty projectRoot/projectName.
+	q := `SELECT f.path, COALESCE(p.root, ''), COALESCE(p.name, '')
 	      FROM files f LEFT JOIN projects p ON p.id = f.project_id
 	      WHERE 1=1`
 	args := []any{}
 	if pathContains != "" {
-		q += ` AND f.path LIKE ?`
-		args = append(args, "%"+pathContains+"%")
+		// Match either the stored project-relative path or its
+		// repo-relative form (`p.root || '/' || f.path`). This mirrors
+		// the path-resolution OR pattern in ReadFocused so agents can
+		// pass either form as a filter substring in workspace mode.
+		q += ` AND (f.path LIKE ?
+		         OR (p.root IS NOT NULL AND (p.root || '/' || f.path) LIKE ?))`
+		args = append(args, "%"+pathContains+"%", "%"+pathContains+"%")
 	}
 	if scope != "" {
 		q += scope
@@ -141,7 +174,7 @@ func (r *Reader) candidatePaths(ctx context.Context, pathContains, project strin
 	var out []candidatePath
 	for rs.Next() {
 		var c candidatePath
-		if err := rs.Scan(&c.rel, &c.projectRoot); err != nil {
+		if err := rs.Scan(&c.rel, &c.projectRoot, &c.projectName); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -149,7 +182,7 @@ func (r *Reader) candidatePaths(ctx context.Context, pathContains, project strin
 	return out, rs.Err()
 }
 
-func scanFile(ctx context.Context, abs, rel string, re *regexp.Regexp, out chan<- LexicalHit) error {
+func scanFile(ctx context.Context, abs, rel, project string, re *regexp.Regexp, out chan<- LexicalHit) error {
 	f, err := os.Open(abs)
 	if err != nil {
 		return err
@@ -167,7 +200,7 @@ func scanFile(ctx context.Context, abs, rel string, re *regexp.Regexp, out chan<
 		b := sc.Bytes()
 		if re.Match(b) {
 			select {
-			case out <- LexicalHit{Path: rel, Line: line, Snippet: strings.TrimRight(string(bytes.TrimRight(b, "\r")), " \t")}:
+			case out <- LexicalHit{Path: rel, Project: project, Line: line, Snippet: strings.TrimRight(string(bytes.TrimRight(b, "\r")), " \t")}:
 			case <-ctx.Done():
 				return ctx.Err()
 			}

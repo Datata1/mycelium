@@ -8,8 +8,11 @@ import (
 // FileSummary is a structural summary of a single file. For v1.0 we stay
 // firmly on the "derivable from the index" side — no LLM calls. Agents use
 // this as a quick orientation before deciding whether to read the file.
+//
+// `Project` (v3.1.2+) is the workspace project of the file, or "".
 type FileSummary struct {
 	Path        string            `json:"path"`
+	Project     string            `json:"project,omitempty"`
 	Language    string            `json:"language"`
 	LOC         int               `json:"loc"`
 	SymbolCount int               `json:"symbol_count"`
@@ -36,11 +39,11 @@ func (r *Reader) GetFileSummary(ctx context.Context, path string) (FileSummary, 
 
 	var fileID int64
 	err := r.db.QueryRowContext(ctx,
-		`SELECT f.id, f.language
+		`SELECT f.id, f.language, COALESCE(p.name, '')
 		 FROM files f LEFT JOIN projects p ON p.id = f.project_id
 		 WHERE f.path = ?
 		    OR (p.root IS NOT NULL AND ? = p.root || '/' || f.path)`, path, path,
-	).Scan(&fileID, &s.Language)
+	).Scan(&fileID, &s.Language, &s.Project)
 	if err == sql.ErrNoRows {
 		return s, nil
 	}

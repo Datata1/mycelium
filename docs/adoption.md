@@ -201,6 +201,50 @@ If you see something different and it's working, write it up. The
 v3 release notes will collect adoption-pattern reports as a way to
 calibrate this page against real usage.
 
+## Paths in workspace mode
+
+Workspace mode (`projects:` block in `.mycelium.yml`) is the biggest
+single source of "agent reaches for grep instead" that we've seen in
+the wild. The failure shape is always the same:
+
+1. Agent calls `find_symbol` and gets back a hit with
+   `path: "src/utils/plans.ts"`.
+2. Agent knows it's in a monorepo and "helpfully" prepends the
+   package directory before reading: `read_focused` with
+   `packages/ui-tests/src/utils/plans.ts`.
+3. Pre-v3.1.2 daemon doubled the prefix on disk and returned ENOENT.
+   The agent loses faith in `read_focused` and falls back to `Read`
+   for the rest of the session.
+
+The fix shipped in v3.1.2 has two halves:
+
+- The daemon now accepts any of `{project-relative, repo-relative,
+  absolute}` paths and resolves them all to the right on-disk file.
+- Every result type — `SymbolHit`, `LexicalHit`, `FileHit`,
+  `NeighborNode`, …  — now carries a `project` field (or
+  `src_project` for edges) so agents can disambiguate when the same
+  path exists in multiple packages.
+
+What this means in practice for the agent:
+
+> The `path` field returned by any myco tool is canonical. Pass it
+> verbatim to `read_focused` / `get_file_outline` / `get_file_summary`
+> — never construct a new path by prepending package directories. The
+> `project` field on the same hit identifies which workspace project
+> the path belongs to.
+
+That sentence is what the CLAUDE.md priming snippet (added by
+`myco init`) installs into the agent's instructions. If you set
+mycelium up by hand instead of via `myco init`, paste the equivalent
+into your CLAUDE.md so the agent doesn't fall into the prepend trap.
+
+For the human side: in `myco stats --telemetry`, a v3.1.2+ daemon
+should show **zero** ENOENT log lines on `search_lexical` workers and
+**zero** "file not in index" errors on `read_focused` for files that
+actually exist. A non-zero count means an agent is constructing paths
+instead of passing them through — file an adoption issue with the
+prompt that triggered it.
+
 ## When telemetry says nothing's wrong but it still feels off
 
 Telemetry can't tell you whether the agent's *answers* improved when

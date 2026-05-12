@@ -21,24 +21,32 @@ const (
 )
 
 // NeighborEdge is one edge in the returned graph.
+//
+// `SrcProject` (v3.1.2+) is the workspace project of the source-file
+// edge location, or "" in single-project mode.
 type NeighborEdge struct {
-	FromID    int64  `json:"from_id"`
-	FromName  string `json:"from_name"`
-	ToID      int64  `json:"to_id"`
-	ToName    string `json:"to_name"`
-	Kind      string `json:"kind"` // call | import | type_ref | inherit
-	SrcPath   string `json:"src_path,omitempty"`
-	SrcLine   int    `json:"src_line,omitempty"`
-	Depth     int    `json:"depth"`
-	Direction string `json:"direction"` // "out" or "in"
+	FromID     int64  `json:"from_id"`
+	FromName   string `json:"from_name"`
+	ToID       int64  `json:"to_id"`
+	ToName     string `json:"to_name"`
+	Kind       string `json:"kind"` // call | import | type_ref | inherit
+	SrcPath    string `json:"src_path,omitempty"`
+	SrcProject string `json:"src_project,omitempty"`
+	SrcLine    int    `json:"src_line,omitempty"`
+	Depth      int    `json:"depth"`
+	Direction  string `json:"direction"` // "out" or "in"
 }
 
 // NeighborNode is one vertex in the returned graph.
+//
+// `Project` (v3.1.2+) is the workspace project the symbol's file
+// belongs to, or "" in single-project mode.
 type NeighborNode struct {
 	ID        int64  `json:"id"`
 	Qualified string `json:"qualified"`
 	Kind      string `json:"kind"`
 	Path      string `json:"path"`
+	Project   string `json:"project,omitempty"`
 	StartLine int    `json:"start_line"`
 	Depth     int    `json:"depth"` // 0 = seed, 1 = direct neighbor, ...
 }
@@ -327,11 +335,12 @@ func (r *Reader) traverseOutbound(ctx context.Context, seed int64, depth int, vi
 		    WHERE r.dst_symbol_id IS NOT NULL AND w.depth < ?
 		)
 		SELECT w.from_id, sf.qualified, w.to_id, st.qualified, w.kind,
-		       f.path, w.line, w.depth
+		       f.path, COALESCE(p.name, ''), w.line, w.depth
 		FROM walk w
 		JOIN symbols sf ON sf.id = w.from_id
 		JOIN symbols st ON st.id = w.to_id
 		LEFT JOIN files f ON f.id = w.src_file_id
+		LEFT JOIN projects p ON p.id = f.project_id
 		ORDER BY w.depth, st.qualified`
 
 	return r.scanNeighborhood(ctx, q, "out", visited, seed, depth)
@@ -351,11 +360,12 @@ func (r *Reader) traverseInbound(ctx context.Context, seed int64, depth int, vis
 		    WHERE r.src_symbol_id IS NOT NULL AND w.depth < ?
 		)
 		SELECT w.from_id, sf.qualified, w.to_id, st.qualified, w.kind,
-		       f.path, w.line, w.depth
+		       f.path, COALESCE(p.name, ''), w.line, w.depth
 		FROM walk w
 		JOIN symbols sf ON sf.id = w.from_id
 		JOIN symbols st ON st.id = w.to_id
 		LEFT JOIN files f ON f.id = w.src_file_id
+		LEFT JOIN projects p ON p.id = f.project_id
 		ORDER BY w.depth, sf.qualified`
 
 	return r.scanNeighborhood(ctx, q, "in", visited, seed, depth)
@@ -371,12 +381,13 @@ func (r *Reader) scanNeighborhood(ctx context.Context, query, dirLabel string, v
 	var newNodes []NeighborNode
 	for rows.Next() {
 		var e NeighborEdge
-		var srcPath string
+		var srcPath, srcProject string
 		var srcLine int
-		if err := rows.Scan(&e.FromID, &e.FromName, &e.ToID, &e.ToName, &e.Kind, &srcPath, &srcLine, &e.Depth); err != nil {
+		if err := rows.Scan(&e.FromID, &e.FromName, &e.ToID, &e.ToName, &e.Kind, &srcPath, &srcProject, &srcLine, &e.Depth); err != nil {
 			return nil, nil, err
 		}
 		e.SrcPath = srcPath
+		e.SrcProject = srcProject
 		e.SrcLine = srcLine
 		e.Direction = dirLabel
 		edges = append(edges, e)
@@ -451,9 +462,10 @@ func (r *Reader) loadNode(ctx context.Context, id int64) (NeighborNode, error) {
 	var n NeighborNode
 	n.ID = id
 	err := r.db.QueryRowContext(ctx, `
-		SELECT s.qualified, s.kind, f.path, s.start_line
+		SELECT s.qualified, s.kind, f.path, COALESCE(p.name, ''), s.start_line
 		FROM symbols s JOIN files f ON f.id = s.file_id
-		WHERE s.id = ?`, id).Scan(&n.Qualified, &n.Kind, &n.Path, &n.StartLine)
+		         LEFT JOIN projects p ON p.id = f.project_id
+		WHERE s.id = ?`, id).Scan(&n.Qualified, &n.Kind, &n.Path, &n.Project, &n.StartLine)
 	return n, err
 }
 

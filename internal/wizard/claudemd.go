@@ -24,6 +24,13 @@ myco is a local code knowledge base exposed as MCP tools. Reach for it
 ` + "`search_lexical`" + `. ` + "`search_lexical`" + ` is for literal strings and regex patterns
 only (log messages, route paths, magic constants). Using it for symbol names
 misses renames, aliases, and qualified forms.
+
+**Paths in workspace mode:** every result carries ` + "`path`" + ` (plus ` + "`project`" + ` /
+` + "`src_project`" + ` in multi-project workspaces). Pass these **verbatim** to
+` + "`read_focused`" + ` / ` + "`get_file_outline`" + ` / ` + "`get_file_summary`" + ` — do not
+prepend the project root yourself. Indexed paths are project-relative; the
+daemon resolves them to the right file on disk regardless of which form
+(project-relative, repo-relative, or absolute) you pass back.
 `
 
 // primingMarker is a stable string inside primingSnippet used to detect

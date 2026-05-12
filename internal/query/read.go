@@ -77,38 +77,53 @@ type flatSymbol struct {
 func (r *Reader) ReadFocused(ctx context.Context, repoRoot, path, focusQ string) (FocusedRead, error) {
 	out := FocusedRead{Path: path, Focus: focusQ}
 
+	// Normalize absolute paths to repo-relative so the SQL match below
+	// only needs to handle the two index-storage forms.
+	lookup := path
+	if filepath.IsAbs(lookup) && repoRoot != "" {
+		if rel, err := filepath.Rel(repoRoot, lookup); err == nil && !strings.HasPrefix(rel, "..") {
+			lookup = filepath.ToSlash(rel)
+		}
+	}
+
 	var fileID int64
 	var language string
+	var dbPath string
 	var projectRoot sql.NullString
 	// In workspace mode files are stored with project-relative paths
 	// (e.g. "src/utils/plans.ts"), but agents typically pass repo-relative
 	// paths (e.g. "packages/ui-tests/src/utils/plans.ts"). The second OR
 	// condition handles that case: it matches when the passed path equals
-	// the project root joined with the stored path.
+	// the project root joined with the stored path. f.path is selected
+	// alongside so disk reconstruction below can use the canonical
+	// project-relative form regardless of which form the caller passed.
 	err := r.db.QueryRowContext(ctx,
-		`SELECT f.id, f.language, p.root
+		`SELECT f.id, f.language, f.path, p.root
 		 FROM files f LEFT JOIN projects p ON p.id = f.project_id
 		 WHERE f.path = ?
-		    OR (p.root IS NOT NULL AND ? = p.root || '/' || f.path)`, path, path,
-	).Scan(&fileID, &language, &projectRoot)
+		    OR (p.root IS NOT NULL AND ? = p.root || '/' || f.path)`, lookup, lookup,
+	).Scan(&fileID, &language, &dbPath, &projectRoot)
 	if err == sql.ErrNoRows {
-		return out, fmt.Errorf("file not in index: %s", path)
+		return out, fmt.Errorf("file not in index: %s%s",
+			path, formatPathSuggestions(suggestPaths(ctx, r.db, path, 3)))
 	}
 	if err != nil {
 		return out, err
 	}
 
-	// In workspace mode, files.path is project-relative (the walker's
-	// Rel base is the project root, not the repo root). Reassemble the
-	// absolute disk path by joining repo + project + file. NULL
-	// project_id (single-project / implicit-root mode) skips the
-	// project prefix.
+	// Reassemble the absolute disk path from the database row, not the
+	// caller's input. `dbPath` is always project-relative (in workspace
+	// mode) or repo-relative (single-project mode with NULL project_id),
+	// so joining repo + project + dbPath is correct in both cases. Using
+	// the input `path` here would double the project prefix when the
+	// caller passed a repo-relative path that matched via the second OR
+	// branch above.
 	abs := path
 	if !filepath.IsAbs(abs) {
 		if projectRoot.Valid && projectRoot.String != "" {
-			abs = filepath.Join(repoRoot, projectRoot.String, path)
+			abs = filepath.Join(repoRoot, projectRoot.String, dbPath)
 		} else {
-			abs = filepath.Join(repoRoot, path)
+			abs = filepath.Join(repoRoot, dbPath)
 		}
 	}
 	raw, err := os.ReadFile(abs)

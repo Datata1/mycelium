@@ -22,7 +22,7 @@ func Tools() []Tool {
 	return []Tool{
 		{
 			Name:        "find_symbol",
-			Description: "Locate a symbol's definition by name (exact or substring) across the indexed graph. Reach for this **before** any string search whenever you have an identifier — function, class, variable, type, interface, method. String search is for literal text; find_symbol is for navigating code structure and is faster + more accurate. Empty `Matches` may include `Hints` explaining why a filter eliminated everything (e.g. typo'd project name, kind that doesn't exist on this name).",
+			Description: "Locate a symbol's definition by name (exact or substring) across the indexed graph. Reach for this **before** any string search whenever you have an identifier — function, class, variable, type, interface, method. String search is for literal text; find_symbol is for navigating code structure and is faster + more accurate. Empty `Matches` may include `Hints` explaining why a filter eliminated everything (e.g. typo'd project name, kind that doesn't exist on this name). Each hit's `path` + `project` can be passed verbatim to `read_focused`, `get_file_outline`, and `get_file_summary` — do not prepend the project root yourself.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -56,7 +56,7 @@ func Tools() []Tool {
 		},
 		{
 			Name:        "get_references",
-			Description: "List the call-sites, imports, and other uses of a symbol. Reach for this when answering 'who calls X?' or 'where is X used?' — it's faster and more accurate than string-searching the symbol's name because it knows about resolved vs. textual refs and won't false-match on string literals or comments. Each hit is flagged resolved (graph-linked) or textual (name-match only). Pass a qualified name (e.g. `pkg.Type.Method`) when you have one — it disambiguates better than the short name.",
+			Description: "List the call-sites, imports, and other uses of a symbol. Reach for this when answering 'who calls X?' or 'where is X used?' — it's faster and more accurate than string-searching the symbol's name because it knows about resolved vs. textual refs and won't false-match on string literals or comments. Each hit is flagged resolved (graph-linked) or textual (name-match only). Pass a qualified name (e.g. `pkg.Type.Method`) when you have one — it disambiguates better than the short name. Each hit's `src_path` + `src_project` can be passed verbatim to `read_focused` / `get_file_outline` to read the caller's file.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -82,7 +82,7 @@ func Tools() []Tool {
 		},
 		{
 			Name:        "list_files",
-			Description: "Enumerate indexed files, optionally filtered by language or path substring. Use this for orientation on an unfamiliar repo before zooming in with `find_symbol` or `get_file_outline`. Faster than recursive directory walks and respects the index's exclude rules so you don't see vendored/generated noise.",
+			Description: "Enumerate indexed files, optionally filtered by language or path substring. Use this for orientation on an unfamiliar repo before zooming in with `find_symbol` or `get_file_outline`. Faster than recursive directory walks and respects the index's exclude rules so you don't see vendored/generated noise. Each entry's `path` + `project` pass verbatim to `read_focused` and friends.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -117,7 +117,7 @@ func Tools() []Tool {
 				"properties": map[string]any{
 					"path": map[string]any{
 						"type":        "string",
-						"description": "Repo-relative path to the file.",
+						"description": "Path to the file. Accepts the `path` returned by `find_symbol` / `list_files` / `get_references` verbatim, a repo-relative path, or an absolute path. In workspace mode the indexed form is project-relative; pass it through unchanged — do not prepend the project root.",
 					},
 					"focus": map[string]any{
 						"type":        "string",
@@ -129,7 +129,7 @@ func Tools() []Tool {
 		},
 		{
 			Name:        "search_lexical",
-			Description: "Ripgrep-style regex/substring search over indexed file content. Use this **only** for literal strings or regex patterns — log messages, error formats, magic constants, route literals. For symbol navigation prefer `find_symbol`; for 'who calls X' prefer `get_references`. Treating this as a general-purpose code search is a known anti-pattern: it returns text matches with no graph awareness, so refactors and renames mislead it.",
+			Description: "Ripgrep-style regex/substring search over indexed file content. Use this **only** for literal strings or regex patterns — log messages, error formats, magic constants, route literals. For symbol navigation prefer `find_symbol`; for 'who calls X' prefer `get_references`. Treating this as a general-purpose code search is a known anti-pattern: it returns text matches with no graph awareness, so refactors and renames mislead it. Each hit carries `path` + `project` for `read_focused` follow-ups.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -139,7 +139,7 @@ func Tools() []Tool {
 					},
 					"path_contains": map[string]any{
 						"type":        "string",
-						"description": "Restrict to files whose path contains this substring.",
+						"description": "Restrict to files whose path contains this substring. Matches both project-relative (`src/utils/`) and repo-relative (`packages/web/src/`) forms in workspace mode.",
 					},
 					"k": map[string]any{
 						"type":        "integer",
@@ -165,7 +165,7 @@ func Tools() []Tool {
 				"properties": map[string]any{
 					"path": map[string]any{
 						"type":        "string",
-						"description": "Repo-relative path.",
+						"description": "Path to the file. Accepts the `path` returned by `find_symbol` / `list_files` / `get_references` verbatim, a repo-relative path, or an absolute path. In workspace mode the indexed form is project-relative; pass it through unchanged.",
 					},
 				},
 				"required": []string{"path"},
@@ -173,7 +173,7 @@ func Tools() []Tool {
 		},
 		{
 			Name:        "get_neighborhood",
-			Description: "Walk the local call graph around a symbol — both directions in one query. Reach for this **instead of** chaining `find_symbol` + `get_references` repeatedly when you need to understand how a symbol fits into its surroundings. Direction 'out' returns callees, 'in' returns callers, 'both' unions them. Depth defaults to 2; clamped to 5 because deeper traversals on dense graphs balloon exponentially.",
+			Description: "Walk the local call graph around a symbol — both directions in one query. Reach for this **instead of** chaining `find_symbol` + `get_references` repeatedly when you need to understand how a symbol fits into its surroundings. Direction 'out' returns callees, 'in' returns callers, 'both' unions them. Depth defaults to 2; clamped to 5 because deeper traversals on dense graphs balloon exponentially. Each node carries `path` + `project`, each edge carries `src_path` + `src_project` — pass any of those verbatim to `read_focused` for follow-up.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -203,7 +203,7 @@ func Tools() []Tool {
 		},
 		{
 			Name:        "search_semantic",
-			Description: "Embedding-based search over code chunks. Use this for intent queries ('function that parses ISO dates', 'http handler for login') when you don't know the symbol name and lexical search would miss the wording. If you do know the name, prefer `find_symbol` — it's faster and exact. Requires an embedder configured; returns an error otherwise.",
+			Description: "Embedding-based search over code chunks. Use this for intent queries ('function that parses ISO dates', 'http handler for login') when you don't know the symbol name and lexical search would miss the wording. If you do know the name, prefer `find_symbol` — it's faster and exact. Requires an embedder configured; returns an error otherwise. Each hit carries `path` + `project` for `read_focused` follow-ups.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -221,7 +221,7 @@ func Tools() []Tool {
 					},
 					"path_contains": map[string]any{
 						"type":        "string",
-						"description": "Restrict to files whose path contains this substring.",
+						"description": "Restrict to files whose path contains this substring. Matches both project-relative and repo-relative forms in workspace mode.",
 					},
 					"project": map[string]any{
 						"type":        "string",
@@ -237,7 +237,7 @@ func Tools() []Tool {
 		},
 		{
 			Name:        "impact_analysis",
-			Description: "Transitive inbound closure around a symbol, ranked by distance. Reach for this when answering 'who's impacted if I change X?' — it's the right tool to scope a refactor before touching code. With a `kind` filter (e.g. 'test') it also answers 'what tests cover this?'. Returns a flat distance-sorted list; use `get_neighborhood` instead when you need the graph shape rather than a flat impact set.",
+			Description: "Transitive inbound closure around a symbol, ranked by distance. Reach for this when answering 'who's impacted if I change X?' — it's the right tool to scope a refactor before touching code. With a `kind` filter (e.g. 'test') it also answers 'what tests cover this?'. Returns a flat distance-sorted list; use `get_neighborhood` instead when you need the graph shape rather than a flat impact set. Each hit's `path` + `project` pass verbatim to `read_focused`.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -303,7 +303,7 @@ func Tools() []Tool {
 				"properties": map[string]any{
 					"path": map[string]any{
 						"type":        "string",
-						"description": "Repo-relative path to the file.",
+						"description": "Path to the file. Accepts the `path` returned by `find_symbol` / `list_files` / `get_references` verbatim, a repo-relative path, or an absolute path. In workspace mode the indexed form is project-relative; pass it through unchanged — do not prepend the project root yourself.",
 					},
 					"focus": map[string]any{
 						"type":        "string",

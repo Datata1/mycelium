@@ -37,8 +37,95 @@ to [Semantic Versioning](https://semver.org/).
   the README "From source" section now point at `task build && task
   install` as the canonical dev install flow.
 
+### Added
+
+- **Helpful "Did you mean" hints on path-not-found errors.** v3.1.2.
+  When `ReadFocused` can't resolve a path (`sql.ErrNoRows` from the
+  index lookup), and when `SearchLexical`'s `path_contains` filter
+  eliminates every indexed file, both methods now run a basename
+  match against the `files` table and append up to 3 suggestions to
+  the error message:
+
+  ```
+  file not in index: wrong/dir/server.go
+  Did you mean:
+    server.go  (project: api)
+  ```
+
+  Previously `SearchLexical` returned an empty result for the
+  zero-candidates case, leaving the agent unable to distinguish
+  "pattern not present in matching files" from "your filter
+  eliminated every file" — so it would correctly conclude "no match"
+  for the wrong reason. Now the headline `no indexed files match
+  path_contains=…` makes the failure mode explicit. New shared
+  helper `internal/query/suggest.go::suggestPaths` runs a single
+  indexed query (LEFT JOIN `projects` for the project annotation)
+  with `LIMIT 3`; the leading-wildcard LIKE is a full scan but on
+  a 10k-file index completes in single-digit ms. No suggestions are
+  emitted when basename match finds nothing — silence beats noisy
+  suggestions.
+
+- **MCP tool descriptions rewritten for workspace-mode path
+  conventions.** v3.1.2. The old descriptions for `read_focused`,
+  `get_file_outline`, and `get_file_summary` said "Repo-relative path
+  to the file" — misleading in workspace mode where indexed paths
+  are project-relative. Agents following the spec literally prepended
+  the project root themselves, hitting the v3.1.2 path-doubling bug
+  for the entire pre-fix lifetime. New descriptions explicitly say:
+  *"Accepts the `path` returned by `find_symbol` / `list_files` /
+  `get_references` verbatim, a repo-relative path, or an absolute
+  path. In workspace mode the indexed form is project-relative; pass
+  it through unchanged — do not prepend the project root yourself."*
+  Result-returning tools (`find_symbol`, `get_references`,
+  `list_files`, `get_neighborhood`, `impact_analysis`,
+  `search_lexical`, `search_semantic`) now mention that the new
+  `path` + `project` fields on each hit are accepted verbatim by the
+  read-side tools. `path_contains` filters in `search_lexical` /
+  `search_semantic` document that they match both project-relative
+  and repo-relative substrings (the v3.1.2 SQL OR pattern). The
+  CLAUDE.md priming snippet appended by `myco init` and the new
+  *"Paths in workspace mode"* section in `docs/adoption.md` carry
+  the same guidance for human-side documentation and agent priming.
+- **`project` annotation on every path-bearing result type.** v3.1.2.
+  `SymbolHit`, `FileHit`, `FileSummary`, `LexicalHit`, `SemanticHit`,
+  `NeighborNode`, `NeighborEdge` (as `SrcProject`), `ReferenceHit` (as
+  `SrcProject`), `ImpactHit`, and `PathVertex` all carry the workspace
+  project name when the file belongs to a configured project, or `""`
+  when it doesn't. Each query joins `LEFT JOIN projects p ON p.id =
+  f.project_id` and selects `COALESCE(p.name, '')`. JSON tags use
+  `omitempty` so single-project mode emits no visible change. Motivation:
+  agents in a multi-project workspace previously got back paths like
+  `src/index.ts` from `find_symbol` with no way to know which of the
+  five packages it belonged to — leading to guessed prepended prefixes
+  (the v3.1.2 path-doubling bug). With `project` annotated, agents can
+  pass `path` and `project` back verbatim to `read_focused` (or just use
+  the existing `project` filter on read queries with confidence).
+
 ### Fixed
 
+- **v3.1.2 — workspace-mode path-doubling.** A v3.1.1 follow-up.
+  `ReadFocused`'s SQL match accepted both project-relative and
+  repo-relative input paths, but the on-disk path reconstruction still
+  used the **input** path in `filepath.Join(repoRoot, projectRoot, path)` —
+  so a repo-relative input (e.g. `packages/ui-tests/src/foo.ts`) got the
+  project prefix prepended a second time and produced
+  `…/packages/ui-tests/packages/ui-tests/src/foo.ts: no such file or
+  directory`. A field-test session (`monorepo-4`) had `read_focused`
+  failing 7/13 times via this path. Fix: also `SELECT f.path` from the
+  LEFT JOIN and use the database value for the disk-side join. Absolute
+  inputs are now normalised to repo-relative up front before the SQL
+  match, so `read_focused` accepts project-relative, repo-relative, and
+  absolute paths uniformly. `SearchLexical`'s `path_contains` filter now
+  matches both path forms via the same OR pattern; previously a filter
+  like `path_contains: "services/api"` against a workspace project
+  returned zero candidates because the LIKE was applied only to
+  project-relative `f.path`. Worker-side `os.Open` ENOENT no longer
+  silently `continue`s — it logs to daemon stderr so stale-index or
+  path-reconstruction bugs fail loudly in regression runs. New tests in
+  `workspace_integration_test.go` cover all three input forms for
+  `ReadFocused`, both forms for `SearchLexical` `path_contains`, and
+  pin the (already-correct) behaviour of `GetFileSummary` /
+  `GetFileOutline` against future refactors.
 - **v3.1.1 hotfix — workspace-mode disk reads.** `ReadFocused` and
   `SearchLexical` both joined `repoRoot` with the index-stored path
   to locate the file on disk, but in workspace mode (v1.5+) the

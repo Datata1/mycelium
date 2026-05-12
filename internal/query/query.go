@@ -23,12 +23,19 @@ type Reader struct {
 func NewReader(db *sql.DB) *Reader { return &Reader{db: db} }
 
 // SymbolHit is the canonical shape returned by symbol-producing queries.
+//
+// `Project` (v3.1.2+) carries the workspace project name when the file
+// belongs to a configured project, or "" in single-project mode / for
+// root-level files. Agents can use it to disambiguate paths when the
+// same path exists in multiple workspace projects (e.g. `src/index.ts`
+// across several packages).
 type SymbolHit struct {
 	ID        int64  `json:"id"`
 	Name      string `json:"name"`
 	Qualified string `json:"qualified"`
 	Kind      string `json:"kind"`
 	Path      string `json:"path"`
+	Project   string `json:"project,omitempty"`
 	StartLine int    `json:"start_line"`
 	EndLine   int    `json:"end_line"`
 	Signature string `json:"signature,omitempty"`
@@ -88,9 +95,11 @@ func (r *Reader) FindSymbol(ctx context.Context, name, kind, project string, lim
 		args = append(args, pathArgs...)
 		args = append(args, name, name+"%", limit)
 		rows, err = r.db.QueryContext(ctx, `
-			SELECT s.id, s.name, s.qualified, s.kind, f.path, s.start_line, s.end_line,
+			SELECT s.id, s.name, s.qualified, s.kind, f.path, COALESCE(p.name, ''),
+			       s.start_line, s.end_line,
 			       COALESCE(s.signature, ''), COALESCE(s.docstring, '')
 			FROM symbols s JOIN files f ON f.id = s.file_id
+			         LEFT JOIN projects p ON p.id = f.project_id
 			WHERE (s.name LIKE ? OR s.qualified LIKE ?)`+scope+pathClause+`
 			ORDER BY
 			  CASE WHEN s.name = ? THEN 0
@@ -102,9 +111,11 @@ func (r *Reader) FindSymbol(ctx context.Context, name, kind, project string, lim
 		args = append(args, pathArgs...)
 		args = append(args, limit)
 		rows, err = r.db.QueryContext(ctx, `
-			SELECT s.id, s.name, s.qualified, s.kind, f.path, s.start_line, s.end_line,
+			SELECT s.id, s.name, s.qualified, s.kind, f.path, COALESCE(p.name, ''),
+			       s.start_line, s.end_line,
 			       COALESCE(s.signature, ''), COALESCE(s.docstring, '')
 			FROM symbols s JOIN files f ON f.id = s.file_id
+			         LEFT JOIN projects p ON p.id = f.project_id
 			WHERE (s.name LIKE ? OR s.qualified LIKE ?) AND s.kind = ?`+scope+pathClause+`
 			ORDER BY length(s.qualified)
 			LIMIT ?`, args...)
@@ -116,7 +127,8 @@ func (r *Reader) FindSymbol(ctx context.Context, name, kind, project string, lim
 	hits := []SymbolHit{}
 	for rows.Next() {
 		var h SymbolHit
-		if err := rows.Scan(&h.ID, &h.Name, &h.Qualified, &h.Kind, &h.Path, &h.StartLine, &h.EndLine, &h.Signature, &h.Docstring); err != nil {
+		if err := rows.Scan(&h.ID, &h.Name, &h.Qualified, &h.Kind, &h.Path, &h.Project,
+			&h.StartLine, &h.EndLine, &h.Signature, &h.Docstring); err != nil {
 			return empty, err
 		}
 		hits = append(hits, h)
@@ -171,9 +183,13 @@ func applyFocusToHits(tokens []string, hits []SymbolHit) []SymbolHit {
 // ReferenceHit is one call/import/type-use site pointing at a symbol.
 // Resolved=true means dst_symbol_id is populated; otherwise the hit is
 // a textual-only match on dst_name.
+//
+// `SrcProject` (v3.1.2+) is the workspace project of the source file,
+// or "" when the file has no configured project.
 type ReferenceHit struct {
 	ID             int64  `json:"id"`
 	SrcPath        string `json:"src_path"`
+	SrcProject     string `json:"src_project,omitempty"`
 	SrcLine        int    `json:"src_line"`
 	SrcCol         int    `json:"src_col"`
 	SrcSymbolID    int64  `json:"src_symbol_id,omitempty"`
@@ -219,11 +235,12 @@ func (r *Reader) GetReferences(ctx context.Context, target, project string, limi
 		args = append(args, pathArgs...)
 		args = append(args, limit)
 		rows, err := r.db.QueryContext(ctx, `
-			SELECT r.id, f.path, r.line, r.col,
+			SELECT r.id, f.path, COALESCE(p.name, ''), r.line, r.col,
 			       COALESCE(r.src_symbol_id, 0), COALESCE(ss.qualified, ''),
 			       r.dst_name, COALESCE(r.dst_symbol_id, 0), r.kind, r.resolved
 			FROM refs r
 			JOIN files f ON f.id = r.src_file_id
+			LEFT JOIN projects p ON p.id = f.project_id
 			LEFT JOIN symbols ss ON ss.id = r.src_symbol_id
 			WHERE r.dst_symbol_id IN (`+placeholders+`)`+scope+pathClause+`
 			ORDER BY f.path, r.line
@@ -247,11 +264,12 @@ func (r *Reader) GetReferences(ctx context.Context, target, project string, limi
 		args = append(args, pathArgs...)
 		args = append(args, remaining)
 		rows, err := r.db.QueryContext(ctx, `
-			SELECT r.id, f.path, r.line, r.col,
+			SELECT r.id, f.path, COALESCE(p.name, ''), r.line, r.col,
 			       COALESCE(r.src_symbol_id, 0), COALESCE(ss.qualified, ''),
 			       r.dst_name, COALESCE(r.dst_symbol_id, 0), r.kind, r.resolved
 			FROM refs r
 			JOIN files f ON f.id = r.src_file_id
+			LEFT JOIN projects p ON p.id = f.project_id
 			LEFT JOIN symbols ss ON ss.id = r.src_symbol_id
 			WHERE r.resolved = 0 AND (r.dst_name = ? OR r.dst_short = ?)`+scope+pathClause+`
 			ORDER BY f.path, r.line
@@ -291,7 +309,7 @@ func scanReferenceHits(rows *sql.Rows, acc []ReferenceHit) ([]ReferenceHit, erro
 	for rows.Next() {
 		var h ReferenceHit
 		var resolved int
-		if err := rows.Scan(&h.ID, &h.SrcPath, &h.SrcLine, &h.SrcCol,
+		if err := rows.Scan(&h.ID, &h.SrcPath, &h.SrcProject, &h.SrcLine, &h.SrcCol,
 			&h.SrcSymbolID, &h.SrcSymbolName, &h.DstName, &h.DstSymbolID,
 			&h.Kind, &resolved); err != nil {
 			return acc, err
@@ -303,8 +321,12 @@ func scanReferenceHits(rows *sql.Rows, acc []ReferenceHit) ([]ReferenceHit, erro
 }
 
 // FileHit represents a file in the index.
+//
+// `Project` (v3.1.2+) is the workspace project the file belongs to,
+// or "" in single-project mode.
 type FileHit struct {
 	Path        string    `json:"path"`
+	Project     string    `json:"project,omitempty"`
 	Language    string    `json:"language"`
 	SymbolCount int       `json:"symbol_count"`
 	SizeBytes   int64     `json:"size_bytes"`
@@ -356,9 +378,10 @@ func (r *Reader) ListFiles(ctx context.Context, language, nameContains, project 
 	appendScope(pathClause, pathArgs)
 	args = append(args, limit)
 	q := fmt.Sprintf(`
-		SELECT f.path, f.language, f.size_bytes, f.last_indexed_at,
+		SELECT f.path, COALESCE(p.name, ''), f.language, f.size_bytes, f.last_indexed_at,
 		       (SELECT COUNT(*) FROM symbols s WHERE s.file_id = f.id)
-		FROM files f %s ORDER BY f.path LIMIT ?`, where)
+		FROM files f LEFT JOIN projects p ON p.id = f.project_id
+		%s ORDER BY f.path LIMIT ?`, where)
 	rows, err := r.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -368,7 +391,7 @@ func (r *Reader) ListFiles(ctx context.Context, language, nameContains, project 
 	for rows.Next() {
 		var h FileHit
 		var ts int64
-		if err := rows.Scan(&h.Path, &h.Language, &h.SizeBytes, &ts, &h.SymbolCount); err != nil {
+		if err := rows.Scan(&h.Path, &h.Project, &h.Language, &h.SizeBytes, &ts, &h.SymbolCount); err != nil {
 			return nil, err
 		}
 		h.LastIndexed = time.Unix(ts, 0)
