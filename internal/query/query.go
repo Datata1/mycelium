@@ -548,6 +548,12 @@ type Stats struct {
 	// skill_files DB row still exists). 0 when the user never ran
 	// `myco skills compile`.
 	SkillsPackagesIndexed int `json:"skills_packages_indexed"`
+	// v3.3: per-kind document entry counts. Empty when no document
+	// parsers are wired up or the repo has no matching files.
+	// Doctor surfaces this as `documents_indexed`; a registered
+	// kind with no entries paired with at least one candidate file
+	// on disk is the diagnostic shape worth flagging.
+	DocumentsByKind map[string]int `json:"documents_by_kind,omitempty"`
 	// v3.1: configured workspace projects with per-project file counts.
 	// Empty when no `projects:` block is set in `.mycelium.yml` (the
 	// repo runs in single-project mode and `files.project_id` is NULL
@@ -715,6 +721,23 @@ func (r *Reader) Stats(ctx context.Context) (Stats, error) {
 		}
 		pathRows.Close()
 		s.SkillsPackagesIndexed = len(dirs)
+	}
+
+	// v3.3: per-kind document entry counts. Empty result means no
+	// document parsers fired; doctor reads this alongside on-disk
+	// candidate files to decide whether a "no entries" reading is
+	// a real problem.
+	if docRows, err := r.db.QueryContext(ctx,
+		`SELECT kind, COUNT(*) FROM documents GROUP BY kind`); err == nil {
+		s.DocumentsByKind = map[string]int{}
+		for docRows.Next() {
+			var k string
+			var n int
+			if err := docRows.Scan(&k, &n); err == nil {
+				s.DocumentsByKind[k] = n
+			}
+		}
+		docRows.Close()
 	}
 
 	// v3.1: configured projects with per-project file counts. LEFT JOIN

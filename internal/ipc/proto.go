@@ -28,6 +28,7 @@ const (
 	MethodImpactAnalysis  = "impact_analysis"  // v1.6
 	MethodCriticalPath    = "critical_path"    // v1.6
 	MethodReadFocused     = "read_focused"     // v2.4
+	MethodFindDocumentKey = "find_document_key" // v3.3 documents surface
 	MethodPing            = "ping"
 )
 
@@ -135,4 +136,15 @@ type CriticalPathParams struct {
 type ReadFocusedParams struct {
 	Path  string `json:"path"`
 	Focus string `json:"focus,omitempty"`
+}
+
+// FindDocumentKeyParams is the v3.3 `find_document_key` call.
+// Substring match on `key` against the documents table; optional
+// `kind` narrows to a document kind (i18n_json / package_json_deps /
+// go_mod_requires) and `project` scopes by workspace project.
+type FindDocumentKeyParams struct {
+	Key     string `json:"key"`
+	Kind    string `json:"kind,omitempty"`
+	Project string `json:"project,omitempty"`
+	Limit   int    `json:"limit,omitempty"`
 }

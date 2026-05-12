@@ -314,6 +314,32 @@ func Tools() []Tool {
 			},
 		},
 		{
+			Name:        "find_document_key",
+			Description: "Look up entries in indexed documents (i18n JSON, package.json deps, go.mod requires) by key. Reach for this **before** `search_lexical` whenever you have a key like `topbar.nav.back`, a dependency name like `@codesphere/utils-common`, or a module path like `github.com/foo/bar` — it returns the file + line directly with no false positives from regex matching on comments or unrelated literals. Each hit's `path` + `project` pass verbatim to `read_focused` for follow-ups.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"key": map[string]any{
+						"type":        "string",
+						"description": "Key to search for. Exact match wins over prefix; prefix over substring.",
+					},
+					"kind": map[string]any{
+						"type":        "string",
+						"description": "Optional document kind filter: i18n_json | package_json_deps | go_mod_requires.",
+					},
+					"project": map[string]any{
+						"type":        "string",
+						"description": "Optional workspace project name to scope the search to.",
+					},
+					"limit": map[string]any{
+						"type":        "integer",
+						"description": "Maximum number of hits (default 50).",
+					},
+				},
+				"required": []string{"key"},
+			},
+		},
+		{
 			Name:        "stats",
 			Description: "Snapshot of index status: file/symbol/ref counts, languages, last-scan time, configured projects. Use this once at session start to confirm the index is fresh and the right shape before running queries — a stale or empty index will silently no-op many calls below. Cheap; no embedder required.",
 			InputSchema: map[string]any{

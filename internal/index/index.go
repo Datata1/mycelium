@@ -193,6 +193,84 @@ func (ix *Index) ReplaceFileSymbols(ctx context.Context, tx *sql.Tx, fileID int6
 	return ids, nil
 }
 
+// UpsertDocumentFile is the document-side counterpart to UpsertFile.
+// It inserts or updates a row in `files` with NULL language (documents
+// aren't programming languages) and a populated `document_kind`. The
+// content-hash short-circuit and project-membership refresh mirror
+// UpsertFile so a file that doesn't change costs zero writes beyond
+// the project_id touch-up.
+//
+// Returns the file id and whether the content changed since the last
+// index run; an unchanged file still needs its document_kind/project_id
+// kept current but skips the entries replace.
+func (ix *Index) UpsertDocumentFile(ctx context.Context, tx *sql.Tx, path, kind string, sizeBytes, mtimeNS int64, contentHash, parseHash []byte, projectID int64) (UpsertFileResult, error) {
+	var proj any
+	if projectID > 0 {
+		proj = projectID
+	}
+	var id int64
+	var existingHash []byte
+	err := tx.QueryRowContext(ctx, `SELECT id, content_hash FROM files WHERE path = ?`, path).Scan(&id, &existingHash)
+	switch {
+	case err == sql.ErrNoRows:
+		res, insErr := tx.ExecContext(ctx, `
+			INSERT INTO files(path, language, size_bytes, mtime_ns, content_hash, parse_hash, last_indexed_at, project_id, document_kind)
+			VALUES(?, '', ?, ?, ?, ?, ?, ?, ?)`,
+			path, sizeBytes, mtimeNS, contentHash, parseHash, time.Now().Unix(), proj, kind)
+		if insErr != nil {
+			return UpsertFileResult{}, fmt.Errorf("insert document file: %w", insErr)
+		}
+		newID, _ := res.LastInsertId()
+		return UpsertFileResult{FileID: newID, Changed: true, WasPresent: false}, nil
+	case err != nil:
+		return UpsertFileResult{}, fmt.Errorf("select document file: %w", err)
+	}
+	if bytesEqual(existingHash, contentHash) {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE files SET project_id = ?, document_kind = ? WHERE id = ?`,
+			proj, kind, id); err != nil {
+			return UpsertFileResult{}, fmt.Errorf("update document file membership: %w", err)
+		}
+		return UpsertFileResult{FileID: id, Changed: false, WasPresent: true}, nil
+	}
+	_, err = tx.ExecContext(ctx, `
+		UPDATE files
+		SET size_bytes = ?, mtime_ns = ?, content_hash = ?, parse_hash = ?, last_indexed_at = ?, project_id = ?, document_kind = ?
+		WHERE id = ?`,
+		sizeBytes, mtimeNS, contentHash, parseHash, time.Now().Unix(), proj, kind, id)
+	if err != nil {
+		return UpsertFileResult{}, fmt.Errorf("update document file: %w", err)
+	}
+	return UpsertFileResult{FileID: id, Changed: true, WasPresent: true}, nil
+}
+
+// ReplaceFileDocumentEntries deletes all document rows for a file and
+// inserts the new set. Same full-replace pattern used for symbols —
+// document files are small and entry sets churn together, so diffing
+// per entry isn't worth it. Cascaded deletes from files keep
+// orphan-entry cleanup automatic on file removal.
+func (ix *Index) ReplaceFileDocumentEntries(ctx context.Context, tx *sql.Tx, fileID int64, kind string, entries []parser.DocumentEntry) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM documents WHERE file_id = ?`, fileID); err != nil {
+		return fmt.Errorf("delete old documents: %w", err)
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO documents(file_id, kind, key, value, line)
+		VALUES(?, ?, ?, ?, ?)`)
+	if err != nil {
+		return fmt.Errorf("prepare insert document: %w", err)
+	}
+	defer stmt.Close()
+	for _, e := range entries {
+		if _, err := stmt.ExecContext(ctx, fileID, kind, e.Key, e.Value, e.Line); err != nil {
+			return fmt.Errorf("insert document entry %q: %w", e.Key, err)
+		}
+	}
+	return nil
+}
+
 // ReplaceFileRefs deletes all refs sourced from a file and inserts new ones.
 // dst_symbol_id is left null at this stage; resolution happens afterwards.
 func (ix *Index) ReplaceFileRefs(ctx context.Context, tx *sql.Tx, fileID int64, symbolIDs map[string]int64, refs []parser.Reference) error {

@@ -16,8 +16,8 @@ const primingSnippet = `
 myco is a local code knowledge base exposed as MCP tools. Reach for it
 **before** ` + "`Bash(grep)`" + ` or ` + "`Read`" + ` for any code navigation task.
 
-**Navigation:** ` + "`find_symbol`" + ` (definitions) · ` + "`get_references`" + ` (callers) ·
-` + "`read_focused`" + ` (read a file with irrelevant symbols collapsed) ·
+**Navigation:** ` + "`find_symbol`" + ` (definitions) · ` + "`find_document_key`" + ` (i18n / config keys) ·
+` + "`get_references`" + ` (callers) · ` + "`read_focused`" + ` (read a file with irrelevant symbols collapsed) ·
 ` + "`get_neighborhood`" + ` (local call graph) · ` + "`impact_analysis`" + ` (what depends on X)
 
 **Rule:** when you have an identifier name, use ` + "`find_symbol`" + ` — not

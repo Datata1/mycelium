@@ -195,6 +195,12 @@ func mapToolToIPC(tool string, rawArgs json.RawMessage) (string, any, error) {
 			return "", nil, err
 		}
 		return ipc.MethodReadFocused, p, nil
+	case "find_document_key":
+		var p ipc.FindDocumentKeyParams
+		if err := unmarshalArgs(rawArgs, &p); err != nil {
+			return "", nil, err
+		}
+		return ipc.MethodFindDocumentKey, p, nil
 	default:
 		return "", nil, fmt.Errorf("unknown tool: %s", tool)
 	}

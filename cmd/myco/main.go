@@ -28,6 +28,7 @@ import (
 	"github.com/jdwiederstein/mycelium/internal/ipc"
 	"github.com/jdwiederstein/mycelium/internal/mcp"
 	"github.com/jdwiederstein/mycelium/internal/parser"
+	"github.com/jdwiederstein/mycelium/internal/parser/document"
 	"github.com/jdwiederstein/mycelium/internal/parser/golang"
 	"github.com/jdwiederstein/mycelium/internal/parser/python"
 	"github.com/jdwiederstein/mycelium/internal/parser/typescript"
@@ -181,6 +182,7 @@ func newIndexCmd() *cobra.Command {
 			p := &pipeline.Pipeline{
 				Index: ix, Registry: reg, Walker: w, Embedder: emb,
 				Resolvers: resolvers, Workspaces: wss, FileProjectFor: projFor,
+				Documents: buildDocumentRegistry(),
 			}
 
 			rep, err := p.RunOnce(ctx)
@@ -1679,6 +1681,7 @@ func runDaemon(ctx context.Context, backendOverride string) error {
 	p := &pipeline.Pipeline{
 		Index: ix, Registry: reg, Walker: w, Embedder: emb,
 		Resolvers: resolvers, Workspaces: wss, FileProjectFor: projFor,
+		Documents: buildDocumentRegistry(),
 	}
 
 	// Catch-up scan before accepting connections so the index reflects any
@@ -2059,6 +2062,20 @@ func buildWorkspaces(ctx context.Context, rc repoCtx, ix *index.Index) ([]pipeli
 
 // loadResolvers constructs one resolver per enabled language. Returns a map
 // the pipeline indexes into; languages without a resolver simply don't get
+// buildDocumentRegistry assembles the v3.3 document parsers. The
+// three kinds (i18n_json, package_json_deps, go_mod_requires) are
+// always registered — they only fire when the walker encounters
+// matching files, so a code-only repo pays nothing for them. Future
+// pluggability (per-repo enable/disable, custom kinds) is out of
+// scope until a field test motivates it.
+func buildDocumentRegistry() *document.Registry {
+	r := document.NewRegistry()
+	r.Register(document.NewI18NJSON())
+	r.Register(document.NewPackageJSON())
+	r.Register(document.NewGoMod())
+	return r
+}
+
 // type-aware rewrites (textual-only fallback stays in place). Go needs an
 // up-front go/packages load; TS + Python are stateless and always ready.
 func loadResolvers(repoRoot string, languages []string) map[string]pipeline.Resolver {

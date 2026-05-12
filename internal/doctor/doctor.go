@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/jdwiederstein/mycelium/internal/config"
 	"github.com/jdwiederstein/mycelium/internal/query"
@@ -383,14 +385,59 @@ func Run(ctx context.Context, r *query.Reader, embedderProvider string, th Thres
 		}
 	}
 
+	// v3.3 documents coverage. Reports per-kind entry counts and flags
+	// any document_kind row in `files` whose `documents` join is empty
+	// — that's the symptom of a parser that claimed the file but
+	// produced zero entries (config error or unknown JSON shape).
+	if len(s.DocumentsByKind) > 0 || r.HasDocumentFiles(ctx) {
+		parts := []string{}
+		for _, k := range sortedDocKindKeys(s.DocumentsByKind) {
+			parts = append(parts, fmt.Sprintf("%s:%d", k, s.DocumentsByKind[k]))
+		}
+		level := LevelPass
+		msg := "documents indexed: " + strings.Join(parts, " ")
+		if len(parts) == 0 {
+			msg = "document files present but no entries extracted"
+		}
+		empty := r.EmptyDocumentFiles(ctx, 5)
+		if len(empty) > 0 {
+			level = LevelWarn
+			msg = fmt.Sprintf("documents indexed: %s; %d file(s) registered but produced 0 entries",
+				strings.Join(parts, " "), len(empty))
+		}
+		add(Check{
+			Name:    "documents_indexed",
+			Level:   level,
+			Message: msg,
+			Detail: map[string]any{
+				"by_kind":     s.DocumentsByKind,
+				"empty_files": empty,
+			},
+		})
+	}
+
 	// Adoption check: only runs when repoRoot is set and telemetry is present.
 	if repoRoot != "" {
 		if c := checkAdoption(repoRoot, th); c != nil {
 			add(*c)
 		}
+		if c := checkTelemetryDarkSpot(repoRoot); c != nil {
+			add(*c)
+		}
 	}
 
 	return rep, nil
+}
+
+// sortedDocKindKeys returns the keys of m in lexical order. Stable
+// doctor output; useful for tests too.
+func sortedDocKindKeys(m map[string]int) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // checkAdoption reads the telemetry log and returns a Check when the agent
@@ -465,6 +512,51 @@ func checkAdoption(repoRoot string, th Thresholds) *Check {
 			"lexical_ratio":    lexicalRatio,
 			"structural_ratio": structuralRatio,
 			"hint":             "run: myco init (choose 'append to CLAUDE.md') to add the priming snippet",
+		},
+	}
+}
+
+// checkTelemetryDarkSpot detects the dogfooding gap surfaced by the
+// v3.4 Go field test (finding G5): the session-tracking hook is
+// active and writing fallback-tool logs (`session_*_external.jsonl`),
+// but `telemetry.jsonl` is missing or empty — so we have the
+// fallback half of agent behaviour but not the myco-call half.
+// Returns nil when neither stream is present (a quiet repo, no
+// adoption story yet) or when both are present (telemetry on, all
+// good).
+func checkTelemetryDarkSpot(repoRoot string) *Check {
+	mDir := filepath.Join(repoRoot, ".mycelium")
+	hasSessions := false
+	entries, err := os.ReadDir(mDir)
+	if err != nil {
+		return nil
+	}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), "_external.jsonl") {
+			hasSessions = true
+			break
+		}
+	}
+	if !hasSessions {
+		return nil
+	}
+	// Sessions exist; is telemetry pulling its weight?
+	telPath := filepath.Join(mDir, "telemetry.jsonl")
+	info, err := os.Stat(telPath)
+	telemetryActive := err == nil && info.Size() > 0
+	if telemetryActive {
+		return nil
+	}
+	return &Check{
+		Name:  "telemetry_dark_spot",
+		Level: LevelWarn,
+		Message: "session hooks are recording fallback tools but telemetry.jsonl is empty/missing — " +
+			"enable `telemetry.enabled: true` in .mycelium.yml so myco-call counts get captured too",
+		Detail: map[string]any{
+			"sessions_dir":     mDir,
+			"telemetry_jsonl":  telPath,
+			"telemetry_active": telemetryActive,
+			"hint":             "without telemetry on, `myco session export <id>` shows myco calls: 0 even on heavy usage",
 		},
 	}
 }

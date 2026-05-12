@@ -14,6 +14,7 @@ import (
 	"github.com/jdwiederstein/mycelium/internal/embed"
 	"github.com/jdwiederstein/mycelium/internal/index"
 	"github.com/jdwiederstein/mycelium/internal/parser"
+	"github.com/jdwiederstein/mycelium/internal/parser/document"
 	"github.com/jdwiederstein/mycelium/internal/repo"
 	goresolver "github.com/jdwiederstein/mycelium/internal/resolver/golang"
 )
@@ -55,7 +56,13 @@ type Pipeline struct {
 	// replaces Walker entirely — each project is walked with its own
 	// root + filters and tagged with its project_id on index write.
 	Workspaces []Workspace
-	Embedder   embed.Embedder // Noop when the user hasn't configured a provider
+	// Documents is the v3.3 parallel surface — i18n JSON, package.json
+	// deps, go.mod requires. Nil = documents pass disabled (default,
+	// keeps legacy callers unchanged). When set, after the main symbol
+	// pass finishes, RunOnce iterates the same file list and dispatches
+	// every file no symbol parser claimed through this registry.
+	Documents *document.Registry
+	Embedder  embed.Embedder // Noop when the user hasn't configured a provider
 	// Resolvers is keyed by language ("go", "typescript", "python"). A
 	// missing entry means textual resolution only for that language.
 	Resolvers   map[string]Resolver
@@ -94,8 +101,12 @@ type Report struct {
 	FilesSkipped int
 	Symbols      int
 	Refs         int
-	Duration     time.Duration
-	Errors       []error
+	// Documents counts files where the v3.3 document pass produced
+	// changed entries (i18n JSON, package.json deps, go.mod requires).
+	// Stays 0 when Pipeline.Documents is nil.
+	Documents int
+	Duration  time.Duration
+	Errors    []error
 }
 
 // RunOnce walks, parses, and indexes every file the walker yields.
@@ -231,8 +242,119 @@ func (p *Pipeline) RunOnce(ctx context.Context) (Report, error) {
 		rep.Symbols += syms
 		rep.Refs += refs
 	}
+
+	// v3.3 document pass: walk each workspace again with a document-
+	// specific include set (the symbol-side Include is language-scoped
+	// and doesn't usually let .json / go.mod through). The same
+	// excludes apply, so node_modules / dist / .git stay skipped.
+	if p.Documents != nil {
+		docs, docErrs := p.runDocuments(ctx)
+		rep.Documents = docs
+		rep.Errors = append(rep.Errors, docErrs...)
+	}
+
 	rep.Duration = time.Since(start)
 	return rep, nil
+}
+
+// documentWalkIncludes are the glob patterns the v3.3 document pass
+// uses. Kept here (not in each parser's Supports) because we need
+// them at walk time, before any parser sees the file. New document
+// kinds in future versions extend this list.
+var documentWalkIncludes = []string{
+	"**/*.json", // i18n locale files; also picks up package.json
+	"**/go.mod",
+}
+
+// runDocuments walks every workspace root with documentWalkIncludes,
+// then dispatches each matched file to the document registry. Files
+// also claimed by a symbol parser are skipped (symbol parsers own
+// the files row's language column).
+func (p *Pipeline) runDocuments(ctx context.Context) (int, []error) {
+	var count int
+	var errs []error
+	var documents []repo.File
+
+	switch {
+	case len(p.Workspaces) > 0:
+		for _, ws := range p.Workspaces {
+			dw := repo.NewWalker(ws.Walker.Root, documentWalkIncludes, ws.Walker.Exclude, ws.Walker.MaxFileSizeKB)
+			batch, err := dw.Walk()
+			if err != nil {
+				errs = append(errs, fmt.Errorf("walk documents project=%d: %w", ws.ProjectID, err))
+				continue
+			}
+			for i := range batch {
+				batch[i].ProjectID = ws.ProjectID
+			}
+			documents = append(documents, batch...)
+		}
+	case p.Walker != nil:
+		dw := repo.NewWalker(p.Walker.Root, documentWalkIncludes, p.Walker.Exclude, p.Walker.MaxFileSizeKB)
+		batch, err := dw.Walk()
+		if err != nil {
+			return 0, []error{fmt.Errorf("walk documents: %w", err)}
+		}
+		documents = batch
+	}
+
+	for _, f := range documents {
+		if p.Registry != nil && p.Registry.ForPath(f.RelPath) != nil {
+			continue
+		}
+		dp := p.Documents.ForPath(f.RelPath)
+		if dp == nil {
+			continue
+		}
+		ch, err := p.processDocumentFile(ctx, dp, f)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", f.RelPath, err))
+			continue
+		}
+		if ch {
+			count++
+		}
+	}
+	return count, errs
+}
+
+// processDocumentFile reads + parses one document file and writes
+// its entries. Mirrors processFile (symbol path) but routes through
+// UpsertDocumentFile + ReplaceFileDocumentEntries.
+func (p *Pipeline) processDocumentFile(ctx context.Context, dp parser.DocumentParser, f repo.File) (bool, error) {
+	content, err := os.ReadFile(f.AbsPath)
+	if err != nil {
+		return false, fmt.Errorf("read: %w", err)
+	}
+	res, err := dp.Parse(ctx, f.RelPath, content)
+	if err != nil {
+		return false, fmt.Errorf("parse document: %w", err)
+	}
+	db := p.Index.DB()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	upsert, err := p.Index.UpsertDocumentFile(
+		ctx, tx, f.RelPath, dp.Kind(),
+		int64(len(content)), f.MTimeNS,
+		res.ContentHash, res.ContentHash, f.ProjectID,
+	)
+	if err != nil {
+		return false, err
+	}
+	if !upsert.Changed {
+		return false, tx.Commit()
+	}
+	if err := p.Index.ReplaceFileDocumentEntries(ctx, tx, upsert.FileID, dp.Kind(), res.Entries); err != nil {
+		return true, err
+	}
+	if err := tx.Commit(); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
 // errSkipped is an internal signal that a file had no parser; it never
@@ -253,19 +375,35 @@ func (p *Pipeline) HandleChange(ctx context.Context, relPath, absPath string, re
 		return true, nil
 	}
 	prs := p.Registry.ForPath(relPath)
-	if prs == nil {
-		return false, nil
+	if prs != nil {
+		info, err := os.Stat(absPath)
+		if err != nil {
+			return false, err
+		}
+		f := repo.File{AbsPath: absPath, RelPath: relPath, SizeKB: int(info.Size() / 1024), MTimeNS: info.ModTime().UnixNano()}
+		if p.FileProjectFor != nil {
+			f.ProjectID = p.FileProjectFor(absPath)
+		}
+		ch, _, _, err := p.processFile(ctx, prs, f)
+		return ch, err
 	}
-	info, err := os.Stat(absPath)
-	if err != nil {
-		return false, err
+	// v3.3 document path: no symbol parser claimed it, try the
+	// document registry. Returns silently when neither surface
+	// recognises the file.
+	if p.Documents != nil {
+		if dp := p.Documents.ForPath(relPath); dp != nil {
+			info, err := os.Stat(absPath)
+			if err != nil {
+				return false, err
+			}
+			f := repo.File{AbsPath: absPath, RelPath: relPath, SizeKB: int(info.Size() / 1024), MTimeNS: info.ModTime().UnixNano()}
+			if p.FileProjectFor != nil {
+				f.ProjectID = p.FileProjectFor(absPath)
+			}
+			return p.processDocumentFile(ctx, dp, f)
+		}
 	}
-	f := repo.File{AbsPath: absPath, RelPath: relPath, SizeKB: int(info.Size() / 1024), MTimeNS: info.ModTime().UnixNano()}
-	if p.FileProjectFor != nil {
-		f.ProjectID = p.FileProjectFor(absPath)
-	}
-	ch, _, _, err := p.processFile(ctx, prs, f)
-	return ch, err
+	return false, nil
 }
 
 func (p *Pipeline) processFile(ctx context.Context, prs parser.Parser, f repo.File) (bool, int, int, error) {

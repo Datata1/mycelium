@@ -39,6 +39,123 @@ to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`telemetry_dark_spot` doctor check.** Closes the v3.4 G5
+  field-test finding: a session-tracking-active but
+  `telemetry.enabled: false` repo records the fallback half of
+  agent behaviour (Bash/grep, Read, etc. via `.mycelium/session_*_external.jsonl`)
+  but loses the myco-call half. `myco doctor` now warns when
+  it sees `*_external.jsonl` files but `telemetry.jsonl` is
+  missing or empty — exactly the state today's mycelium-on-mycelium
+  dogfooding sessions left behind. Quiet on fresh repos (no
+  sessions yet) and on repos with both streams populated. The
+  detector is filesystem-only (no DB read, no telemetry parse) so
+  it costs zero on every doctor invocation. Three new tests pin
+  the three states (flag / quiet-when-both / quiet-on-fresh).
+
+- **v3.3 documents surface (B3) — `package.json` + `go.mod` kinds + doctor coverage.**
+  Closes v3.3 with two more document parsers and the doctor check.
+  - `internal/parser/document/package_json.go`: matches files named
+    exactly `package.json`. Emits one entry per dependency across
+    `dependencies`, `devDependencies`, `peerDependencies`,
+    `optionalDependencies`. Section disambiguation is not encoded in
+    the entry — most agent queries are "where is this dep?", not "is
+    it dev?". Token-based walk preserves per-entry line numbers.
+    `workspace:*` and other non-SemVer values flow through unchanged.
+  - `internal/parser/document/go_mod.go`: matches `go.mod` by
+    basename. Delegates to `golang.org/x/mod/modfile` (now a direct
+    dep) for parsing — block vs. single-line requires, indirect
+    annotations, version validation are all handled there. Each
+    require becomes a `(module path → version)` entry; indirect deps
+    keep the `// indirect` marker appended to the value so agents
+    can distinguish first-party from transitive without an extra
+    field. `replace` and `exclude` are intentionally out of scope.
+  - `Reader.Stats.DocumentsByKind map[string]int`: per-kind entry
+    counts populated from a single `GROUP BY kind` query. Empty when
+    no documents are indexed (additive field, `omitempty`).
+  - Doctor `documents_indexed` check: emits when at least one file
+    has a non-NULL `document_kind` OR `Stats.DocumentsByKind` is
+    non-empty. Reports per-kind counts; warns when files registered
+    with a `document_kind` produce zero entries (the symptom of a
+    parser claim with no extracted rows). Code-only repos see no
+    check at all — `Reader.HasDocumentFiles` is the gate.
+  - Both new parsers are auto-registered alongside the i18n parser
+    in `buildDocumentRegistry()` (one helper in `cmd/myco/main.go`
+    shared by the indexer subcommand and the daemon's catch-up
+    scan). All three kinds are always wired; they only fire when
+    matching files exist, so code-only repos pay nothing.
+  - Fixtures: `testdata/fixtures/documents/package.json` (deps +
+    devDeps + peerDeps + workspace value), `go.mod` (direct +
+    indirect requires). Eight new integration subtests cover
+    per-kind indexing, exact-match-wins ordering, indirect markers,
+    stats aggregation, and the doctor check across its three
+    states (skipped / pass / warn).
+
+- **v3.3 documents surface (B2) — `find_document_key` MCP tool.**
+  Turns B1's stored entries into an agent-reachable surface. New
+  `query.Reader.FindDocumentKey(key, kind, project, limit)` runs
+  exact-then-prefix-then-substring matching against `documents.key`
+  with optional `kind` (`i18n_json` | `package_json_deps` |
+  `go_mod_requires`) and workspace `project` filters. Result type
+  `DocumentHit` carries `path` + `project` per the v3.1.2 convention —
+  pass them verbatim to `read_focused`. New IPC method
+  `MethodFindDocumentKey` + `FindDocumentKeyParams`, daemon dispatch,
+  MCP `mapToolToIPC` wiring (now covered by a contract test that
+  every advertised tool resolves to an IPC method). Tool description
+  in `pkg/mcpschema/tools.go` follows the v3.1.2 priming convention
+  ("reach for this **before** `search_lexical` whenever you have a
+  key like `topbar.nav.back`"). The CLAUDE.md priming snippet adds
+  `find_document_key` to the navigation list; `docs/adoption.md`
+  notes when the tool should appear in a healthy telemetry log
+  (existing CLAUDE.md files keep their v3.1.2 snippet — the
+  idempotency marker is preserved, so re-running `myco init` is a
+  no-op on already-primed projects).
+
+- **v3.3 documents surface (B1) — schema + parser infrastructure + i18n JSON kind.**
+  A parallel track to the symbol graph for files whose value is in
+  their `(key, value)` pairs rather than callable structure. Motivated
+  by F3 from the v3.1 field test: agents fell to `Bash(grep -rn)` to
+  find i18n keys because mycelium only indexed code symbols. The
+  documents track has no refs and never participates in `find_symbol`
+  / `get_references` / `get_neighborhood`; agents reach entries via
+  the (forthcoming) `find_document_key` tool and via the existing
+  `search_lexical` over file content. New surfaces:
+
+  - New migration `0007_documents.sql`: `documents` table (file_id,
+    kind, key, value, line) with FTS5 trigram index over key+value,
+    plus a new nullable `files.document_kind` column (NULL for code
+    files, set for document-only files — keeps doctor/stats groupings
+    honest without overloading `files.language`).
+  - New `parser.DocumentParser` interface and `DocumentEntry` /
+    `DocumentResult` types parallel to the symbol-side `Parser`.
+  - New `internal/parser/document/` package with `Registry` (parallel
+    to `parser.Registry`) and the first parser `I18NJSONParser`:
+    handles `.json` files under any `locales/` or `i18n/` directory,
+    flattens nested objects via dotted keys (`topbar.nav.back`),
+    encodes array indices in the key (`items.0`), tracks the leaf
+    string's source line via byte-offset binary search.
+  - New `Index.UpsertDocumentFile` + `Index.ReplaceFileDocumentEntries`
+    write helpers mirroring the symbol path (delete-then-insert per
+    file; content-hash short-circuit; project-membership refresh on
+    unchanged files).
+  - Pipeline: new `Pipeline.Documents *document.Registry` field. When
+    set, after the main symbol pass `RunOnce` runs a second walker per
+    workspace with `documentWalkIncludes = {"**/*.json", "**/go.mod"}`
+    (using the same excludes as the symbol walker so node_modules /
+    dist / .git stay skipped). Files claimed by a symbol parser are
+    skipped at write time. `Report.Documents` reports per-run changed
+    document count. `HandleChange` (watcher path) extended to dispatch
+    to the document registry when no symbol parser claims a changed
+    file. Nil `Documents` keeps the legacy single-surface behaviour
+    byte-for-byte.
+  - New fixture `testdata/fixtures/documents/locales/en.json` and
+    integration test `documents_integration_test.go` covering file
+    registration, key flattening, line tracking, content-hash
+    idempotency, and FTS-index population.
+
+  B2 (`find_document_key` MCP tool) and B3 (`package.json` /
+  `go.mod` parsers + doctor coverage) follow in subsequent tickets;
+  this lands the architectural commitment.
+
 - **Helpful "Did you mean" hints on path-not-found errors.** v3.1.2.
   When `ReadFocused` can't resolve a path (`sql.ErrNoRows` from the
   index lookup), and when `SearchLexical`'s `path_contains` filter

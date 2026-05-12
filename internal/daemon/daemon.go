@@ -384,6 +384,13 @@ func (d *Daemon) dispatchInner(ctx context.Context, req ipc.Request) (any, error
 		}
 		return d.Reader.ReadFocused(ctx, d.RepoRoot, p.Path, p.Focus)
 
+	case ipc.MethodFindDocumentKey:
+		var p ipc.FindDocumentKeyParams
+		if err := unmarshal(req.Params, &p); err != nil {
+			return nil, err
+		}
+		return d.Reader.FindDocumentKey(ctx, p.Key, p.Kind, p.Project, p.Limit)
+
 	default:
 		return nil, fmt.Errorf("unknown method %q", req.Method)
 	}

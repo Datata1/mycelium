@@ -192,6 +192,13 @@ A representative healthy log over a workday of agent activity:
   calls; `get_neighborhood` adds another 10–25%.
 - `search_lexical` is 5–15% — present, but not the dominant tool.
 - `read_focused` shows up regularly for files larger than a few KB.
+- `find_document_key` appears whenever the repo has indexed
+  documents (i18n JSON, `package.json`, `go.mod`) — it should
+  dominate the few times agents need to find i18n keys or
+  dependency entries. If you see `Bash(grep)` for
+  `'topbar.navigation'`-style lookups in transcripts, the agent is
+  missing the tool — likely a priming/description issue rather
+  than a wiring one.
 - Skills-tree reads (in the agent's transcript, not the telemetry
   log) appear at the start of unfamiliar work — `INDEX.md`,
   one or two per-package `SKILL.md`s, occasional aspect reads.

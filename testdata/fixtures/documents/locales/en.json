@@ -1,0 +1,16 @@
+{
+  "topbar": {
+    "navigation": {
+      "back": "Go back",
+      "workspaces": "Go back to team workspaces",
+      "items": ["one", "two"]
+    },
+    "profile": {
+      "settings": "Settings",
+      "logout": "Sign out"
+    }
+  },
+  "errors": {
+    "notFound": "Page not found"
+  }
+}
