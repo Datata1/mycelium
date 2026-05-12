@@ -80,10 +80,16 @@ func (r *Reader) ReadFocused(ctx context.Context, repoRoot, path, focusQ string)
 	var fileID int64
 	var language string
 	var projectRoot sql.NullString
+	// In workspace mode files are stored with project-relative paths
+	// (e.g. "src/utils/plans.ts"), but agents typically pass repo-relative
+	// paths (e.g. "packages/ui-tests/src/utils/plans.ts"). The second OR
+	// condition handles that case: it matches when the passed path equals
+	// the project root joined with the stored path.
 	err := r.db.QueryRowContext(ctx,
 		`SELECT f.id, f.language, p.root
 		 FROM files f LEFT JOIN projects p ON p.id = f.project_id
-		 WHERE f.path = ?`, path,
+		 WHERE f.path = ?
+		    OR (p.root IS NOT NULL AND ? = p.root || '/' || f.path)`, path, path,
 	).Scan(&fileID, &language, &projectRoot)
 	if err == sql.ErrNoRows {
 		return out, fmt.Errorf("file not in index: %s", path)

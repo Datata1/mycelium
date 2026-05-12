@@ -151,9 +151,6 @@ func SuggestProjectName(relDir string) string {
 	base := parts[len(parts)-1]
 	if genericNames[strings.ToLower(base)] && len(parts) >= 2 {
 		parent := parts[len(parts)-2]
-		// Strip common suffixes from parent to keep names concise.
-		parent = strings.TrimSuffix(parent, "-service")
-		parent = strings.TrimSuffix(parent, "-svc")
 		return parent + "-" + base
 	}
 	return base

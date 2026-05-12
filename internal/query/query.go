@@ -399,8 +399,10 @@ func (r *Reader) GetFileOutline(ctx context.Context, path, focusQ string) ([]Fil
 		SELECT s.id, s.name, s.qualified, s.kind, s.start_line, s.end_line,
 		       COALESCE(s.signature, ''), COALESCE(s.parent_id, 0)
 		FROM symbols s JOIN files f ON f.id = s.file_id
+		         LEFT JOIN projects p ON p.id = f.project_id
 		WHERE f.path = ?
-		ORDER BY s.start_line`, path)
+		   OR (p.root IS NOT NULL AND ? = p.root || '/' || f.path)
+		ORDER BY s.start_line`, path, path)
 	if err != nil {
 		return nil, err
 	}

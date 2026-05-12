@@ -36,7 +36,10 @@ func (r *Reader) GetFileSummary(ctx context.Context, path string) (FileSummary, 
 
 	var fileID int64
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, language FROM files WHERE path = ?`, path,
+		`SELECT f.id, f.language
+		 FROM files f LEFT JOIN projects p ON p.id = f.project_id
+		 WHERE f.path = ?
+		    OR (p.root IS NOT NULL AND ? = p.root || '/' || f.path)`, path, path,
 	).Scan(&fileID, &s.Language)
 	if err == sql.ErrNoRows {
 		return s, nil
