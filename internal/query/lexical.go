@@ -41,11 +41,15 @@ func (r *Reader) SearchLexical(ctx context.Context, pattern, pathContains, proje
 	}
 	re, err := regexp.Compile(pattern)
 	if err != nil {
-		return nil, fmt.Errorf("compile pattern: %w", err)
+		// v4 T3: regex compile errors get an actionable hint —
+		// agents typing `WorkspacePlan|plans` should know whether the
+		// engine takes Go regexp syntax (it does — `|` is alternation,
+		// `.` is any-char, etc.) versus a literal-string surface.
+		return []LexicalHit{}, fmt.Errorf("compile pattern %q: %w (Go regexp syntax: |, ., [], (?i), etc. all supported; use regexp.QuoteMeta-style escaping for literal strings)", pattern, err)
 	}
 	paths, err := r.candidatePaths(ctx, pathContains, project, pathsIn)
 	if err != nil {
-		return nil, err
+		return []LexicalHit{}, err
 	}
 	// When the caller's path_contains filter eliminates every indexed
 	// file, the worker pool would silently return zero hits and the
@@ -53,7 +57,7 @@ func (r *Reader) SearchLexical(ctx context.Context, pattern, pathContains, proje
 	// files." Surface it as an explicit error with basename-match
 	// suggestions so the agent can correct the filter on the next call.
 	if pathContains != "" && len(paths) == 0 {
-		return nil, fmt.Errorf("no indexed files match path_contains=%q%s",
+		return []LexicalHit{}, fmt.Errorf("no indexed files match path_contains=%q (try a different substring or omit the filter)%s",
 			pathContains, formatPathSuggestions(suggestPaths(ctx, r.db, pathContains, 3)))
 	}
 
@@ -102,7 +106,7 @@ func (r *Reader) SearchLexical(ctx context.Context, pattern, pathContains, proje
 		close(hitsCh)
 	}()
 
-	var hits []LexicalHit
+	hits := []LexicalHit{}
 	for h := range hitsCh {
 		hits = append(hits, h)
 		if len(hits) >= k {
@@ -115,6 +119,17 @@ func (r *Reader) SearchLexical(ctx context.Context, pattern, pathContains, proje
 	}
 	if ctx.Err() != nil {
 		return hits, ctx.Err()
+	}
+	// v4 T3: log a daemon-side hint when path_contains narrowed the
+	// candidate set but no hits surfaced — turns silent zero-results
+	// into a debuggable signal in `myco daemon` logs without changing
+	// the wire shape. The empty-slice return (instead of nil) means
+	// JSON consumers see `[]`, not `null`, so "0 hits" is
+	// distinguishable from "this tool returned nothing meaningful".
+	if pathContains != "" && len(hits) == 0 {
+		fmt.Fprintf(os.Stderr,
+			"[search_lexical] 0 hits for pattern=%q in %d files matching path_contains=%q — try widening the path filter or simplifying the pattern\n",
+			pattern, len(paths), pathContains)
 	}
 	return hits, nil
 }

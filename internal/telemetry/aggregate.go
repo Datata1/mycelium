@@ -21,6 +21,14 @@ type Summary struct {
 	OK           int           `json:"ok"`
 	InputBytes   int64         `json:"in_bytes_total"`
 	OutputBytes  int64         `json:"out_bytes_total"`
+	// v4 T5: bytes from successful calls only — counterfactual basis.
+	// `OutputBytes` includes failed-call bytes (e.g. 4-14 bytes for a
+	// "null" response on find_symbol when the symbol isn't indexed),
+	// which earn misleading "savings" credit even though the agent
+	// almost certainly fell through to grep / Read for the same task.
+	// Tracking the OK-only sum lets ComputeSessionCost gate per-tool
+	// counterfactual contributions on whether myco actually succeeded.
+	OutputBytesOK int64         `json:"out_bytes_ok,omitempty"`
 	MeanDuration time.Duration `json:"mean_duration"`
 	P50Duration  time.Duration `json:"p50_duration"`
 	P95Duration  time.Duration `json:"p95_duration"`
@@ -35,6 +43,7 @@ type accum struct {
 	ok          int
 	inBytes     int64
 	outBytes    int64
+	outBytesOK  int64 // v4 T5: only when r.OK was true
 	durations   []time.Duration
 	first, last time.Time
 }
@@ -95,6 +104,7 @@ func AggregateSince(path string, since time.Time) ([]Summary, error) {
 			target.count++
 			if r.OK {
 				target.ok++
+				target.outBytesOK += int64(r.OutputBytes)
 			}
 			target.inBytes += int64(r.InputBytes)
 			target.outBytes += int64(r.OutputBytes)
@@ -242,7 +252,21 @@ func ComputeSessionCostFor(myco []Summary, fallback []ExternalSummary, charsPerT
 		// when the savings number is dominated by low-quality estimates.
 		// v4 B3: language is plumbed through so per-language overrides
 		// (when populated) take effect for repo-tuned savings numbers.
-		est := EstimateCounterfactualFor(s.Tool, s.OutputBytes, language)
+		// v4 T5: counterfactual basis is OutputBytesOK (only successful
+		// calls earn savings credit). When myco fails (e.g. find_symbol
+		// returns null on an unindexed symbol), the agent still falls
+		// through to grep — counting the tiny "null" response toward
+		// savings would lie about myco's value. Fall back to OutputBytes
+		// when OutputBytesOK isn't populated (older callers, synthetic
+		// tests) so the v3.4-shape fixtures continue to work.
+		basis := s.OutputBytesOK
+		if basis == 0 && s.OK == s.Count {
+			// All-success summary that didn't bother filling OutputBytesOK
+			// (older tests pass Summary literals without it). Treat
+			// OutputBytes as the basis to preserve v3.4 semantics.
+			basis = s.OutputBytes
+		}
+		est := EstimateCounterfactualFor(s.Tool, basis, language)
 		if est.Quality != EstimateQualityNone {
 			cost.MycoCounterfactualBytes += est.Bytes
 			cost.CounterfactualQualityMix[est.Quality] += s.Count
@@ -332,6 +356,7 @@ func summarize(name string, a *accum) (s Summary) {
 	s.OK = a.ok
 	s.InputBytes = a.inBytes
 	s.OutputBytes = a.outBytes
+	s.OutputBytesOK = a.outBytesOK
 	s.First = a.first
 	s.Last = a.last
 	if len(a.durations) == 0 {

@@ -587,9 +587,9 @@ func TestEstimateCounterfactual_KnownAndUnknown(t *testing.T) {
 func TestComputeSessionCost_Counterfactual(t *testing.T) {
 	t.Parallel()
 	myco := []Summary{
-		{Tool: "find_symbol", Count: 5, OutputBytes: 5_000},   // 0.8 medium → 4000
-		{Tool: "read_focused", Count: 3, OutputBytes: 30_000}, // 4.0 high → 120000 (v4 B1 preview mode)
-		{Tool: "stats", Count: 2, OutputBytes: 200},           // 0 none → skipped
+		{Tool: "find_symbol", Count: 5, OK: 5, OutputBytes: 5_000, OutputBytesOK: 5_000},   // 0.8 medium → 4000
+		{Tool: "read_focused", Count: 3, OK: 3, OutputBytes: 30_000, OutputBytesOK: 30_000}, // 4.0 high → 120000 (v4 B1 preview mode)
+		{Tool: "stats", Count: 2, OK: 2, OutputBytes: 200, OutputBytesOK: 200},               // 0 none → skipped
 	}
 	fallback := []ExternalSummary{
 		{Tool: "Read", Count: 4, InputBytes: 40, OutputBytes: 20_000},
@@ -766,6 +766,38 @@ func TestSession_ClaudeIDAsSessionID(t *testing.T) {
 	}
 	if !strings.HasPrefix(meta2.ID, "ses_") {
 		t.Errorf("manual session ID = %q, want ses_ prefix", meta2.ID)
+	}
+}
+
+// TestIsWrapperOnly_v4_T7 pins the v4 T7 fix: ParseTranscript must
+// skip user messages whose body is exclusively an IDE wrapper tag
+// (`<ide_opened_file>...</ide_opened_file>`, `<system-reminder>...`,
+// etc.) so the session export's `Task` field shows the user's real
+// prose, not auto-injected context. F1/T7 surfaced this against a
+// monorepo-4 export where `Task: <ide_opened_file>...</ide_opened_file>`
+// replaced the actual PR-feedback prompt.
+func TestIsWrapperOnly_v4_T7(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"empty", "", true},
+		{"only-ide-wrapper", "<ide_opened_file>The user opened the file /x.ts in the IDE.</ide_opened_file>", true},
+		{"only-ide-wrapper-with-trailing-ws", "<ide_opened_file>foo</ide_opened_file>\n  ", true},
+		{"system-reminder-only", "<system-reminder>token used</system-reminder>", true},
+		{"command-name-only", "<command-name>/usage</command-name>", true},
+		{"prose-then-wrapper", "Please fix this. <ide_opened_file>foo</ide_opened_file>", false},
+		{"wrapper-then-prose", "<ide_opened_file>foo</ide_opened_file>\n\nNow do this.", false},
+		{"plain-prose", "I got feedback on my PR regarding this feature branch.", false},
+		{"prose-with-tag-name-but-no-wrapping", "We use <ide_opened_file> as a marker", false},
+	}
+	for _, tc := range cases {
+		got := isWrapperOnly(tc.in)
+		if got != tc.want {
+			t.Errorf("%s: isWrapperOnly(%q) = %v, want %v", tc.name, tc.in, got, tc.want)
+		}
 	}
 }
 

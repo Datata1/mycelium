@@ -107,6 +107,11 @@ func main() {
 		newReadCmd(),
 		newSessionCmd(),
 		newBenchCounterfactualCmd(),
+		// v4 T6 ergonomics: top-level aliases for the two queries
+		// users (and agents) reach for by reflex. Both delegate to
+		// the existing `query` subcommands' run functions.
+		newTopLevelFindCmd(),
+		newTopLevelSearchCmd(),
 	)
 
 	if err := root.Execute(); err != nil {
@@ -406,6 +411,59 @@ func resolveCLISince(ctx context.Context, rc repoCtx, since string) ([]string, e
 		return nil, nil
 	}
 	return gitref.ResolveSince(ctx, rc.Root, since)
+}
+
+// newTopLevelFindCmd is the v4 T6 ergonomics fix: users (and agents)
+// reach for `myco find` by reflex; the actual command is buried under
+// `myco query find`. This thin wrapper delegates to runQueryFind so
+// the top-level command line matches user intuition without
+// duplicating logic. F1/T6 surfaced this against monorepo-4.
+func newTopLevelFindCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "find <name>",
+		Short:   "Find symbols by name (alias for `myco query find`)",
+		Aliases: []string{"find-symbol"},
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			kind, _ := cmd.Flags().GetString("kind")
+			limit, _ := cmd.Flags().GetInt("limit")
+			project, _ := cmd.Flags().GetString("project")
+			since, _ := cmd.Flags().GetString("since")
+			focus, _ := cmd.Flags().GetString("focus")
+			return runQueryFind(args[0], kind, project, since, focus, limit)
+		},
+	}
+	cmd.Flags().String("kind", "", "filter by kind: function | method | type | interface | var | const")
+	cmd.Flags().Int("limit", 20, "max results")
+	cmd.Flags().String("project", "", "restrict to a workspace project (by name)")
+	cmd.Flags().String("since", "", "restrict to files changed between <ref>...HEAD")
+	cmd.Flags().String("focus", "", "v2.4 lexical focus filter")
+	return cmd
+}
+
+// newTopLevelSearchCmd: same ergonomics fix for `myco search` →
+// `myco query grep`. Pattern syntax is Go regexp (`.`, `|`, `[...]`
+// all work) — documented in the help so agents that try alternation
+// know it's supported.
+func newTopLevelSearchCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "search <pattern>",
+		Short:   "Ripgrep-style regex search across indexed files (alias for `myco query grep`)",
+		Aliases: []string{"grep"},
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			k, _ := cmd.Flags().GetInt("k")
+			path, _ := cmd.Flags().GetString("path")
+			project, _ := cmd.Flags().GetString("project")
+			since, _ := cmd.Flags().GetString("since")
+			return runQueryLexical(args[0], path, project, since, k)
+		},
+	}
+	cmd.Flags().Int("k", 50, "max results")
+	cmd.Flags().String("path", "", "filter by path substring")
+	cmd.Flags().String("project", "", "restrict to a workspace project (by name)")
+	cmd.Flags().String("since", "", "restrict to files changed between <ref>...HEAD")
+	return cmd
 }
 
 func runQueryFind(name, kind, project, since, focus string, limit int) error {
@@ -3091,6 +3149,7 @@ func newBenchCounterfactualCmd() *cobra.Command {
 		format         string
 		repoOverride   string
 		language       string
+		adaptive       bool
 	)
 	cmd := &cobra.Command{
 		Use:   "bench-counterfactual",
@@ -3100,19 +3159,25 @@ shell fallback (grep / wc -c / find), then compares the measured byte
 ratio against the modelled multiplier in internal/telemetry/counterfactual.go.
 
 Drift exceeding --drift-threshold (default 0.50 = 50%) on any tool
-exits with status 1, so calibration regressions break CI loudly. The
-default corpus is mycelium-tuned (hard-coded targets that exist in
-this repo); v4 B3's --repo flag points at another repo's daemon
-socket but the corpus stays mycelium-tuned, so external repos will
-show ERR rows for missing targets until v4.1's adaptive corpus lands.
+exits with status 1, so calibration regressions break CI loudly.
+
+Two corpora are supported:
+  - default (mycelium-tuned): hard-coded targets that exist in this
+    repo. Use for re-validating the calibration against mycelium-self.
+  - --adaptive: probes the daemon (list_files + get_file_outline)
+    to pick representative (file, symbol) targets for any indexed
+    repo. Use this when running against external repos via --repo.
+
+When --repo is passed without --adaptive, the bench will likely show
+ERR rows because mycelium-tuned targets won't exist in other repos.
+A friendly error suggests --adaptive in that case.
 
 --language selects the per-language multiplier override when one
-is populated (see counterfactualModel.perLang). Empty falls through
-to the global default — pre-v4-B3 behaviour.
+is populated (see counterfactualModel.perLang).
 
 Requires a running daemon (start with ` + "`myco daemon`" + `).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runBenchCounterfactual(driftThreshold, format, repoOverride, language)
+			return runBenchCounterfactual(driftThreshold, format, repoOverride, language, adaptive)
 		},
 	}
 	cmd.Flags().Float64Var(&driftThreshold, "drift-threshold", 0.5,
@@ -3122,10 +3187,12 @@ Requires a running daemon (start with ` + "`myco daemon`" + `).`,
 		"absolute path to a repo whose daemon socket should be used (default: cwd's repo)")
 	cmd.Flags().StringVar(&language, "language", "",
 		"dominant repo language (go, typescript, python, rust, …) — selects the per-language multiplier override when populated")
+	cmd.Flags().BoolVar(&adaptive, "adaptive", false,
+		"probe the daemon to pick representative targets dynamically (recommended for --repo against non-mycelium repos)")
 	return cmd
 }
 
-func runBenchCounterfactual(driftThreshold float64, format, repoOverride, language string) error {
+func runBenchCounterfactual(driftThreshold float64, format, repoOverride, language string, adaptive bool) error {
 	root := repoOverride
 	socket := ""
 	if root == "" {
@@ -3150,8 +3217,30 @@ func runBenchCounterfactual(driftThreshold float64, format, repoOverride, langua
 			root, socket)
 	}
 
-	corpus := bench.MyceliumDefaultCorpus()
+	// v4 T4: adaptive corpus probes the daemon for real targets in
+	// the indexed repo. Falls back to the mycelium-tuned default with
+	// a clear error if probing fails (e.g. empty index).
+	var corpus bench.Corpus
+	if adaptive {
+		c, err := bench.BuildAdaptiveCorpus(client)
+		if err != nil {
+			return fmt.Errorf("--adaptive: %w (try without --adaptive on a mycelium repo)", err)
+		}
+		corpus = c
+	} else {
+		corpus = bench.MyceliumDefaultCorpus()
+	}
+
 	rows := bench.Run(client, root, corpus, language, driftThreshold)
+
+	// v4 T4: when --repo points at an external repo without --adaptive,
+	// the static corpus is likely to ERR on most rows. Help the user
+	// reach for --adaptive instead of debugging the apparent drift.
+	if !adaptive && repoOverride != "" && allRowsFailed(rows) {
+		fmt.Fprintf(os.Stderr,
+			"\nhint: every row failed against --repo %s — the default corpus is mycelium-tuned. Re-run with --adaptive to probe targets from the indexed repo.\n",
+			repoOverride)
+	}
 
 	switch format {
 	case "json":
@@ -3171,4 +3260,17 @@ func runBenchCounterfactual(driftThreshold float64, format, repoOverride, langua
 		}
 	}
 	return nil
+}
+
+// allRowsFailed is the v4 T4 helper that detects "wrong corpus for
+// this repo" — every Row carries an Err. Used to print the
+// --adaptive hint without inferring from per-row drift values that
+// happen to be "DRIFT" for legitimate calibration reasons.
+func allRowsFailed(rows []bench.Row) bool {
+	for _, r := range rows {
+		if r.Err == "" {
+			return false
+		}
+	}
+	return len(rows) > 0
 }

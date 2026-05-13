@@ -209,8 +209,15 @@ func parseTranscriptReader(r io.Reader) (TranscriptSummary, error) {
 		}
 
 		// Extract first user message text for task identification.
+		// v4 T7: skip messages whose body is exclusively an IDE
+		// wrapper tag (`<ide_opened_file>...</ide_opened_file>`,
+		// `<system-reminder>`, etc.) — those aren't user prose, they
+		// are tool-injected context that the agent didn't ask for.
+		// Falling through to the next message is the right answer:
+		// the actual task description is the first prose the user
+		// typed.
 		if msg.Role == "user" && !firstUserDone {
-			if text := extractFirstText(msg.Content); text != "" {
+			if text := extractFirstText(msg.Content); text != "" && !isWrapperOnly(text) {
 				s.FirstUserMessage = truncateStr(text, 300)
 				firstUserDone = true
 			}
@@ -477,6 +484,37 @@ func extractToolResultText(raw json.RawMessage) string {
 		}
 	}
 	return string(raw)
+}
+
+// isWrapperOnly returns true when the message body is exclusively a
+// known IDE / hook tag wrapper with no user prose around it. Used by
+// v4 T7's first-user-message extraction to skip auto-injected
+// context blocks that masquerade as user turns. Heuristic — matches
+// trimmed text that starts with one of the known tags and contains
+// no character outside the wrapper.
+func isWrapperOnly(text string) bool {
+	t := strings.TrimSpace(text)
+	if t == "" {
+		return true
+	}
+	for _, tag := range []string{
+		"<ide_opened_file>", "<ide_selection>", "<ide_diagnostics>",
+		"<system-reminder>", "<command-name>", "<local-command-stdout>",
+	} {
+		if !strings.HasPrefix(t, tag) {
+			continue
+		}
+		// The closing tag is `</ide_opened_file>` (the same name
+		// with a slash). When the text starts with the open tag and
+		// the close tag's index is the LAST meaningful position,
+		// nothing user-typed lives outside the wrapper.
+		closeTag := "</" + strings.TrimPrefix(tag, "<")
+		ci := strings.LastIndex(t, closeTag)
+		if ci >= 0 && strings.TrimSpace(t[ci+len(closeTag):]) == "" {
+			return true
+		}
+	}
+	return false
 }
 
 func extractFirstText(raw json.RawMessage) string {

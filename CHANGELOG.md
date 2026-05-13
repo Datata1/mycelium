@@ -25,6 +25,61 @@ architectural pillars** — see the roadmap for explicit out-of-scope
 
 #### Fixed
 
+- **F1 follow-up batch (T3-T7): five smaller field-test fixes.**
+  - **T3 — `search_lexical` ergonomics.** Three changes: empty results
+    return `[]LexicalHit{}` not `nil` (JSON consumers see `[]` instead
+    of `null`, distinguishable from "tool errored"); regex compile
+    errors gain an actionable hint ("Go regexp syntax: |, ., [], (?i)
+    all supported"); the path-eliminate-all error message suggests
+    omitting the filter; the daemon logs a one-line stderr hint when
+    `path_contains` narrowed the candidate set but no hits surfaced
+    (debuggable signal in `myco daemon` output).
+  - **T4 — adaptive corpus for `bench-counterfactual`.** New
+    `bench.BuildAdaptiveCorpus(client)` probes the daemon
+    (`list_files` → pick the heaviest indexed file by `symbol_count`
+    → `get_file_outline` → pick the first non-trivial symbol) to
+    construct a corpus targeting REAL symbols + files in any
+    indexed repo. New `--adaptive` flag opts in. When `--repo` is
+    passed without `--adaptive` and every row fails, the bench
+    prints a concrete hint: "the default corpus is mycelium-tuned;
+    re-run with --adaptive". Closes the F1/T4 silent-DRIFT case.
+  - **T5 — counterfactual gates on success.** `Summary.OutputBytesOK`
+    new field tracks bytes from successful calls only. Aggregator
+    changes counterfactual basis from `OutputBytes` to
+    `OutputBytesOK` so a `find_symbol` that returned `null` (4-14
+    bytes for the failed envelope) doesn't earn savings credit.
+    F1's session showed `-0.1% savings` because failed myco calls
+    diluted the math; post-fix the model is honest — failed calls
+    contribute zero to the without-myco estimate, so savings goes
+    appropriately negative when myco failed and the agent paid the
+    fallback anyway. Backward-compat shim: when `OutputBytesOK == 0`
+    AND `OK == Count`, falls back to `OutputBytes` so v3.4-shape
+    fixtures continue to work.
+  - **T6 — top-level `myco find` and `myco search` aliases.** Users
+    (and agents) typed `myco find symbol WorkspacePlan` and
+    `myco search "WorkspacePlan|plans"` during F1 — both errored
+    because the actual subcommands are buried under `myco query`.
+    Two new top-level cobra commands delegate to the existing
+    `runQueryFind` / `runQueryLexical` so reflexive command names
+    just work. `myco find` also aliases as `find-symbol`;
+    `myco search` aliases as `grep`. The original `myco query find`
+    / `myco query grep` keep working unchanged.
+  - **T7 — strip IDE wrapper tags from session "Task" field.** A
+    session that begins with an IDE-injected `<ide_opened_file>...`
+    or `<system-reminder>...` block used to surface that tag-soup
+    as the session's task description in `myco session export`.
+    Now `parseTranscriptReader` skips messages whose body is
+    exclusively a wrapper tag (`<ide_opened_file>`, `<ide_selection>`,
+    `<system-reminder>`, `<command-name>`, `<local-command-stdout>`)
+    and falls through to the next user message. Mixed-content
+    messages (wrapper + prose) keep their content. Nine-case unit
+    test pins the heuristic.
+
+  All five land in one bundle because each is small and they
+  collectively complete the F1 v4 P0+P1+P2 follow-ups. T3 ergonomics
+  + T4 adaptive corpus + T5 counterfactual honesty are the load-
+  bearing fixes; T6 + T7 are usability polish.
+
 - **Daemon fd-leak on large repos (F1/T2 EMFILE).** Codesphere
   `monorepo-4` (3079 files, 49 packages) hit `too many open files`
   on macOS during a real session because fsnotify consumes one fd
