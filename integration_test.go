@@ -78,8 +78,9 @@ func TestIntegration_IndexAndQuery(t *testing.T) {
 		if err != nil {
 			t.Fatalf("stats: %v", err)
 		}
-		if s.Files != 3 {
-			t.Errorf("files: got %d, want 3", s.Files)
+		// 4 files: main.go + auth.ts + py + types.d.ts (v4 .d.ts fixture).
+		if s.Files != 4 {
+			t.Errorf("files: got %d, want 4", s.Files)
 		}
 		if s.Symbols < 8 {
 			t.Errorf("symbols: got %d, want >=8", s.Symbols)
@@ -87,6 +88,36 @@ func TestIntegration_IndexAndQuery(t *testing.T) {
 		for _, lang := range []string{"go", "typescript", "python"} {
 			if s.ByLang[lang] == 0 {
 				t.Errorf("expected files for language %s, got 0", lang)
+			}
+		}
+	})
+
+	t.Run("find_symbol_in_d_ts_v4_T1_fix", func(t *testing.T) {
+		// v4 P0 fix for the F1/T1 finding: type aliases / interfaces
+		// defined in `.d.ts` declaration files must be findable via
+		// find_symbol. The fixture testdata/fixtures/sample/src/types.d.ts
+		// mirrors the monorepo-4 shape that returned null. Each shape
+		// (interface, type alias, enum) gets its own assertion so a
+		// regression on any one fails loudly with the right name.
+		cases := []struct {
+			name      string
+			wantKind  string // empty = don't check kind
+			qualified string
+		}{
+			{"WorkspacePlan", "", "types.WorkspacePlan"}, // interface
+			{"WorkspacePlanMap", "", "types.WorkspacePlanMap"}, // type alias
+			{"PlanSelector", "", "types.PlanSelector"}, // type alias (object)
+			{"PlanTier", "", "types.PlanTier"}, // enum
+		}
+		for _, tc := range cases {
+			res, err := reader.FindSymbol(ctx, tc.name, "", "", 10, nil, "")
+			if err != nil {
+				t.Errorf("find_symbol(%q): %v", tc.name, err)
+				continue
+			}
+			if !hasQualified(res.Matches, tc.qualified) {
+				t.Errorf("%s: expected %q in matches; got %v",
+					tc.name, tc.qualified, names(res.Matches))
 			}
 		}
 	})
@@ -176,8 +207,9 @@ func TestIntegration_IndexAndQuery(t *testing.T) {
 		if err != nil {
 			t.Fatalf("list_files: %v", err)
 		}
-		if len(files) != 3 {
-			t.Errorf("files: got %d, want 3", len(files))
+		// 4 files: main.go + auth.ts + py + types.d.ts (v4 .d.ts fixture).
+		if len(files) != 4 {
+			t.Errorf("files: got %d, want 4", len(files))
 		}
 	})
 

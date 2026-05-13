@@ -87,6 +87,13 @@ type Thresholds struct {
 	// `git clone` away from fsnotify silently dropping watches.
 	InotifyWarn float64
 	InotifyFail float64
+
+	// v4 T2 layer 1: daemon fd-headroom (open fds vs RLIMIT_NOFILE
+	// soft). WARN at 60% utilisation, FAIL at 90%. Pairs with v4 T2
+	// layer 3's setrlimit-on-startup bump — together they preempt
+	// the F1/T2 EMFILE failure mode on monorepo-scale repos.
+	FDHeadroomWarn float64
+	FDHeadroomFail float64
 	// v3.1: per-project file-count thresholds for the
 	// projects_configured_but_empty check. EmptyProjectFail = files
 	// strictly below this fail (default 1, i.e. 0 files fails);
@@ -117,6 +124,8 @@ func DefaultThresholds() Thresholds {
 		StaleFail:      1000,
 		InotifyWarn:      0.50,
 		InotifyFail:      0.90,
+		FDHeadroomWarn:   0.60,
+		FDHeadroomFail:   0.90,
 		EmptyProjectFail: 1,
 		EmptyProjectWarn: 10,
 
@@ -298,6 +307,13 @@ func Run(ctx context.Context, r *query.Reader, embedderProvider string, th Thres
 	// empty (e.g. tests running against a bare DB).
 	if repoRoot != "" {
 		if c := inotifyCheck(repoRoot, th); c != nil {
+			add(*c)
+		}
+		// v4 T2 layer 1: read the daemon's PID file (written by
+		// runDaemon) and probe /proc/<pid>/fd to surface fd-headroom
+		// pressure before EMFILE hits. Linux-only; no-op stub on
+		// macOS / Windows.
+		if c := daemonFDHeadroomCheck(repoRoot, th); c != nil {
 			add(*c)
 		}
 	}

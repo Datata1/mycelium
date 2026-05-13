@@ -23,6 +23,92 @@ route literals as a symbol kind, one new language. **No new
 architectural pillars** — see the roadmap for explicit out-of-scope
 (federation, GraphStore swap, live A/B counterfactual all stay v5+).
 
+#### Fixed
+
+- **Daemon fd-leak on large repos (F1/T2 EMFILE).** Codesphere
+  `monorepo-4` (3079 files, 49 packages) hit `too many open files`
+  on macOS during a real session because fsnotify consumes one fd
+  per watched directory and the macOS default `RLIMIT_NOFILE` soft
+  limit is 256. Three-layer fix:
+
+  1. **Layer 3 (the real fix): bump `RLIMIT_NOFILE` to hard at
+     daemon startup.** New `internal/daemon/RaiseFileDescriptorLimit()`
+     is called in `runDaemon` before any fd-consuming code runs.
+     macOS goes 256 → ~10240 (40× headroom); Linux goes 1024 →
+     ~1048576 (1024× headroom). Verified live: daemon now logs
+     `[daemon] RLIMIT_NOFILE raised to 1048576 (hard cap 1048576)`
+     on startup. macOS quirk handled: when Setrlimit to hard fails
+     (kernel `kern.maxfilesperproc` cap), we step down through
+     {10240, 4096, 2048, 1024} and accept whichever the kernel
+     allows. Failure is non-fatal (warning logged, daemon continues
+     at original limit). Windows is a no-op (per-process handle
+     limit is 16M+, not a real constraint). Build-tagged
+     `rlimit_unix.go` + `rlimit_other.go` for portability.
+
+  2. **Layer 1 (diagnostic): `daemon_fd_headroom` doctor check.**
+     New `internal/doctor/fd_headroom_linux.go` reads the daemon's
+     PID file (newly written by `runDaemon`) and probes
+     `/proc/<pid>/fd` + `/proc/<pid>/limits` to surface fd-headroom
+     pressure before EMFILE hits. WARN at 60% utilisation, FAIL at
+     90% (`Thresholds.FDHeadroomWarn` / `FDHeadroomFail`). Skips
+     gracefully on missing pid file (daemon not running), stale pid
+     (daemon died without cleanup), or unreadable `/proc`
+     (sandboxed environments). Linux-only; `fd_headroom_other.go`
+     is a no-op stub on macOS / Windows because counting another
+     process's fds requires `lsof` (sub-process, brittle) or
+     platform-specific syscalls — and on macOS the layer 3 setrlimit
+     bump preempts the EMFILE case anyway, so the check is less
+     load-bearing there. Three unit tests cover the no-pid-file,
+     stale-pid, and real-process paths.
+
+  3. **Layer 2 (already shipped): Watchman backend.** Inventory
+     during T2 work showed `internal/watch/watchman/` is fully
+     implemented (1477 LOC, opt-in via `watcher.backend: watchman`
+     in `.mycelium.yml` since v1.7). Users with monorepos beyond
+     even Layer 3's headroom set the config flag and watchman takes
+     over. The existing `inotify_headroom` doctor check already
+     points at this path; no changes needed.
+
+  Daemon also writes `.mycelium/daemon.pid` on startup (best-effort,
+  cleaned up on shutdown via defer) so the doctor check has
+  something to probe. Not exposed as a public API — implementation
+  detail of T2 layer 1.
+
+  Closes the F1/T2 blocker. Phase 2 field tests can now run on
+  monorepo-scale repos without hitting the macOS 256-fd cap; Linux
+  users get a doctor warning before crossing 60% utilisation.
+
+- **TypeScript `.d.ts` indexing — the F1/T1 adoption blocker.** The
+  default include glob was `src/**/*.{ts,tsx}` which narrowed TS
+  coverage to files inside `src/`. Codesphere `monorepo-4`'s field
+  test surfaced this: `find_symbol{name: "WorkspacePlan"}` returned
+  null because the type is defined in
+  `packages/payment-service/common/lib/Product.d.ts` —
+  outside `src/`, never walked. Default include broadened to
+  `**/*.{ts,tsx,d.ts,mts,cts}` so all common TS source locations
+  (package roots, `lib/`, ambient declarations, test config files)
+  are picked up; compiled outputs continue to be excluded by
+  `**/dist/**` / `**/build/**`. Wizard inherits via `config.Default()`
+  — no separate template change needed.
+
+  Also fixed the `moduleName` qualifier for `.d.ts` files: previously
+  `Product.d.ts` produced symbols qualified as `Product.d.WorkspacePlan`
+  (the `.d` suffix wasn't stripped), now strips `.d.ts` / `.d.mts` /
+  `.d.cts` as a unit so qualified names match the source file
+  (`Product.d.ts` → `Product.WorkspacePlan`). Pure rename — symbol
+  identity / refs continue to resolve.
+
+  New fixture `testdata/fixtures/sample/src/types.d.ts` mirrors the
+  monorepo-4 shape: `interface WorkspacePlan`, `type WorkspacePlanMap`,
+  `type PlanSelector`, `enum PlanTier`, `declare module`. New
+  integration test `find_symbol_in_d_ts_v4_T1_fix` asserts each
+  shape returns from `find_symbol`. Existing `stats` and `list_files`
+  expected file count bumped from 3 → 4 to include the new fixture.
+  `task check` green; `myco bench-counterfactual` continues to pass
+  (unrelated surface). Closes the F1/T1 blocker; Phase 2 Python
+  field test (planned) will replicate the fixture for `.pyi` stub
+  files.
+
 #### Added
 
 - **B3 — multi-repo bench-counterfactual harness.** The bench-counterfactual

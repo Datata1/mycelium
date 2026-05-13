@@ -78,8 +78,19 @@ func (p *Parser) Parse(ctx context.Context, path string, content []byte) (parser
 // moduleName derives a package-ish prefix for qualified names. Using the
 // file basename (sans extension) is conventional for TS modules and gives
 // reasonable dedup without a full module resolver.
+//
+// `.d.ts` / `.d.mts` / `.d.cts` declaration files get the *.d.X suffix
+// stripped as a unit so the module name matches the corresponding source
+// file (`Product.d.ts` → `"Product"`, not `"Product.d"`). The
+// last-dot strip used for regular extensions would otherwise leave a
+// `.d` suffix that pollutes the qualified name. Surfaced by v4 F1/T1.
 func moduleName(path string) string {
 	base := filepath.Base(path)
+	for _, suf := range []string{".d.ts", ".d.mts", ".d.cts"} {
+		if strings.HasSuffix(base, suf) {
+			return base[:len(base)-len(suf)]
+		}
+	}
 	if i := strings.LastIndexByte(base, '.'); i > 0 {
 		base = base[:i]
 	}

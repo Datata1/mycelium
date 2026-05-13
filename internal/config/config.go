@@ -141,7 +141,16 @@ func Default() Config {
 	return Config{
 		Version:   CurrentVersion,
 		Languages: []string{"go", "typescript", "python"},
-		Include:   []string{"**/*.go", "src/**/*.{ts,tsx}", "**/*.py"},
+		// v4 fix for the F1/T1 dts-indexing bug: the previous
+		// `src/**/*.{ts,tsx}` glob narrowed TS coverage to files inside
+		// `src/`, missing common type-definition locations like
+		// `lib/`, package roots (`vite.config.ts`), and ambient
+		// declaration files (`*.d.ts`) that monorepo-style TS repos
+		// place outside `src/`. Broadened to `**/*.{ts,tsx,d.ts,mts,cts}`
+		// so Codesphere-style monorepos and standard tsconfig layouts
+		// both index correctly. Compiled outputs continue to be
+		// excluded by the `**/dist/**` / `**/build/**` excludes below.
+		Include:   []string{"**/*.go", "**/*.{ts,tsx,d.ts,mts,cts}", "**/*.py"},
 		Exclude: []string{
 			"**/node_modules/**",
 			"**/vendor/**",

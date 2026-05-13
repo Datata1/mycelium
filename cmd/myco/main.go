@@ -1673,6 +1673,29 @@ func runDaemon(ctx context.Context, backendOverride string) error {
 	if err != nil {
 		return err
 	}
+	// v4 T2 belt-and-braces: bump RLIMIT_NOFILE soft → hard before
+	// anything else opens fds. macOS default soft is 256, hard is
+	// typically 10240 — huge swing for free. Linux defaults are
+	// usually 1024 → 1048576. Failure is non-fatal; daemon continues
+	// at the original limit and the new doctor check (T2 layer 1)
+	// will warn when fd usage gets close.
+	if soft, hard, rerr := daemon.RaiseFileDescriptorLimit(); rerr != nil {
+		fmt.Fprintf(os.Stderr, "[daemon] could not raise RLIMIT_NOFILE: %v (continuing at default)\n", rerr)
+	} else if soft > 0 {
+		fmt.Fprintf(os.Stderr, "[daemon] RLIMIT_NOFILE raised to %d (hard cap %d)\n", soft, hard)
+	}
+
+	// v4 T2 layer 1 plumbing: write a tiny PID file so `myco doctor`
+	// can probe /proc/<pid>/fd to surface fd-headroom warnings before
+	// the daemon hits EMFILE. Best-effort — failure to write doesn't
+	// stop the daemon. Cleaned up on shutdown via defer below.
+	pidPath := filepath.Join(rc.Root, ".mycelium", "daemon.pid")
+	if err := os.WriteFile(pidPath, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "[daemon] could not write pid file %s: %v\n", pidPath, err)
+	} else {
+		defer os.Remove(pidPath)
+	}
+
 	ix, err := openIndex(rc)
 	if err != nil {
 		return err
