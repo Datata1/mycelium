@@ -297,7 +297,7 @@ func Tools() []Tool {
 		},
 		{
 			Name:        "read_focused",
-			Description: "Read one indexed file with non-focus-matching symbols collapsed to one-line markers. Use this **instead of** the agent's general-purpose file reader whenever you know what you're looking for in the file — it cuts read bytes 30–80 % on files larger than ~5 KB by hiding the symbols that don't match the `focus` query. Empty `focus` returns the full file unchanged, so it's safe as a default file-read tool when file size is unknown. Matched symbols return in full; others become single-line markers like `// signature ...  // collapsed (lines N-M)` with the original line ranges preserved in `Expanded` for round-tripping.",
+			Description: "Read one indexed file with non-focus-matching symbols collapsed to one-line markers. Use this **instead of** the agent's general-purpose file reader whenever you know what you're looking for in the file — it cuts read bytes 30–80 % on files larger than ~5 KB by hiding the symbols that don't match the `focus` query. Matched symbols return in full; others become single-line markers like `// signature ...  // collapsed (lines N-M)` with the original line ranges preserved in `Expanded` for round-tripping. **Empty `focus` returns a preview** (the symbol outline + the first ~50 lines + a Hint suggesting a focus value) — not the full file. If you actually want the whole file unfiltered, pass `focus` matching every symbol or use the agent's general-purpose Read; if you want the symbol map only, call `get_file_outline`.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

@@ -16,15 +16,30 @@ import (
 // rendered with focus-matched symbols expanded in full and non-matched
 // symbols collapsed to a one-line marker. Stats let agents reason about
 // how much was hidden and which line ranges to drill into next.
+//
+// `Hint` is populated only in the v4 no-focus preview path (focus=""):
+// it tells the agent that Content is a truncated preview and how to get
+// more (pass focus, or call get_file_outline). When focus is set, Hint
+// is empty.
 type FocusedRead struct {
 	Path    string           `json:"path"`
 	Focus   string           `json:"focus"`
 	Content string           `json:"content"`
 	Stats   FocusedReadStats `json:"stats"`
+	Hint    string           `json:"hint,omitempty"`
 	// Expanded reports each symbol that survived the filter, with its
 	// original line range, so agents can map back to source for follow-ups.
 	Expanded []FocusedSymbol `json:"expanded,omitempty"`
 }
+
+// ReadFocusedPreviewLines caps the verbatim line count returned in the
+// no-focus preview path. Lifted to a package var (not a const) so the
+// integration test can shrink it without needing a multi-hundred-line
+// fixture file. v4 default is 50 — the bench against
+// internal/telemetry/aggregate.go (12 KiB, ~280 lines) shows this drops
+// the no-focus byte count from 14 KiB (heavier than Read) to ~5 KiB
+// (genuinely lighter), closing the v3.4 A3 G2 net-negative case.
+var ReadFocusedPreviewLines = 50
 
 // FocusedReadStats summarises the collapse outcome.
 type FocusedReadStats struct {
@@ -137,6 +152,17 @@ func (r *Reader) ReadFocused(ctx context.Context, repoRoot, path, focusQ string)
 		return out, err
 	}
 	out.Stats.TotalSymbols = len(syms)
+
+	// v4 B1: no-focus preview path. Empty focus used to expand every
+	// symbol — equivalent to a plain Read, plus the JSON envelope and
+	// outline metadata. The v3.4 A3 bench measured this at 14 KiB on a
+	// 12 KiB file, so myco was net-heavier than the agent's general-
+	// purpose file reader. The fix surfaces an outline + first N lines +
+	// a hint to pass focus, so the no-focus call shape is genuinely a
+	// saving instead of an overhead.
+	if focusQ == "" {
+		return r.previewRead(out, raw, syms), nil
+	}
 
 	tokens := focus.Tokenize(focusQ)
 	commentPrefix := lineCommentFor(language)
@@ -323,6 +349,56 @@ func oneLineSignature(signature, qualified, kind string) string {
 		sig = strings.TrimRight(sig[:i], " \t{") + " ..."
 	}
 	return sig
+}
+
+// previewRead builds the no-focus preview: outline (Expanded) + first
+// ReadFocusedPreviewLines lines verbatim + a Hint pointing at focus= and
+// get_file_outline. When the file is shorter than the cap, Content is
+// the full file and Hint is empty (no point claiming "preview" when
+// nothing was elided). Either way Expanded is populated so the agent
+// gets the symbol map without a follow-up call.
+func (r *Reader) previewRead(out FocusedRead, raw []byte, syms []flatSymbol) FocusedRead {
+	for _, s := range syms {
+		out.Expanded = append(out.Expanded, FocusedSymbol{
+			Qualified: s.Qualified,
+			Kind:      s.Kind,
+			StartLine: s.StartLine,
+			EndLine:   s.EndLine,
+		})
+	}
+	out.Stats.ExpandedSymbols = len(syms)
+
+	lines := splitLinesPreserve(string(raw))
+	cut := ReadFocusedPreviewLines
+	if cut <= 0 || len(lines) <= cut {
+		out.Content = string(raw)
+		out.Stats.ReturnedBytes = len(out.Content)
+		return out
+	}
+	var b strings.Builder
+	for i := 0; i < cut; i++ {
+		b.WriteString(lines[i])
+	}
+	out.Content = b.String()
+	out.Stats.ReturnedBytes = len(out.Content)
+	out.Hint = fmt.Sprintf(
+		"Preview only — first %d of %d lines shown. Pass `focus=<query>`%s to filter symbols and see the matching ones in full; or call `get_file_outline` for the symbol-only listing.",
+		cut, len(lines), exampleFocusHint(syms),
+	)
+	return out
+}
+
+// exampleFocusHint picks a concrete identifier from the file so the
+// hint shows the agent what a useful focus= value looks like, e.g.
+// `focus="ComputeSessionCost"`. Falls back to a generic placeholder
+// when the file has no symbols (rare — usually a doc-only file).
+func exampleFocusHint(syms []flatSymbol) string {
+	for _, s := range syms {
+		if s.Name != "" {
+			return fmt.Sprintf(" (e.g. focus=%q)", s.Name)
+		}
+	}
+	return ""
 }
 
 func lineCommentFor(language string) string {

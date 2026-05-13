@@ -57,17 +57,17 @@ const (
 //
 // Ratios are anchored as follows:
 //
-//   - `read_focused`: **calibrated** to 1.0× high quality. Initial
-//     2.0× guess assumed the v2.4 byte-reduction story (30-80% saved
-//     when focus is set) generalised to all calls. Bench measured the
-//     no-focus pessimistic case on `aggregate.go`: myco returned
-//     14 KiB for a 12 KiB file — *heavier* than a plain Read because
-//     of the JSON envelope + line markers. This is the G2 adoption-
-//     fixed-point signal made measurable: agents that call
-//     read_focused without `focus` pay overhead instead of saving. The
-//     multiplier now reflects the honest average — closer to parity
-//     than savings — so the aggregator stops over-crediting myco for
-//     a tool that's net-negative when used wrong.
+//   - `read_focused`: **re-calibrated** to 4.0× high quality after
+//     v4 B1 landed. The pre-B1 measurement was 0.87× (myco heavier
+//     than Read) because no-focus calls returned the full file plus
+//     envelope. v4 B1 made no-focus calls return outline + first 50
+//     lines + hint — bench against the same `aggregate.go` corpus
+//     now measures 4.43× (myco 2.8 KiB vs Read 12.2 KiB). Set at
+//     4.0× to leave headroom for files in the 100-200 line range
+//     where the 50-line cap saves less proportionally. The 2.0×
+//     pre-bench guess turned out to be too conservative for the
+//     post-B1 shape; the 1.0× post-bench-pre-B1 value reflected the
+//     bug, not the model.
 //
 //   - `find_symbol`: a grep call returns a path:line:snippet line per
 //     match (~120 B). myco returns structured JSON (~300 B per hit).
@@ -126,24 +126,36 @@ const (
 type counterfactualEntry struct {
 	multiplier float64
 	quality    EstimateQuality
+
+	// v4 B3: per-language overrides. Keyed by Stats.ByLang's language
+	// string ("go", "typescript", "python", "rust", …). When the
+	// caller provides a language and an override exists, it wins over
+	// `multiplier`. Empty / missing language → use the default.
+	//
+	// Populated empty in v4 B3: the framework is wired but the data
+	// hasn't been gathered yet. F1 (Python/Django) and F2 (Rust/Axum)
+	// field tests will populate the relevant entries via
+	// `myco bench-counterfactual --language <lang>` against a real repo
+	// and the calibration_test.go pinned test will lock the values in.
+	perLang map[string]float64
 }
 
 var counterfactualModel = map[string]counterfactualEntry{
-	"find_symbol":       {0.8, EstimateQualityMedium},
-	"get_references":    {1.2, EstimateQualityMedium},
-	"read_focused":      {1.0, EstimateQualityHigh},
-	"get_file_outline":  {2.5, EstimateQualityHigh},
-	"get_file_summary":  {3.0, EstimateQualityHigh},
-	"search_lexical":    {1.0, EstimateQualityHigh},
-	"search_semantic":   {2.5, EstimateQualityLow},
-	"get_neighborhood":  {2.5, EstimateQualityLow},
-	"impact_analysis":   {1.5, EstimateQualityLow},
-	"critical_path":     {3.0, EstimateQualityLow},
-	"find_document_key": {1.2, EstimateQualityMedium},
-	"list_files":        {0.2, EstimateQualityMedium},
+	"find_symbol":       {multiplier: 0.8, quality: EstimateQualityMedium},
+	"get_references":    {multiplier: 1.8, quality: EstimateQualityMedium},
+	"read_focused":      {multiplier: 4.0, quality: EstimateQualityHigh},
+	"get_file_outline":  {multiplier: 2.5, quality: EstimateQualityHigh},
+	"get_file_summary":  {multiplier: 3.0, quality: EstimateQualityHigh},
+	"search_lexical":    {multiplier: 1.0, quality: EstimateQualityHigh},
+	"search_semantic":   {multiplier: 2.5, quality: EstimateQualityLow},
+	"get_neighborhood":  {multiplier: 2.5, quality: EstimateQualityLow},
+	"impact_analysis":   {multiplier: 1.5, quality: EstimateQualityLow},
+	"critical_path":     {multiplier: 3.0, quality: EstimateQualityLow},
+	"find_document_key": {multiplier: 1.2, quality: EstimateQualityMedium},
+	"list_files":        {multiplier: 0.2, quality: EstimateQualityMedium},
 	// Tools with no plausible non-myco alternative — counterfactual 0.
-	"stats": {0, EstimateQualityNone},
-	"ping":  {0, EstimateQualityNone},
+	"stats": {multiplier: 0, quality: EstimateQualityNone},
+	"ping":  {multiplier: 0, quality: EstimateQualityNone},
 }
 
 // EstimateCounterfactual returns the byte cost the equivalent fallback
@@ -151,16 +163,34 @@ var counterfactualModel = map[string]counterfactualEntry{
 // byte count. Unknown tool names return {0, EstimateQualityNone} — the
 // caller can decide whether that means "no comparison possible" or
 // silently skip the row in aggregation.
+//
+// Backward-compat shim around EstimateCounterfactualFor with empty
+// language; uses the default multiplier even when per-language
+// overrides exist.
 func EstimateCounterfactual(tool string, outputBytes int64) CounterfactualEstimate {
+	return EstimateCounterfactualFor(tool, outputBytes, "")
+}
+
+// EstimateCounterfactualFor is the v4 B3 language-aware variant.
+// When `language` matches a per-language override entry on the tool's
+// model row, the override multiplier wins over the default. Empty
+// language or missing override falls through to the default.
+func EstimateCounterfactualFor(tool string, outputBytes int64, language string) CounterfactualEstimate {
 	entry, ok := counterfactualModel[tool]
 	if !ok {
 		return CounterfactualEstimate{Quality: EstimateQualityNone}
 	}
-	if entry.multiplier == 0 {
+	mul := entry.multiplier
+	if language != "" {
+		if override, ok := entry.perLang[language]; ok {
+			mul = override
+		}
+	}
+	if mul == 0 {
 		return CounterfactualEstimate{Quality: entry.quality}
 	}
 	return CounterfactualEstimate{
-		Bytes:   int64(float64(outputBytes) * entry.multiplier),
+		Bytes:   int64(float64(outputBytes) * mul),
 		Quality: entry.quality,
 	}
 }
@@ -168,10 +198,27 @@ func EstimateCounterfactual(tool string, outputBytes int64) CounterfactualEstima
 // CounterfactualMultiplier returns the multiplier for a known tool,
 // or 0 + false for unknown tools. Exported so the calibration harness
 // (v3.4 A3 follow-up) can compare measured ratios against the model.
+//
+// Backward-compat shim around CounterfactualMultiplierFor — returns
+// the default multiplier ignoring per-language overrides.
 func CounterfactualMultiplier(tool string) (float64, EstimateQuality, bool) {
+	return CounterfactualMultiplierFor(tool, "")
+}
+
+// CounterfactualMultiplierFor is the v4 B3 language-aware variant of
+// CounterfactualMultiplier. Used by the bench harness to compare
+// measured ratios against the language-specific model when one
+// exists.
+func CounterfactualMultiplierFor(tool, language string) (float64, EstimateQuality, bool) {
 	entry, ok := counterfactualModel[tool]
 	if !ok {
 		return 0, EstimateQualityNone, false
 	}
-	return entry.multiplier, entry.quality, true
+	mul := entry.multiplier
+	if language != "" {
+		if override, ok := entry.perLang[language]; ok {
+			mul = override
+		}
+	}
+	return mul, entry.quality, true
 }

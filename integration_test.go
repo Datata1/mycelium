@@ -215,6 +215,90 @@ func TestIntegration_IndexAndQuery(t *testing.T) {
 		}
 	})
 
+	t.Run("read_focused_no_focus_returns_outline_only_envelope", func(t *testing.T) {
+		// v4 B1: empty focus used to return the full file plus the outline
+		// metadata (heavier than a plain Read). main.go in the fixture is
+		// 35 lines — smaller than the default preview cap (50) — so the
+		// preview path returns the full content but still WITHOUT a Hint
+		// (no truncation happened). Expanded must still be populated so the
+		// agent gets the symbol map without a follow-up call.
+		fr, err := reader.ReadFocused(ctx, dst, "main.go", "")
+		if err != nil {
+			t.Fatalf("read_focused: %v", err)
+		}
+		if fr.Hint != "" {
+			t.Errorf("small file: Hint should be empty (no truncation); got %q", fr.Hint)
+		}
+		if fr.Stats.ReturnedBytes != fr.Stats.OriginalBytes {
+			t.Errorf("small file: ReturnedBytes=%d, OriginalBytes=%d — expected equal (no truncation)",
+				fr.Stats.ReturnedBytes, fr.Stats.OriginalBytes)
+		}
+		if len(fr.Expanded) == 0 {
+			t.Error("Expanded outline should be populated even on small file (no-focus path always emits the symbol map)")
+		}
+		if fr.Stats.ExpandedSymbols != fr.Stats.TotalSymbols {
+			t.Errorf("ExpandedSymbols=%d, TotalSymbols=%d — preview should mark all symbols as expanded for outline purposes",
+				fr.Stats.ExpandedSymbols, fr.Stats.TotalSymbols)
+		}
+	})
+
+	t.Run("read_focused_no_focus_truncates_above_cap", func(t *testing.T) {
+		// Shrink the preview cap below the fixture file size so the
+		// truncation branch fires. main.go has ~35 lines; cap=10 forces
+		// the cut. Restore the package var after the test so other cases
+		// (and the live binary) keep the production default.
+		origCap := query.ReadFocusedPreviewLines
+		query.ReadFocusedPreviewLines = 10
+		defer func() { query.ReadFocusedPreviewLines = origCap }()
+
+		fr, err := reader.ReadFocused(ctx, dst, "main.go", "")
+		if err != nil {
+			t.Fatalf("read_focused: %v", err)
+		}
+		if fr.Hint == "" {
+			t.Error("truncated file: Hint should be set; got empty")
+		}
+		if !strings.Contains(fr.Hint, "Preview only") {
+			t.Errorf("Hint should mention 'Preview only'; got %q", fr.Hint)
+		}
+		if !strings.Contains(fr.Hint, "focus=") {
+			t.Errorf("Hint should suggest passing focus=; got %q", fr.Hint)
+		}
+		if fr.Stats.ReturnedBytes >= fr.Stats.OriginalBytes {
+			t.Errorf("ReturnedBytes=%d should be < OriginalBytes=%d after truncation",
+				fr.Stats.ReturnedBytes, fr.Stats.OriginalBytes)
+		}
+		// Sanity: returned content is the prefix of the source.
+		if len(fr.Content) == 0 {
+			t.Error("preview content is empty — should hold the first N lines")
+		}
+		if len(fr.Expanded) == 0 {
+			t.Error("Expanded outline missing on truncated preview — agent loses the symbol map")
+		}
+	})
+
+	t.Run("read_focused_with_focus_unchanged", func(t *testing.T) {
+		// The non-empty-focus path is the v3.x behaviour and must be
+		// untouched by the v4 B1 preview branch: Hint stays empty,
+		// content carries collapse markers for non-matching symbols.
+		fr, err := reader.ReadFocused(ctx, dst, "main.go", "Greeter")
+		if err != nil {
+			t.Fatalf("read_focused: %v", err)
+		}
+		if fr.Hint != "" {
+			t.Errorf("focus set: Hint should be empty (preview is no-focus only); got %q", fr.Hint)
+		}
+		if fr.Focus != "Greeter" {
+			t.Errorf("Focus echo lost; got %q", fr.Focus)
+		}
+		// Content carries the collapse markers when at least one symbol
+		// didn't match. The fixture has main + NewGreeter + Greeter; with
+		// focus="Greeter", at least main should collapse.
+		if !strings.Contains(fr.Content, "collapsed (lines") {
+			t.Errorf("expected collapse markers in focused content; got: %s", fr.Content)
+		}
+	})
+
 	t.Run("get_neighborhood_inbound", func(t *testing.T) {
 		nb, err := reader.GetNeighborhood(ctx, "NewGreeter", "", 2, query.DirIn, "")
 		if err != nil {

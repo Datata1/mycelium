@@ -45,6 +45,15 @@ type accum struct {
 // but no calls yet" case, which the CLI surfaces as a friendly hint
 // rather than an error.
 func Aggregate(path string) ([]Summary, error) {
+	return AggregateSince(path, time.Time{})
+}
+
+// AggregateSince is Aggregate filtered to records with Timestamp >=
+// since. Zero `since` returns the unfiltered behaviour (Aggregate
+// delegates here). Used by v4 B2's adoption-health doctor to scope
+// the warning window to a recent slice of telemetry instead of the
+// whole-history aggregate.
+func AggregateSince(path string, since time.Time) ([]Summary, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -71,6 +80,9 @@ func Aggregate(path string) ([]Summary, error) {
 			// Skip garbled lines rather than failing the whole report;
 			// users running tail-f tail-write races should still get
 			// useful aggregates. Honest about how many we skip in CLI.
+			continue
+		}
+		if !since.IsZero() && r.Timestamp.Before(since) {
 			continue
 		}
 		dur := time.Duration(r.DurationMS) * time.Millisecond
@@ -193,7 +205,21 @@ type ToolCost struct {
 // caller goes through this so the conversion ratio stays consistent
 // across the markdown export, the JSON export, and any future
 // dashboards.
+//
+// Backward-compat shim around ComputeSessionCostFor with empty
+// language: uses the default counterfactual multipliers, ignoring
+// per-language overrides. Pre-v4-B3 callers continue to work.
 func ComputeSessionCost(myco []Summary, fallback []ExternalSummary, charsPerToken float64) SessionCost {
+	return ComputeSessionCostFor(myco, fallback, charsPerToken, "")
+}
+
+// ComputeSessionCostFor is the v4 B3 language-aware variant. The
+// `language` parameter selects per-tool counterfactual multiplier
+// overrides when populated (see counterfactual.go's `perLang` map);
+// empty language falls through to the global defaults. Plumb the
+// dominant language from `Stats.ByLang` to get repo-tuned savings
+// numbers; pass "" to keep the v3.4 behaviour.
+func ComputeSessionCostFor(myco []Summary, fallback []ExternalSummary, charsPerToken float64, language string) SessionCost {
 	if charsPerToken <= 0 {
 		charsPerToken = 4.0
 	}
@@ -214,7 +240,9 @@ func ComputeSessionCost(myco []Summary, fallback []ExternalSummary, charsPerToke
 		// applies to the actual output bytes (what the agent's context
 		// absorbed). Quality is rolled up so the renderer can warn
 		// when the savings number is dominated by low-quality estimates.
-		est := EstimateCounterfactual(s.Tool, s.OutputBytes)
+		// v4 B3: language is plumbed through so per-language overrides
+		// (when populated) take effect for repo-tuned savings numbers.
+		est := EstimateCounterfactualFor(s.Tool, s.OutputBytes, language)
 		if est.Quality != EstimateQualityNone {
 			cost.MycoCounterfactualBytes += est.Bytes
 			cost.CounterfactualQualityMix[est.Quality] += s.Count

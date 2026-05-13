@@ -122,6 +122,14 @@ func AppendExternal(path string, rec ExternalRecord) error {
 // per-tool count list, sorted by count descending. Returns (nil, nil)
 // when the file doesn't exist (no fallback calls in this session).
 func SummarizeExternal(path string) ([]ExternalSummary, error) {
+	return SummarizeExternalSince(path, time.Time{})
+}
+
+// SummarizeExternalSince is SummarizeExternal filtered to records with
+// Timestamp >= since. Zero `since` returns the unfiltered behaviour.
+// Used by v4 B2's adoption-health doctor to scope the fallback-tool
+// counts to a recent window matching the telemetry-side filter.
+func SummarizeExternalSince(path string, since time.Time) ([]ExternalSummary, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -146,6 +154,9 @@ func SummarizeExternal(path string) ([]ExternalSummary, error) {
 		}
 		var r ExternalRecord
 		if err := json.Unmarshal(line, &r); err != nil {
+			continue
+		}
+		if !since.IsZero() && r.Timestamp.Before(since) {
 			continue
 		}
 		label := r.ToolName
@@ -200,6 +211,75 @@ func TotalExternalBytes(summaries []ExternalSummary) (input, output int) {
 // ExternalPath returns the conventional path for a session's external log.
 func ExternalPath(dir, sessionID string) string {
 	return dir + "/session_" + sessionID + "_external.jsonl"
+}
+
+// SummarizeAllExternalSince walks every session_*_external.jsonl in dir
+// (the per-session external logs), filters records with Timestamp >=
+// since, and folds the result into a single per-tool summary list. Used
+// by v4 B2's adoption-health doctor: a single doctor call needs the
+// fallback half across all recent sessions, not per-session.
+//
+// Returns (nil, nil) when dir doesn't exist or contains no external
+// logs — same friendly behaviour as SummarizeExternal on a missing file.
+func SummarizeAllExternalSince(dir string, since time.Time) ([]ExternalSummary, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read dir %s: %w", dir, err)
+	}
+
+	type key struct{ tool, category string }
+	type agg struct {
+		count, inBytes, outBytes int
+	}
+	rollup := map[key]*agg{}
+
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, "session_") || !strings.HasSuffix(name, "_external.jsonl") {
+			continue
+		}
+		path := dir + "/" + name
+		// Reuse SummarizeExternalSince per file — slightly redundant
+		// (each file gets its own buffered scanner) but keeps the
+		// filtering rules in one place. doctor scale (~hundreds of
+		// session files at most) makes the cost negligible.
+		summaries, err := SummarizeExternalSince(path, since)
+		if err != nil {
+			continue
+		}
+		for _, s := range summaries {
+			k := key{tool: s.Tool, category: s.Category}
+			a, ok := rollup[k]
+			if !ok {
+				a = &agg{}
+				rollup[k] = a
+			}
+			a.count += s.Count
+			a.inBytes += s.InputBytes
+			a.outBytes += s.OutputBytes
+		}
+	}
+
+	out := make([]ExternalSummary, 0, len(rollup))
+	for k, a := range rollup {
+		out = append(out, ExternalSummary{
+			Tool:        k.tool,
+			Category:    k.category,
+			Count:       a.count,
+			InputBytes:  a.inBytes,
+			OutputBytes: a.outBytes,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].Tool < out[j].Tool
+	})
+	return out, nil
 }
 
 // TotalExploratory returns the count of exploratory (fallback) calls in

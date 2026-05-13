@@ -562,7 +562,7 @@ func TestEstimateCounterfactual_KnownAndUnknown(t *testing.T) {
 		wantQuality EstimateQuality
 	}{
 		{"find_symbol", 5_000, 4_000, EstimateQualityMedium},  // 5000 × 0.8
-		{"read_focused", 10_000, 10_000, EstimateQualityHigh}, // 10000 × 1.0 (calibrated parity)
+		{"read_focused", 10_000, 40_000, EstimateQualityHigh}, // 10000 × 4.0 (post-B1 preview-mode lighter than Read)
 		{"search_lexical", 3_000, 3_000, EstimateQualityHigh}, // 3000 × 1.0
 		{"get_neighborhood", 1_000, 2_500, EstimateQualityLow},
 		{"stats", 500, 0, EstimateQualityNone},        // zero multiplier → no estimate
@@ -588,7 +588,7 @@ func TestComputeSessionCost_Counterfactual(t *testing.T) {
 	t.Parallel()
 	myco := []Summary{
 		{Tool: "find_symbol", Count: 5, OutputBytes: 5_000},   // 0.8 medium → 4000
-		{Tool: "read_focused", Count: 3, OutputBytes: 30_000}, // 1.0 high → 30000 (calibrated parity)
+		{Tool: "read_focused", Count: 3, OutputBytes: 30_000}, // 4.0 high → 120000 (v4 B1 preview mode)
 		{Tool: "stats", Count: 2, OutputBytes: 200},           // 0 none → skipped
 	}
 	fallback := []ExternalSummary{
@@ -608,8 +608,8 @@ func TestComputeSessionCost_Counterfactual(t *testing.T) {
 	if got := byTool["find_symbol"].EstimateQuality; got != EstimateQualityMedium {
 		t.Errorf("find_symbol quality = %q, want medium", got)
 	}
-	if got := byTool["read_focused"].CounterfactualBytes; got != 30_000 {
-		t.Errorf("read_focused cf = %d, want 30000", got)
+	if got := byTool["read_focused"].CounterfactualBytes; got != 120_000 {
+		t.Errorf("read_focused cf = %d, want 120000", got)
 	}
 	if got := byTool["stats"].CounterfactualBytes; got != 0 {
 		t.Errorf("stats cf = %d, want 0 (no fallback)", got)
@@ -620,11 +620,11 @@ func TestComputeSessionCost_Counterfactual(t *testing.T) {
 		t.Errorf("Read (fallback) cf = %d, want 0", got)
 	}
 
-	// Aggregate counterfactual sums. find_symbol → 4000, read_focused → 30000.
-	if cost.MycoCounterfactualBytes != 34_000 {
-		t.Errorf("MycoCounterfactualBytes = %d, want 34000", cost.MycoCounterfactualBytes)
+	// Aggregate counterfactual sums. find_symbol → 4000, read_focused → 120000.
+	if cost.MycoCounterfactualBytes != 124_000 {
+		t.Errorf("MycoCounterfactualBytes = %d, want 124000", cost.MycoCounterfactualBytes)
 	}
-	wantWithout := int64(34_000 + 40 + 20_000)
+	wantWithout := int64(124_000 + 40 + 20_000)
 	if cost.WithoutMycoEstimateBytes != wantWithout {
 		t.Errorf("WithoutMycoEstimateBytes = %d, want %d",
 			cost.WithoutMycoEstimateBytes, wantWithout)
@@ -634,13 +634,13 @@ func TestComputeSessionCost_Counterfactual(t *testing.T) {
 		t.Errorf("EstimatedSavingsBytes = %d, want %d",
 			cost.EstimatedSavingsBytes, wantSavings)
 	}
-	// With read_focused at parity (1.0×), counterfactual no longer
-	// over-credits myco — the modelled total is *smaller* than actual,
-	// so savings goes negative. That's the honest output: this fixture
-	// (find_symbol + read_focused + a Read fallback) shows myco doesn't
-	// save bytes once read_focused is calibrated to its no-focus reality.
-	if cost.SavingsRatio >= 0 {
-		t.Errorf("SavingsRatio = %v, want < 0 (calibrated read_focused → no savings on this fixture)",
+	// Post-v4-B1: read_focused multiplier of 4.0× means the no-focus
+	// preview is genuinely lighter than the modelled fallback (full
+	// Read), so the aggregate savings goes positive. This is the
+	// inverse of the pre-B1 fixture state — the model now correctly
+	// rewards myco when it returns less than the equivalent Read.
+	if cost.SavingsRatio <= 0 {
+		t.Errorf("SavingsRatio = %v, want > 0 (post-B1 read_focused saves bytes vs Read)",
 			cost.SavingsRatio)
 	}
 	if cost.MycoCounterfactualTokens == 0 {

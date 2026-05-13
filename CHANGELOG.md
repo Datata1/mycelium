@@ -14,6 +14,151 @@ candidates — see `tickets/v3.4-non-ts-field-test-findings.md` for
 status). Inside each milestone, the usual Keep-a-Changelog
 categories (Added / Changed / Fixed / Measured) apply.
 
+### v4.0 — Agent-native, completed (in progress)
+
+Roadmap: `~/.claude/plans/10-v4-agent-native-completed.md`. Tickets
+under `tickets/v4-*.md`. v4 wraps up the v3.x agent-native +
+cost-conscious story with three themes: adoption fixed-point,
+route literals as a symbol kind, one new language. **No new
+architectural pillars** — see the roadmap for explicit out-of-scope
+(federation, GraphStore swap, live A/B counterfactual all stay v5+).
+
+#### Added
+
+- **B3 — multi-repo bench-counterfactual harness.** The bench-counterfactual
+  corpus + runner moved out of `cmd/myco/main.go` into a new
+  `internal/bench/` package: `Case`, `Corpus`, `Row` types,
+  `MyceliumDefaultCorpus()` returning the v3.4-calibrated mycelium-self
+  corpus, `Run(client, repoRoot, corpus, language, driftThreshold)`
+  the orchestrator, `PrintTable(rows, threshold, corpusName, language)`
+  the renderer. The CLI command shrinks to a thin flag-parsing
+  orchestrator. Two new flags: `--repo <path>` overrides the daemon
+  socket location so the bench can target another mycelium-indexed
+  repo without `cd`; `--language <lang>` selects the per-language
+  multiplier override when one is populated. Renderer header now
+  shows `corpus=<name> language=<lang>` so multi-repo runs are
+  unambiguous.
+
+  **Per-language multiplier framework wired in `counterfactualModel`.**
+  `counterfactualEntry` gained a `perLang map[string]float64` field;
+  new variants `EstimateCounterfactualFor(tool, bytes, language)` and
+  `CounterfactualMultiplierFor(tool, language)` return the override
+  when present, falling back to the default. Existing
+  `EstimateCounterfactual` / `CounterfactualMultiplier` delegate with
+  `language=""` for backward-compat. `ComputeSessionCostFor(...,
+  language)` plumbs it through to per-row counterfactual computation;
+  `ComputeSessionCost` keeps the v3.4 signature and delegates with
+  empty language. **No per-language overrides populated in v4 B3** —
+  the framework is wired but data hasn't been gathered. F1
+  (Python/Django) and F2 (Rust/Axum) field tests will populate via
+  `myco bench-counterfactual --language <lang>` and update the pinned
+  test in `calibration_test.go` in the same commit.
+
+  **Re-calibration during the v4 Phase 1 churn:** B1's preview path +
+  B2's adoption.go added enough new code that referenced
+  `ComputeSessionCost` to bump the `get_references` measured ratio
+  from 1.65× to 1.95×. Multiplier moved 1.2 → **1.8** to match;
+  `calibration_test.go` updated in the same change. The pinned
+  test caught the regression on the first re-bench, exactly as
+  designed.
+
+  **Deferred to v4.1+** per the B3 ticket's honest caveats: (a) BYO
+  corpus via `--corpus-file <yaml>` — useful but no consumer asking;
+  (b) `--update-multipliers` source-mutating flag — flagged in the
+  ticket as "If this feels too magical, drop it from v4 and require
+  manual table edits — it's a convenience, not load-bearing"; (c)
+  `BuildAdaptiveCorpus(client)` that probes the daemon for repo-
+  appropriate targets — needs multi-repo data first to validate the
+  heuristic. v4 ships the architectural extraction + per-language
+  framework; v4.1+ fills in the convenience layers.
+
+  Two new tests: `TestMyceliumDefaultCorpus_Wellformed` pins the
+  corpus shape (every Case has exactly one of FallbackCmd/FallbackFile,
+  every Method is a known IPC method, all nine tools covered);
+  `TestCounterfactualModel_PerLanguageOverride` extends
+  `calibration_test.go` to assert the per-language fallback semantics
+  + pin the (currently empty) override table so accidentally-added
+  overrides break the test loudly. `task check` green; live
+  `myco bench-counterfactual --repo <self>` reproduces the table;
+  `--repo /tmp` errors cleanly with a "start the daemon in that repo"
+  message instead of a cryptic socket-not-found.
+
+- **B2 — adoption-health doctor checks.** `myco doctor` now reads recent
+  session telemetry + per-session external logs and surfaces three
+  documented `docs/adoption.md` failure modes as a separate
+  *adoption* section. **Findings never gate CI** — they are
+  informational, do not roll into `Summary`, do not affect ExitCode.
+  The classic `pass/warn/fail` Checks block is unchanged.
+  Modes evaluated:
+  - `search_lexical_only`: `search_lexical / total_myco_calls > 70%`
+    → agent treats myco as faster grep, missing the graph layer.
+  - `read_focused_under_used`: `read_focused / (read_focused + Read)
+    < 15%` → agent reaches for general-purpose Read instead of the
+    indexed reader (the v3.4 G2 / v4 B1 pattern made measurable).
+  - `grep_over_myco`: `myco_calls / Bash/grep_calls < 1.5` → agent's
+    grep reflex outpaces myco usage; CLAUDE.md priming is missing.
+  Each warn ships with a `Hint` pointing the user at the docs/adoption.md
+  remediation. Modes whose denominator is zero (e.g. zero file-reads
+  of either kind) are silently skipped — no opinion possible, noise
+  isn't useful. The fourth catalogued mode (`read_focused_without_focus`)
+  is **deferred** to v4.1+ because it requires per-call params in
+  the telemetry log; v4 B1's tool-side fix already gives agents
+  per-call feedback so the doctor surface is less urgent.
+  New CLI flags on `myco doctor`:
+  - `--window <duration>` (default 7d) scopes which sessions count
+    toward the evaluation. `--window 1h` for "what's been happening
+    in the last hour"; `--window 720h` for monthly.
+  - `--no-adoption` suppresses the adoption section entirely.
+  Pure-function evaluator in `internal/doctor/adoption.go` (no DB,
+  no I/O — caller hands in pre-aggregated summaries) so future
+  HTTP/dashboard surfaces can reuse it. Six unit tests pin each
+  failure mode at boundary values plus the rg/ripgrep aggregation
+  case + the insufficient-data short-circuit. Two new telemetry
+  helpers underneath: `AggregateSince(path, since)` filters the
+  myco JSONL by timestamp; `SummarizeAllExternalSince(dir, since)`
+  walks every `session_*_external.jsonl` and folds the windowed
+  aggregate into one summary list. Both default to "no filter" when
+  passed a zero `since` — backward-compat with the v3.4 callers.
+  The legacy v3.4 `adoption_tool_diversity` Check is **replaced** by
+  the new `search_lexical_only` finding; same signal, now in the
+  separate adoption section instead of the regular Checks list.
+  `task check` green; live `myco doctor` against this repo surfaces
+  two real warns (read_focused_under_used at 2%, grep_over_myco at
+  1.0) — the dogfooding history this very feature is meant to
+  measure.
+
+- **B1 — `read_focused` no-focus preview path.** Empty `focus` used
+  to expand every symbol — Content was the entire file plus the
+  outline metadata, so the call was *heavier* than a plain Read
+  (the v3.4 A3 bench measured 14 KiB of myco output for a 12 KiB
+  file). v4 B1 makes empty-`focus` calls return a preview instead:
+  the symbol outline (via `Expanded`, unchanged shape) + the first
+  `ReadFocusedPreviewLines` (default 50) lines verbatim + a new
+  `Hint` field telling the agent to pass `focus=<query>` (with a
+  concrete example pulled from the file's first symbol) or call
+  `get_file_outline` for symbol-only listing. Files shorter than
+  the cap return their full content with no Hint (no truncation
+  to advertise). The non-empty-focus path is **untouched** — same
+  collapse markers, same `Expanded` shape, same Stats math; only
+  the no-focus branch changed. Re-bench against
+  `internal/telemetry/aggregate.go` (12 KiB / 280 lines): myco
+  output drops from 14 KiB → 2.8 KiB, measured ratio jumps from
+  0.87× (heavier than Read) to **4.43× (lighter than Read by 4×)**.
+  Counterfactual multiplier re-calibrated 1.0× → **4.0×** with
+  high quality; pinned `calibration_test.go` updated in the same
+  commit so the change can't be silently undone. CLI `myco read`
+  prints the Hint to stderr after the content (so stdout stays
+  clean for piping). MCP tool description updated to document the
+  new no-focus shape so agents know what to expect.
+  Three new integration tests:
+  `read_focused_no_focus_returns_outline_only_envelope`
+  (small file: full content + outline + no Hint),
+  `read_focused_no_focus_truncates_above_cap` (cap shrunk via
+  package var: Hint set, content < original, outline populated),
+  `read_focused_with_focus_unchanged` (focus path snapshot).
+  `task check` green; `myco bench-counterfactual` green at 11%
+  drift. Closes the v3.4 A3 G2 net-negative case.
+
 ### v3.4 — Adoption fixed-point (in progress)
 
 Gated on a non-TS field test for the route-literal + new-language

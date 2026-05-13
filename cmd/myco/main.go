@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"sort"
@@ -18,6 +16,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/jdwiederstein/mycelium/internal/bench"
 	"github.com/jdwiederstein/mycelium/internal/config"
 	"github.com/jdwiederstein/mycelium/internal/daemon"
 	"github.com/jdwiederstein/mycelium/internal/wizard"
@@ -947,7 +946,11 @@ func humanBytes(n int64) string {
 }
 
 func newDoctorCmd() *cobra.Command {
-	var jsonOutput bool
+	var (
+		jsonOutput  bool
+		window      time.Duration
+		noAdoption  bool
+	)
 	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Run health checks on the index; exit 0/1/2 on pass/warn/fail",
@@ -966,10 +969,17 @@ func newDoctorCmd() *cobra.Command {
 			}
 			defer ix.Close()
 
+			th := doctor.ThresholdsFromConfig(rc.Cfg)
+			if window > 0 {
+				th.AdoptionWindow = window
+			}
 			r := query.NewReader(ix.DB())
-			rep, err := doctor.Run(ctx, r, rc.Cfg.Embedder.Provider, doctor.ThresholdsFromConfig(rc.Cfg), rc.Root)
+			rep, err := doctor.Run(ctx, r, rc.Cfg.Embedder.Provider, th, rc.Root)
 			if err != nil {
 				return err
+			}
+			if noAdoption {
+				rep.Adoption = nil
 			}
 			if jsonOutput {
 				b, err := json.MarshalIndent(rep, "", "  ")
@@ -980,6 +990,9 @@ func newDoctorCmd() *cobra.Command {
 			} else {
 				printDoctorReport(rep)
 			}
+			// Adoption findings never affect exit code (informational
+			// only, per v4 B2). ExitCode reads from Summary which only
+			// counts the regular Checks.
 			if code := rep.ExitCode(); code != 0 {
 				os.Exit(code)
 			}
@@ -987,6 +1000,10 @@ func newDoctorCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "emit the full report as JSON (for CI)")
+	cmd.Flags().DurationVar(&window, "window", 0,
+		"adoption-health window (e.g. 24h, 168h). 0 uses the configured default (7d)")
+	cmd.Flags().BoolVar(&noAdoption, "no-adoption", false,
+		"suppress the adoption-health section (v4 B2)")
 	return cmd
 }
 
@@ -1003,6 +1020,22 @@ func printDoctorReport(rep doctor.Report) {
 	}
 	fmt.Printf("\nsummary: %d pass, %d warn, %d fail\n",
 		rep.Summary.Pass, rep.Summary.Warn, rep.Summary.Fail)
+	if len(rep.Adoption) > 0 {
+		fmt.Println("\nadoption (informational, never gates CI):")
+		for _, a := range rep.Adoption {
+			marker := "  ok "
+			switch a.Level {
+			case doctor.AdoptionLevelWarn:
+				marker = "warn"
+			case doctor.AdoptionLevelInfo:
+				marker = "info"
+			}
+			fmt.Printf("[%s] %-26s %s\n", marker, a.Mode, a.Message)
+			if a.Hint != "" {
+				fmt.Printf("       hint: %s\n", a.Hint)
+			}
+		}
+	}
 }
 
 func newInitCmd() *cobra.Command {
@@ -1976,10 +2009,13 @@ func newReadCmd() *cobra.Command {
 				)
 			}
 			fmt.Print(fr.Content)
+			if fr.Hint != "" {
+				fmt.Fprintf(os.Stderr, "\n# %s\n", fr.Hint)
+			}
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&focus, "focus", "", "lexical focus hint; empty returns the full file")
+	cmd.Flags().StringVar(&focus, "focus", "", "lexical focus hint; empty returns the no-focus preview (outline + first 50 lines + hint, not the full file — see read_focused docs)")
 	cmd.Flags().BoolVar(&showHdr, "stats", false, "print collapse stats to stderr")
 	return cmd
 }
@@ -3022,222 +3058,77 @@ func abs64(n int64) int64 {
 
 // ─── bench-counterfactual ────────────────────────────────────────────────────
 //
-// `myco bench-counterfactual` measures, per myco tool, the actual byte
-// payload returned by the daemon vs. the byte payload the agent would
-// have absorbed via the equivalent shell fallback (grep / wc -c / find).
-// The measured ratio is compared to the modelled multiplier in
-// internal/telemetry/counterfactual.go; drift > --drift-threshold (default
-// 50%) on any tool exits non-zero so a calibration regression breaks CI
-// loudly instead of silently.
-//
-// Why a separate command, not a Go test: the bench needs a running
-// daemon (the only SQLite reader/writer per architectural rule) and has
-// to shell out to grep against the live filesystem. A unit test can't
-// own those preconditions cleanly; a CLI command can.
-//
-// Corpus is fixed in code (not flag-driven) so re-runs from one machine
-// to another are comparable. The targets are mycelium-self-index
-// symbols/files chosen for stable existence across the codebase.
-
-// benchCase pairs one myco call with its shell-fallback equivalent.
-// Exactly one of FallbackCmd or FallbackFile must be set: FallbackCmd is
-// run via `bash -c` and the stdout byte length is the measurement;
-// FallbackFile is sized via os.Stat (mirrors `wc -c`).
-type benchCase struct {
-	Tool         string
-	Method       string
-	Params       any
-	FallbackCmd  string
-	FallbackFile string
-	Note         string
-}
-
-// benchCorpus is the per-tool fixture set. The targets are picked from
-// the mycelium self-index — picking a target that doesn't exist would
-// silently zero out the myco-side measurement and the drift number
-// would lie. Update only when removing/renaming the target symbol.
-var benchCorpus = []benchCase{
-	{
-		Tool:        "find_symbol",
-		Method:      ipc.MethodFindSymbol,
-		Params:      ipc.FindSymbolParams{Name: "ComputeSessionCost"},
-		FallbackCmd: `grep -rn 'ComputeSessionCost' --include='*.go' .`,
-		Note:        "single Go function, ~6 references in the repo",
-	},
-	{
-		Tool:        "get_references",
-		Method:      ipc.MethodGetReferences,
-		Params:      ipc.GetReferencesParams{Target: "ComputeSessionCost"},
-		FallbackCmd: `grep -rn 'ComputeSessionCost' --include='*.go' .`,
-		Note:        "callers of ComputeSessionCost",
-	},
-	{
-		Tool:         "read_focused",
-		Method:       ipc.MethodReadFocused,
-		Params:       ipc.ReadFocusedParams{Path: "internal/telemetry/aggregate.go"},
-		FallbackFile: "internal/telemetry/aggregate.go",
-		Note:         "no focus → full file; counterfactual = full Read",
-	},
-	{
-		Tool:         "get_file_outline",
-		Method:       ipc.MethodGetFileOutline,
-		Params:       ipc.GetFileOutlineParams{Path: "internal/telemetry/aggregate.go"},
-		FallbackFile: "internal/telemetry/aggregate.go",
-		Note:         "outline vs full Read",
-	},
-	{
-		Tool:         "get_file_summary",
-		Method:       ipc.MethodGetFileSummary,
-		Params:       ipc.GetFileSummaryParams{Path: "internal/telemetry/aggregate.go"},
-		FallbackFile: "internal/telemetry/aggregate.go",
-		Note:         "summary vs full Read",
-	},
-	{
-		Tool:        "search_lexical",
-		Method:      ipc.MethodSearchLexical,
-		Params:      ipc.SearchLexicalParams{Pattern: "telemetry.Record"},
-		FallbackCmd: `grep -rn 'telemetry\.Record' --include='*.go' .`,
-		Note:        "literal-string search, parity case",
-	},
-	{
-		Tool:        "list_files",
-		Method:      ipc.MethodListFiles,
-		Params:      ipc.ListFilesParams{NameContains: "telemetry"},
-		FallbackCmd: `find . -path ./.git -prune -o -path ./.mycelium -prune -o -name '*telemetry*' -print`,
-		Note:        "name-contains filter vs find",
-	},
-	{
-		Tool:        "impact_analysis",
-		Method:      ipc.MethodImpactAnalysis,
-		Params:      ipc.ImpactAnalysisParams{Target: "ComputeSessionCost"},
-		FallbackCmd: `grep -rn 'ComputeSessionCost' --include='*.go' .`,
-		Note:        "transitive callers; grep is a lower bound",
-	},
-	{
-		Tool:        "get_neighborhood",
-		Method:      ipc.MethodGetNeighborhood,
-		Params:      ipc.GetNeighborhoodParams{Target: "ComputeSessionCost", Depth: 1},
-		FallbackCmd: `grep -rn 'ComputeSessionCost' --include='*.go' .`,
-		Note:        "1-hop graph walk; agent would iterate grep+Read",
-	},
-}
-
-// benchRow is one printable line of the bench result.
-type benchRow struct {
-	Tool          string  `json:"tool"`
-	MycoBytes     int64   `json:"myco_bytes"`
-	FallbackBytes int64   `json:"fallback_bytes"`
-	MeasuredRatio float64 `json:"measured_ratio"`
-	ModelRatio    float64 `json:"model_ratio"`
-	Drift         float64 `json:"drift"` // |measured - model| / max(model, 0.01)
-	Quality       string  `json:"quality"`
-	MycoMS        int64   `json:"myco_ms"`
-	FallbackMS    int64   `json:"fallback_ms"`
-	OK            bool    `json:"ok"`
-	Note          string  `json:"note"`
-	Err           string  `json:"error,omitempty"`
-}
+// Thin orchestrator over internal/bench. The corpus + run + render
+// logic lives there so it's testable + reusable; this file just
+// resolves flags into a bench.Run call.
 
 func newBenchCounterfactualCmd() *cobra.Command {
 	var (
 		driftThreshold float64
 		format         string
+		repoOverride   string
+		language       string
 	)
 	cmd := &cobra.Command{
 		Use:   "bench-counterfactual",
-		Short: "Calibrate the without-myco cost model against the self-index",
+		Short: "Calibrate the without-myco cost model against an indexed repo",
 		Long: `Runs each myco tool against the running daemon and the equivalent
 shell fallback (grep / wc -c / find), then compares the measured byte
 ratio against the modelled multiplier in internal/telemetry/counterfactual.go.
 
 Drift exceeding --drift-threshold (default 0.50 = 50%) on any tool
 exits with status 1, so calibration regressions break CI loudly. The
-corpus is hard-coded for repeatable cross-machine comparison; the
-targets are mycelium self-index symbols/files.
+default corpus is mycelium-tuned (hard-coded targets that exist in
+this repo); v4 B3's --repo flag points at another repo's daemon
+socket but the corpus stays mycelium-tuned, so external repos will
+show ERR rows for missing targets until v4.1's adaptive corpus lands.
+
+--language selects the per-language multiplier override when one
+is populated (see counterfactualModel.perLang). Empty falls through
+to the global default — pre-v4-B3 behaviour.
 
 Requires a running daemon (start with ` + "`myco daemon`" + `).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runBenchCounterfactual(driftThreshold, format)
+			return runBenchCounterfactual(driftThreshold, format, repoOverride, language)
 		},
 	}
 	cmd.Flags().Float64Var(&driftThreshold, "drift-threshold", 0.5,
 		"max allowed |measured-model|/model before exiting non-zero")
 	cmd.Flags().StringVar(&format, "format", "table", "output format: table | json")
+	cmd.Flags().StringVar(&repoOverride, "repo", "",
+		"absolute path to a repo whose daemon socket should be used (default: cwd's repo)")
+	cmd.Flags().StringVar(&language, "language", "",
+		"dominant repo language (go, typescript, python, rust, …) — selects the per-language multiplier override when populated")
 	return cmd
 }
 
-func runBenchCounterfactual(driftThreshold float64, format string) error {
-	rc, err := loadRepoCtx()
-	if err != nil {
-		return err
-	}
-	client, ok := daemonClient(rc)
-	if !ok {
-		return fmt.Errorf("daemon not reachable at %s/%s — start it with `myco daemon`",
-			rc.Root, rc.Cfg.Daemon.Socket)
-	}
-
-	rows := make([]benchRow, 0, len(benchCorpus))
-	for _, bc := range benchCorpus {
-		row := benchRow{Tool: bc.Tool, Note: bc.Note}
-
-		// Myco side: capture raw response bytes — matches what the daemon
-		// records as out_bytes in telemetry.jsonl.
-		var raw json.RawMessage
-		mStart := time.Now()
-		if err := client.Call(bc.Method, bc.Params, &raw); err != nil {
-			msg := err.Error()
-			if strings.Contains(msg, "unknown method") {
-				// The daemon is older than the binary running this bench.
-				// Distinguish from a real RPC failure so the user knows
-				// to restart rather than chase a calibration regression.
-				msg += "  (restart the daemon — its build predates this method)"
-			}
-			row.Err = "myco: " + msg
-			rows = append(rows, row)
-			continue
+func runBenchCounterfactual(driftThreshold float64, format, repoOverride, language string) error {
+	root := repoOverride
+	socket := ""
+	if root == "" {
+		rc, err := loadRepoCtx()
+		if err != nil {
+			return err
 		}
-		row.MycoMS = time.Since(mStart).Milliseconds()
-		row.MycoBytes = int64(len(raw))
-
-		// Fallback side: stdout byte count (grep/find) or file size (wc -c).
-		fStart := time.Now()
-		switch {
-		case bc.FallbackFile != "":
-			info, err := os.Stat(filepath.Join(rc.Root, bc.FallbackFile))
-			if err != nil {
-				row.Err = "fallback: " + err.Error()
-				rows = append(rows, row)
-				continue
-			}
-			row.FallbackBytes = info.Size()
-		case bc.FallbackCmd != "":
-			c := exec.Command("bash", "-c", bc.FallbackCmd)
-			c.Dir = rc.Root
-			out, _ := c.Output() // grep returns 1 on no match — we still want the bytes
-			row.FallbackBytes = int64(len(out))
-		}
-		row.FallbackMS = time.Since(fStart).Milliseconds()
-
-		// Compare
-		mul, qual, _ := telemetry.CounterfactualMultiplier(bc.Tool)
-		row.ModelRatio = mul
-		row.Quality = string(qual)
-		if row.MycoBytes > 0 {
-			row.MeasuredRatio = float64(row.FallbackBytes) / float64(row.MycoBytes)
-		}
-		// Drift uses max(model, 0.01) as the denominator so the zero-
-		// multiplier tools (stats/ping, never benched) don't divide by 0
-		// if someone adds them to the corpus by accident.
-		row.Drift = math.Abs(row.MeasuredRatio-mul) / math.Max(mul, 0.01)
-		// Low-quality multipliers self-document as rough — the model
-		// already says "don't trust this much". Treat their drift as
-		// informational so a single corpus point can't break CI on a
-		// graph-walk tool the model never claimed precision for.
-		row.OK = row.Drift <= driftThreshold || qual == telemetry.EstimateQualityLow
-
-		rows = append(rows, row)
+		root = rc.Root
+		socket = rc.Cfg.Daemon.Socket
+	} else {
+		// When --repo is passed, build a thin context from the path —
+		// don't run loadRepoCtx (which would still discover from cwd
+		// and ignore the override). Default socket name matches the
+		// out-of-box config; users with a custom socket name on the
+		// other repo are an edge case worth surfacing later.
+		socket = config.Default().Daemon.Socket
 	}
+
+	client := ipc.NewClient(root + "/" + socket)
+	if !client.IsReachable() {
+		return fmt.Errorf("daemon not reachable at %s/%s — start it with `myco daemon` (in that repo)",
+			root, socket)
+	}
+
+	corpus := bench.MyceliumDefaultCorpus()
+	rows := bench.Run(client, root, corpus, language, driftThreshold)
 
 	switch format {
 	case "json":
@@ -3247,7 +3138,7 @@ func runBenchCounterfactual(driftThreshold float64, format string) error {
 		}
 		fmt.Println(string(b))
 	default:
-		printBenchTable(rows, driftThreshold)
+		bench.PrintTable(rows, driftThreshold, corpus.Name, language)
 	}
 
 	for _, r := range rows {
@@ -3257,35 +3148,4 @@ func runBenchCounterfactual(driftThreshold float64, format string) error {
 		}
 	}
 	return nil
-}
-
-func printBenchTable(rows []benchRow, threshold float64) {
-	fmt.Printf("── counterfactual calibration  (drift threshold %.0f%%) ─────────\n",
-		threshold*100)
-	fmt.Printf("%-20s  %10s  %10s  %8s  %8s  %7s  %8s  %s\n",
-		"tool", "myco", "fallback", "measured", "model", "drift", "quality", "status")
-	for _, r := range rows {
-		status := "ok"
-		switch {
-		case r.Err != "":
-			status = "ERR"
-		case !r.OK:
-			status = "DRIFT"
-		case r.Quality == string(telemetry.EstimateQualityLow) && r.Drift > threshold:
-			status = "info" // low-quality drift is expected, not a failure
-		}
-		fmt.Printf("%-20s  %10s  %10s  %8.2f  %8.2f  %6.0f%%  %8s  %s\n",
-			r.Tool,
-			humanBytes(r.MycoBytes), humanBytes(r.FallbackBytes),
-			r.MeasuredRatio, r.ModelRatio, r.Drift*100,
-			r.Quality, status)
-		if r.Err != "" {
-			fmt.Printf("    error: %s\n", r.Err)
-		}
-	}
-	fmt.Println()
-	fmt.Println("measured = fallback_bytes / myco_bytes  (target: should match model)")
-	fmt.Println("drift    = |measured - model| / max(model, 0.01)")
-	fmt.Println("low-quality estimates (graph tools) can drift more than the threshold")
-	fmt.Println("without invalidating the model — interpret with the 'quality' column.")
 }

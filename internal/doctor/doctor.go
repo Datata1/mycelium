@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jdwiederstein/mycelium/internal/config"
 	"github.com/jdwiederstein/mycelium/internal/query"
@@ -40,9 +41,17 @@ type Check struct {
 }
 
 // Report is the full doctor output.
+//
+// `Adoption` is the v4 B2 adoption-health section: per-failure-mode
+// findings about how the agent is actually using myco vs. its
+// fallbacks. **Adoption findings do NOT affect ExitCode** — they are
+// informational and never gate CI. The renderer prints them in their
+// own section so users (and CI consumers) can act on them without
+// having to special-case adoption checks against everything else.
 type Report struct {
-	Checks []Check `json:"checks"`
-	Summary struct {
+	Checks   []Check           `json:"checks"`
+	Adoption []AdoptionFinding `json:"adoption,omitempty"`
+	Summary  struct {
 		Pass int `json:"pass"`
 		Warn int `json:"warn"`
 		Fail int `json:"fail"`
@@ -86,15 +95,14 @@ type Thresholds struct {
 	// tiny project).
 	EmptyProjectFail int
 	EmptyProjectWarn int
-	// Adoption thresholds: fired when the telemetry log has >= MinAdoptionCalls
-	// total calls and the agent appears to be in the "search_lexical only"
-	// failure mode (using myco as a faster grep instead of a graph navigator).
-	// LexicalDominanceWarn is the search_lexical fraction that triggers a warn;
-	// StructuralMinWarn is the floor for structural-tool fraction below which
-	// the warn also fires. Both conditions must be true simultaneously.
-	MinAdoptionCalls      int
-	LexicalDominanceWarn  float64
-	StructuralMinWarn     float64
+
+	// v4 B2: adoption-health window + per-mode thresholds. Window
+	// scopes which sessions count toward the evaluation; default 7d
+	// matches the v4 ticket. The per-mode thresholds live in
+	// AdoptionThresholds so adoption.go's pure evaluator can take
+	// just that struct without depending on the rest of doctor.
+	AdoptionWindow     time.Duration
+	AdoptionThresholds AdoptionThresholds
 }
 
 func DefaultThresholds() Thresholds {
@@ -111,9 +119,9 @@ func DefaultThresholds() Thresholds {
 		InotifyFail:      0.90,
 		EmptyProjectFail: 1,
 		EmptyProjectWarn: 10,
-		MinAdoptionCalls:     20,
-		LexicalDominanceWarn: 0.60,
-		StructuralMinWarn:    0.10,
+
+		AdoptionWindow:     7 * 24 * time.Hour,
+		AdoptionThresholds: DefaultAdoptionThresholds(),
 	}
 }
 
@@ -416,17 +424,75 @@ func Run(ctx context.Context, r *query.Reader, embedderProvider string, th Thres
 		})
 	}
 
-	// Adoption check: only runs when repoRoot is set and telemetry is present.
+	// v4 B2: adoption-health section. Filled when repoRoot is set
+	// and there's telemetry to evaluate. Findings live on rep.Adoption
+	// so they don't roll into rep.Summary (informational, never gate
+	// CI). The legacy v3.4 telemetry-dark-spot warning still fires as
+	// a regular Check because "telemetry off in a dogfood repo" is a
+	// configuration bug, not an adoption insight.
 	if repoRoot != "" {
-		if c := checkAdoption(repoRoot, th); c != nil {
-			add(*c)
-		}
+		rep.Adoption = evaluateAdoptionForRepo(repoRoot, th)
 		if c := checkTelemetryDarkSpot(repoRoot); c != nil {
 			add(*c)
 		}
 	}
 
 	return rep, nil
+}
+
+// evaluateAdoptionForRepo is the I/O wrapper around EvaluateAdoption:
+// reads the windowed myco + fallback summaries from disk, counts
+// distinct sessions in the window, and hands the result to the pure
+// evaluator. Empty (or no-telemetry) repos return nil — the renderer
+// then suppresses the section entirely.
+func evaluateAdoptionForRepo(repoRoot string, th Thresholds) []AdoptionFinding {
+	mDir := filepath.Join(repoRoot, ".mycelium")
+	since := time.Time{}
+	if th.AdoptionWindow > 0 {
+		since = time.Now().Add(-th.AdoptionWindow)
+	}
+
+	mycoLog := filepath.Join(mDir, "telemetry.jsonl")
+	myco, err := telemetry.AggregateSince(mycoLog, since)
+	if err != nil {
+		return nil
+	}
+
+	fallback, err := telemetry.SummarizeAllExternalSince(mDir, since)
+	if err != nil {
+		// Fallback-side missing isn't fatal — we still evaluate the
+		// modes that depend only on the myco-side counts.
+		fallback = nil
+	}
+
+	sessions := countSessionsInWindow(mycoLog, since)
+	if len(myco) == 0 && len(fallback) == 0 && sessions == 0 {
+		// Nothing to say; let the dark-spot check handle the
+		// "configured but empty" diagnosis instead of duplicating it.
+		return nil
+	}
+	return EvaluateAdoption(myco, fallback, sessions, th.AdoptionThresholds)
+}
+
+// countSessionsInWindow counts distinct sid values in the telemetry
+// log whose first record falls in the window. The MinSessions gate in
+// EvaluateAdoption uses this number to decide whether enough data has
+// accumulated to draw conclusions.
+func countSessionsInWindow(logPath string, since time.Time) int {
+	reports, err := telemetry.ListSessions(logPath)
+	if err != nil {
+		return 0
+	}
+	if since.IsZero() {
+		return len(reports)
+	}
+	n := 0
+	for _, r := range reports {
+		if !r.Session.StartedAt.Before(since) {
+			n++
+		}
+	}
+	return n
 }
 
 // sortedDocKindKeys returns the keys of m in lexical order. Stable
@@ -438,82 +504,6 @@ func sortedDocKindKeys(m map[string]int) []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-// checkAdoption reads the telemetry log and returns a Check when the agent
-// appears to be in the "search_lexical only" failure mode. Returns nil when
-// the log is absent, has too few calls, or telemetry is not configured.
-func checkAdoption(repoRoot string, th Thresholds) *Check {
-	logPath := filepath.Join(repoRoot, ".mycelium", "telemetry.jsonl")
-	summaries, err := telemetry.Aggregate(logPath)
-	if err != nil || len(summaries) == 0 {
-		return nil
-	}
-
-	// Find the "all" rollup for total call count, and individual tools.
-	var total, lexical, structural int
-	structuralTools := map[string]bool{
-		"find_symbol":     true,
-		"get_references":  true,
-		"get_neighborhood": true,
-		"impact_analysis": true,
-		"critical_path":   true,
-		"get_definition":  true,
-	}
-	for _, s := range summaries {
-		if s.Tool == "all" {
-			total = s.Count
-			continue
-		}
-		if s.Tool == "search_lexical" {
-			lexical = s.Count
-		}
-		if structuralTools[s.Tool] {
-			structural += s.Count
-		}
-	}
-	if total < th.MinAdoptionCalls {
-		return nil
-	}
-
-	lexicalRatio := float64(lexical) / float64(total)
-	structuralRatio := float64(structural) / float64(total)
-
-	if lexicalRatio <= th.LexicalDominanceWarn || structuralRatio >= th.StructuralMinWarn {
-		return &Check{
-			Name:  "adoption_tool_diversity",
-			Level: LevelPass,
-			Message: fmt.Sprintf(
-				"tool diversity ok: search_lexical=%.0f%% structural=%.0f%% (%d total calls)",
-				lexicalRatio*100, structuralRatio*100, total,
-			),
-			Detail: map[string]any{
-				"total":           total,
-				"lexical":         lexical,
-				"structural":      structural,
-				"lexical_ratio":   lexicalRatio,
-				"structural_ratio": structuralRatio,
-			},
-		}
-	}
-
-	return &Check{
-		Name:  "adoption_tool_diversity",
-		Level: LevelWarn,
-		Message: fmt.Sprintf(
-			"agent is using myco as grep: search_lexical=%.0f%% structural=%.0f%% (%d calls) — "+
-				"add 'prefer find_symbol for identifiers' to CLAUDE.md",
-			lexicalRatio*100, structuralRatio*100, total,
-		),
-		Detail: map[string]any{
-			"total":            total,
-			"lexical":          lexical,
-			"structural":       structural,
-			"lexical_ratio":    lexicalRatio,
-			"structural_ratio": structuralRatio,
-			"hint":             "run: myco init (choose 'append to CLAUDE.md') to add the priming snippet",
-		},
-	}
 }
 
 // checkTelemetryDarkSpot detects the dogfooding gap surfaced by the
