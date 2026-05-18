@@ -4,24 +4,17 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project adheres
 to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [v4.0.0] — 2026-05-18
 
-Accumulated work since v2.0.0-rc1. Organised into named milestones
-below so the chronology survives the still-open release tag. Tags
-will be cut once the v3.4 prerequisite field test on a non-TS,
-non-Go codebase lands (Python/Django, Rust/Axum, or Java/Spring
-candidates — see `tickets/v3.4-non-ts-field-test-findings.md` for
-status). Inside each milestone, the usual Keep-a-Changelog
-categories (Added / Changed / Fixed / Measured) apply.
+### v4.0 — Adoption fixed-point + bug triage
 
-### v4.0 — Agent-native, completed (in progress)
-
-Roadmap: `~/.claude/plans/10-v4-agent-native-completed.md`. Tickets
-under `tickets/v4-*.md`. v4 wraps up the v3.x agent-native +
-cost-conscious story with three themes: adoption fixed-point,
-route literals as a symbol kind, one new language. **No new
-architectural pillars** — see the roadmap for explicit out-of-scope
-(federation, GraphStore swap, live A/B counterfactual all stay v5+).
+Tickets under `tickets/v4-*.md`. v4 focuses on adoption quality:
+making the existing tools work reliably on real codebases. The three
+themes are (1) adoption-health observability (B1–B3), (2) bug triage
+from the first TS field test (T1–T7), and (3) the `get_references`
+class-symbol fix. **No new languages, no new symbol kinds** — Rust
+and route literals are deferred to v5. No new architectural pillars.
+See [LIMITATIONS.md](./LIMITATIONS.md) for what stays out of scope.
 
 #### Fixed
 

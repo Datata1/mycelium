@@ -67,6 +67,13 @@ to the v2.0 roadmap at `~/.claude/plans/1-everything-you-mentioned-indexed-duckl
 | Index model-switch invalidates all embeddings (dimensions differ) | No per-model retention | By design |
 | `files.project_id` as a queryable scope | Single-project schema pre-v1.5 | **Shipped in v1.5** — nullable `project_id` on `files` with cascade delete; NULL = implicit root project, so v1.4 configs keep working |
 
+## Planned for v5
+
+| Feature | Notes |
+|---|---|
+| Rust language support | tree-sitter parser + use-tree resolver; planned v5 |
+| Route literals as a symbol kind | `find_route(pattern)` MCP tool, opt-in via `route_constructors` config; planned v5 |
+
 ## Things you might expect but we don't claim
 
 - **Type-perfect dynamic dispatch.** If code reassigns a function variable at

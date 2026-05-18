@@ -89,7 +89,7 @@ v2.2), and interface-consumer expansion in `get_neighborhood` /
 `impact_analysis` / `critical_path` (Pillar J, v2.1). Builds on
 v1.x's type-aware resolvers, workspace mode, PR-scoped queries,
 and optional sqlite-vec fast path. Cross-repo federation stays a
-v4 non-goal (see [LIMITATIONS.md](./LIMITATIONS.md)).
+v5 non-goal (see [LIMITATIONS.md](./LIMITATIONS.md)).
 
 ## Two ways agents use mycelium
 
