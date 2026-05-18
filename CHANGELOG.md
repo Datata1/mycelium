@@ -25,6 +25,18 @@ architectural pillars** — see the roadmap for explicit out-of-scope
 
 #### Fixed
 
+- **`get_references(ClassName)` now includes static and instance method
+  calls.** The TS resolver resolves `CsEnv.from()` to the *method* symbol
+  (`env.CsEnv.from`), not the class symbol (`env.CsEnv`). Previously
+  `symbolsByTarget` only matched the target's own qualified name, so
+  `get_references("CsEnv")` missed all `CsEnv.from()` / `CsEnv.empty()`
+  call sites. Fix: after collecting direct matches, a second pass
+  expands each qualified name to its children via `LIKE q+".%"`, then
+  deduplicates. Regression test in `get_refs_test.go` with fixture
+  `testdata/fixtures/get-refs/` (reproduces the codesphere monorepo-4
+  finding where 3/3 `get_references` calls returned null on a class
+  used only through static-method calls).
+
 - **F1 follow-up batch (T3-T7): five smaller field-test fixes.**
   - **T3 — `search_lexical` ergonomics.** Three changes: empty results
     return `[]LexicalHit{}` not `nil` (JSON consumers see `[]` instead

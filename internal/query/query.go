@@ -286,22 +286,66 @@ func (r *Reader) GetReferences(ctx context.Context, target, project string, limi
 	return hits, nil
 }
 
+// symbolsByTarget resolves a target name to symbol IDs for use in the
+// get_references first-pass query. It returns both direct matches (qualified or
+// short name) and, for any class/interface symbol found, all of its child
+// symbols (methods, statics). This ensures that CsEnv.from() and
+// CsEnv.empty() calls — resolved by the TS resolver to the *method* symbols
+// rather than the *class* symbol — are visible when the caller searches for
+// references to the class name "CsEnv".
 func (r *Reader) symbolsByTarget(ctx context.Context, target string) ([]int64, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id FROM symbols WHERE qualified = ? OR name = ?`, target, target)
+		SELECT id, qualified FROM symbols WHERE qualified = ? OR name = ?`, target, target)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var ids []int64
+	var qualifieds []string
 	for rows.Next() {
 		var id int64
-		if err := rows.Scan(&id); err != nil {
+		var qualified string
+		if err := rows.Scan(&id, &qualified); err != nil {
 			return nil, err
 		}
 		ids = append(ids, id)
+		qualifieds = append(qualifieds, qualified)
 	}
-	return ids, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// For each matched symbol, include child symbols so that
+	// "ClassName.method()" calls (resolved to the method symbol) are
+	// visible when the parent class is the target.
+	seen := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		seen[id] = true
+	}
+	for _, q := range qualifieds {
+		childRows, err := r.db.QueryContext(ctx,
+			`SELECT id FROM symbols WHERE qualified LIKE ?`, q+".%")
+		if err != nil {
+			return nil, err
+		}
+		for childRows.Next() {
+			var id int64
+			if err := childRows.Scan(&id); err != nil {
+				childRows.Close()
+				return nil, err
+			}
+			if !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
+		}
+		if err := childRows.Err(); err != nil {
+			childRows.Close()
+			return nil, err
+		}
+		childRows.Close()
+	}
+	return ids, nil
 }
 
 func scanReferenceHits(rows *sql.Rows, acc []ReferenceHit) ([]ReferenceHit, error) {
