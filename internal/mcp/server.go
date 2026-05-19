@@ -8,6 +8,7 @@ import (
 	"io"
 
 	"github.com/jdwiederstein/mycelium/internal/ipc"
+	"github.com/jdwiederstein/mycelium/internal/mcp/render"
 	"github.com/jdwiederstein/mycelium/pkg/mcpschema"
 )
 
@@ -117,7 +118,7 @@ func (s *Server) handleToolCall(ctx context.Context, enc *json.Encoder, req json
 	}
 	writeResult(enc, req.ID, map[string]any{
 		"content": []map[string]any{
-			{"type": "text", "text": string(result)},
+			{"type": "text", "text": render.Render(params.Name, result)},
 		},
 	})
 	_ = ctx
