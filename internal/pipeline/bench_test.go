@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jdwiederstein/mycelium/internal/embed"
 	"github.com/jdwiederstein/mycelium/internal/index"
 	"github.com/jdwiederstein/mycelium/internal/parser"
 	"github.com/jdwiederstein/mycelium/internal/parser/golang"
@@ -53,7 +52,7 @@ func benchIndexAt(b *testing.B, symbols int) {
 		reg := parser.NewRegistry()
 		reg.Register(golang.New())
 		walker := repo.NewWalker(dir, []string{"**/*.go"}, nil, 0)
-		p := &pipeline.Pipeline{Index: ix, Registry: reg, Walker: walker, Embedder: embed.Noop{}}
+		p := &pipeline.Pipeline{Index: ix, Registry: reg, Walker: walker, }
 		b.StartTimer()
 
 		rep, err := p.RunOnce(context.Background())
@@ -89,7 +88,7 @@ func BenchmarkQueryFindSymbol(b *testing.B) {
 	reg := parser.NewRegistry()
 	reg.Register(golang.New())
 	walker := repo.NewWalker(dir, []string{"**/*.go"}, nil, 0)
-	p := &pipeline.Pipeline{Index: ix, Registry: reg, Walker: walker, Embedder: embed.Noop{}}
+	p := &pipeline.Pipeline{Index: ix, Registry: reg, Walker: walker, }
 	if _, err := p.RunOnce(context.Background()); err != nil {
 		b.Fatalf("RunOnce: %v", err)
 	}
@@ -117,7 +116,7 @@ func BenchmarkQueryNeighborhood(b *testing.B) {
 	reg := parser.NewRegistry()
 	reg.Register(golang.New())
 	walker := repo.NewWalker(dir, []string{"**/*.go"}, nil, 0)
-	p := &pipeline.Pipeline{Index: ix, Registry: reg, Walker: walker, Embedder: embed.Noop{}}
+	p := &pipeline.Pipeline{Index: ix, Registry: reg, Walker: walker, }
 	if _, err := p.RunOnce(context.Background()); err != nil {
 		b.Fatalf("RunOnce: %v", err)
 	}

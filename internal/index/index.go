@@ -19,39 +19,15 @@ import (
 type Index struct {
 	db   *sql.DB
 	path string
-	vss  vssState
 }
 
-// Open is the pre-v1.4 signature: open the index with the default driver
-// and no vector extension. Kept for backward compatibility with tests and
-// any external callers that don't need vec0.
+// Open opens the index at path, creating the parent directory if needed,
+// and applies any pending migrations before returning.
 func Open(path string) (*Index, error) {
-	return OpenWithExtension(path, "")
-}
-
-// OpenWithExtension opens the index; when extPath is non-empty and points
-// at a loadable sqlite-vec shared library, subsequent connections have
-// the extension auto-loaded. A missing file or load failure degrades
-// gracefully — the Index still works, just without the vec0 fast path.
-func OpenWithExtension(path, extPath string) (*Index, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("mkdir index parent: %w", err)
 	}
-	driverName := "sqlite3"
-	var vssEnabled bool
-	if extPath != "" {
-		name, err := registerDriverWithExt(extPath)
-		switch {
-		case err != nil:
-			// File missing / unstat-able. Log via stderr and continue
-			// without the extension — not fatal.
-			fmt.Fprintf(os.Stderr, "[vss] extension not loaded (%v); falling back to brute-force search\n", err)
-		case name != "":
-			driverName = name
-			vssEnabled = true
-		}
-	}
-	db, err := sql.Open(driverName, path+"?_fk=on&_journal_mode=WAL&_busy_timeout=5000")
+	db, err := sql.Open("sqlite3", path+"?_fk=on&_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
@@ -59,24 +35,11 @@ func OpenWithExtension(path, extPath string) (*Index, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("ping sqlite: %w", err)
 	}
-	if vssEnabled {
-		if _, err := probeVecVersion(db); err != nil {
-			// Driver registered but vec_version() failed — likely a
-			// mismatched .so. Close, reopen on plain driver, warn.
-			fmt.Fprintf(os.Stderr, "[vss] vec_version probe failed (%v); falling back to brute-force search\n", err)
-			_ = db.Close()
-			db, err = sql.Open("sqlite3", path+"?_fk=on&_journal_mode=WAL&_busy_timeout=5000")
-			if err != nil {
-				return nil, err
-			}
-			vssEnabled = false
-		}
-	}
 	if err := applyMigrations(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
-	return &Index{db: db, path: path, vss: vssState{enabled: vssEnabled}}, nil
+	return &Index{db: db, path: path}, nil
 }
 
 func (ix *Index) Close() error { return ix.db.Close() }

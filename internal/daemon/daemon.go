@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jdwiederstein/mycelium/internal/embed"
 	"github.com/jdwiederstein/mycelium/internal/gitref"
 	"github.com/jdwiederstein/mycelium/internal/ipc"
 	"github.com/jdwiederstein/mycelium/internal/pipeline"
@@ -25,30 +24,14 @@ import (
 type Daemon struct {
 	Pipeline *pipeline.Pipeline
 	Reader   *query.Reader
-	Embedder embed.Embedder // required for search_semantic; may be Noop
 	Watcher  watch.Watcher
 	Socket   string
 	RepoRoot string // absolute path; lexical search needs it to open files
-	// VSSTable is the sqlite-vec virtual table name (or "" when not
-	// configured). Plumbed into every Searcher the daemon creates so the
-	// KNN fast path can light up.
-	VSSTable string
 	// Telemetry records per-call timing/byte stats when enabled. Defaults
 	// to telemetry.Disabled{} so the dispatcher path is uniform — no
 	// nil checks at every call site.
 	Telemetry telemetry.Recorder
-	// SkillsRegen, when non-nil, is invoked after each debounced batch
-	// of file changes settles (v2.5). The argument is the deduplicated
-	// set of package directories touched in that batch. cmd/myco wires
-	// this to skills.RegenerateAffected when the user has compiled the
-	// skills tree at least once. nil = no incremental regen.
-	SkillsRegen func(ctx context.Context, packages []string) error
-	// SkillsDebounce is the idle window after the last watcher event
-	// before SkillsRegen fires. Defaults to 200ms — long enough to
-	// coalesce a multi-file save (e.g. `goimports` rewriting five
-	// files), short enough to feel snappy on isolated edits.
-	SkillsDebounce time.Duration
-	Logger         Logger
+	Logger    Logger
 }
 
 type Logger interface {
@@ -98,99 +81,14 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	var wg sync.WaitGroup
 
-	// v2.5 debounce: collect every package dir touched between watcher
-	// events, fire SkillsRegen when the channel is idle for
-	// SkillsDebounce. Buffered at 1 so a slow regen doesn't stall the
-	// pump; the next fire collapses any new dirs into the same call.
-	debounce := d.SkillsDebounce
-	if debounce <= 0 {
-		debounce = 200 * time.Millisecond
-	}
-	flushCh := make(chan map[string]struct{}, 1)
-
-	// Watcher event pump.
+	// Watcher event pump: forward each change into the pipeline.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		var (
-			pending = map[string]struct{}{}
-			timer   *time.Timer
-			timerC  <-chan time.Time
-		)
-		armTimer := func() {
-			if timer == nil {
-				timer = time.NewTimer(debounce)
-			} else {
-				if !timer.Stop() {
-					select {
-					case <-timer.C:
-					default:
-					}
-				}
-				timer.Reset(debounce)
-			}
-			timerC = timer.C
-		}
-		for {
-			select {
-			case ev, ok := <-d.Watcher.Events():
-				if !ok {
-					if len(pending) > 0 && d.SkillsRegen != nil {
-						select {
-						case flushCh <- pending:
-						default:
-						}
-					}
-					close(flushCh)
-					return
-				}
-				d.Logger.Printf("change %s (removed=%v)", ev.RelPath, ev.Removed)
-				if _, err := d.Pipeline.HandleChange(ctx, ev.RelPath, ev.AbsPath, ev.Removed); err != nil {
-					d.Logger.Printf("handle %s: %v", ev.RelPath, err)
-					continue
-				}
-				if d.SkillsRegen != nil {
-					pending[filepath.ToSlash(filepath.Dir(ev.RelPath))] = struct{}{}
-					armTimer()
-				}
-			case <-timerC:
-				timerC = nil
-				if len(pending) == 0 {
-					continue
-				}
-				batch := pending
-				pending = map[string]struct{}{}
-				select {
-				case flushCh <- batch:
-				default:
-					// Previous flush still in flight — merge into the
-					// pending pool and re-arm so we try again next idle.
-					for k := range batch {
-						pending[k] = struct{}{}
-					}
-					armTimer()
-				}
-			}
-		}
-	}()
-
-	// Skills regen worker: serialises SkillsRegen calls so two bursts
-	// can't race on the same .mycelium/skills/ tree.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for batch := range flushCh {
-			if d.SkillsRegen == nil || len(batch) == 0 {
-				continue
-			}
-			pkgs := make([]string, 0, len(batch))
-			for k := range batch {
-				pkgs = append(pkgs, k)
-			}
-			if err := d.SkillsRegen(ctx, pkgs); err != nil {
-				d.Logger.Printf("skills regen: %v", err)
-			} else {
-				d.Logger.Printf("skills regen: %d package(s) checked", len(pkgs))
+		for ev := range d.Watcher.Events() {
+			d.Logger.Printf("change %s (removed=%v)", ev.RelPath, ev.Removed)
+			if _, err := d.Pipeline.HandleChange(ctx, ev.RelPath, ev.AbsPath, ev.Removed); err != nil {
+				d.Logger.Printf("handle %s: %v", ev.RelPath, err)
 			}
 		}
 	}()
@@ -317,18 +215,6 @@ func (d *Daemon) dispatchInner(ctx context.Context, req ipc.Request) (any, error
 
 	case ipc.MethodReindex:
 		return d.Pipeline.RunOnce(ctx)
-
-	case ipc.MethodSearchSemantic:
-		var p ipc.SearchSemanticParams
-		if err := unmarshal(req.Params, &p); err != nil {
-			return nil, err
-		}
-		paths, err := d.resolveSince(ctx, p.Since)
-		if err != nil {
-			return nil, err
-		}
-		s := &query.Searcher{Reader: d.Reader, Embedder: d.Embedder, VSSTable: d.VSSTable}
-		return s.SearchSemantic(ctx, p.Query, p.K, p.Kind, p.PathContains, p.Project, paths)
 
 	case ipc.MethodSearchLexical:
 		var p ipc.SearchLexicalParams

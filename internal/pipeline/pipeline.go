@@ -2,7 +2,6 @@ package pipeline
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"io"
 	"os"
@@ -10,8 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jdwiederstein/mycelium/internal/chunker"
-	"github.com/jdwiederstein/mycelium/internal/embed"
 	"github.com/jdwiederstein/mycelium/internal/index"
 	"github.com/jdwiederstein/mycelium/internal/parser"
 	"github.com/jdwiederstein/mycelium/internal/parser/document"
@@ -62,21 +59,16 @@ type Pipeline struct {
 	// pass finishes, RunOnce iterates the same file list and dispatches
 	// every file no symbol parser claimed through this registry.
 	Documents *document.Registry
-	Embedder  embed.Embedder // Noop when the user hasn't configured a provider
 	// Resolvers is keyed by language ("go", "typescript", "python"). A
 	// missing entry means textual resolution only for that language.
-	Resolvers   map[string]Resolver
-	ChunkerOpts chunker.Options
-	Logger      Logger
+	Resolvers map[string]Resolver
+	Logger    Logger
 
 	// Deprecated: kept for legacy callers; prefer Resolvers["go"].
-	// Populated automatically when set for backward compatibility.
 	GoResolver *goresolver.Resolver
 
-	// v1.5 watcher-path support: when HandleChange fires on a changed
-	// file, we need to know which project it belongs to. fileProjectFor
-	// is populated once at pipeline construction (longest-root-prefix
-	// match) and consulted per event. nil for legacy single-project use.
+	// FileProjectFor maps an absolute path to its project_id. Populated at
+	// construction for the v1.5 workspace path; nil for single-project use.
 	FileProjectFor func(absPath string) int64
 }
 
@@ -468,16 +460,6 @@ func (p *Pipeline) writeParsed(ctx context.Context, f repo.File, prs parser.Pars
 		return true, len(result.Symbols), len(result.References), err
 	}
 
-	// Chunking + embed queue. Skips quietly when the embedder is Noop.
-	chunks := chunker.FromSymbols(content, result.Symbols, p.ChunkerOpts)
-	embedderModel := "none"
-	if p.Embedder != nil {
-		embedderModel = p.Embedder.Model()
-	}
-	if _, err := p.Index.ReplaceFileChunks(ctx, tx, upsert.FileID, symIDs, chunks, embedderModel); err != nil {
-		return true, len(result.Symbols), len(result.References), err
-	}
-
 	if err := tx.Commit(); err != nil {
 		return true, len(result.Symbols), len(result.References), err
 	}
@@ -501,7 +483,3 @@ func (p *Pipeline) resolverFor(lang string) Resolver {
 	return nil
 }
 
-// Ensure the sql package import is referenced so removing unused imports doesn't
-// silently drop the dep. The pipeline touches database transactions indirectly
-// through index.*; this keeps future refactoring honest.
-var _ = (*sql.Tx)(nil)

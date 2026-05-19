@@ -18,16 +18,14 @@ const (
 )
 
 type Config struct {
-	Version   int            `yaml:"version"`
-	Languages []string       `yaml:"languages"`
-	Include   []string       `yaml:"include"`
-	Exclude   []string       `yaml:"exclude"`
-	Embedder  EmbedderConfig `yaml:"embedder"`
-	Chunking  ChunkingConfig `yaml:"chunking"`
-	Watcher   WatcherConfig  `yaml:"watcher"`
-	Daemon    DaemonConfig   `yaml:"daemon"`
-	Hooks     HooksConfig    `yaml:"hooks"`
-	Index     IndexConfig    `yaml:"index"`
+	Version   int             `yaml:"version"`
+	Languages []string        `yaml:"languages"`
+	Include   []string        `yaml:"include"`
+	Exclude   []string        `yaml:"exclude"`
+	Watcher   WatcherConfig   `yaml:"watcher"`
+	Daemon    DaemonConfig    `yaml:"daemon"`
+	Hooks     HooksConfig     `yaml:"hooks"`
+	Index     IndexConfig     `yaml:"index"`
 	// Telemetry is v2.2's opt-in, local-only call-frequency log.
 	// Default: disabled. When enabled, the daemon writes one JSON line
 	// per dispatched IPC/MCP call to .mycelium/telemetry.jsonl. No
@@ -37,15 +35,12 @@ type Config struct {
 	// is one implicit "root project" indexed with the top-level
 	// Languages/Include/Exclude — backward compatible with v1.4.
 	// When non-empty, ONLY the listed sub-projects are indexed; the
-	// top-level include/exclude are unused. Each project inherits
-	// Embedder/Chunking/Watcher from the top level.
+	// top-level include/exclude are unused.
 	Projects []ProjectConfig `yaml:"projects"`
 }
 
 // ProjectConfig scopes indexing to a sub-directory of the repo with its
-// own include/exclude/languages. Embedder inheritance is intentional: a
-// single SQLite DB can't mix embedding dimensions cleanly, so the top-
-// level Embedder is the source of truth.
+// own include/exclude/languages.
 type ProjectConfig struct {
 	Name      string   `yaml:"name"`
 	Root      string   `yaml:"root"`      // repo-relative
@@ -54,23 +49,7 @@ type ProjectConfig struct {
 	Exclude   []string `yaml:"exclude"`
 }
 
-type EmbedderConfig struct {
-	Provider                 string `yaml:"provider"`      // none | ollama | voyage | openai
-	Model                    string `yaml:"model"`
-	Dimension                int    `yaml:"dimension"`
-	Endpoint                 string `yaml:"endpoint"`
-	APIKeyEnv                string `yaml:"api_key_env"`
-	BatchSize                int    `yaml:"batch_size"`
-	MaxConcurrency           int    `yaml:"max_concurrency"`
-	RateLimitChunksPerMinute int    `yaml:"rate_limit_chunks_per_minute"`
-}
-
-type ChunkingConfig struct {
-	SymbolMaxTokens         int  `yaml:"symbol_max_tokens"`
-	IncludeDocstrings       bool `yaml:"include_docstrings"`
-	FileFallbackWindowLines int  `yaml:"file_fallback_window_lines"`
-}
-
+// WatcherConfig controls the file-watcher backend and debounce timing.
 type WatcherConfig struct {
 	Backend    string `yaml:"backend"` // "" / "fsnotify" (default) | "watchman" (v1.7)
 	DebounceMS int    `yaml:"debounce_ms"`
@@ -107,20 +86,10 @@ type TelemetryConfig struct {
 // the config layer don't disagree.
 const DefaultCharsPerToken = 4.0
 
+// IndexConfig controls the SQLite index location and per-file size limit.
 type IndexConfig struct {
-	Path          string       `yaml:"path"`
-	MaxFileSizeKB int          `yaml:"max_file_size_kb"`
-	Vector        VectorConfig `yaml:"vector"`
-}
-
-// VectorConfig enables sqlite-vec integration (v1.4). When ExtensionPath is
-// empty, semantic search stays on the brute-force Go cosine path. When set
-// and the .so/.dylib/.dll loads successfully, we use the vec0 virtual
-// table for KNN lookups.
-type VectorConfig struct {
-	ExtensionPath string `yaml:"extension_path"` // e.g. /usr/local/lib/vec0.so, empty = disabled
-	AutoCreate    bool   `yaml:"auto_create"`    // create vss_chunks on daemon start if missing
-	KNNEFSearch   int    `yaml:"ef_search"`      // tuning for HNSW (reserved; vec0 current release is flat KNN)
+	Path          string `yaml:"path"`
+	MaxFileSizeKB int    `yaml:"max_file_size_kb"`
 }
 
 var supportedLanguages = map[string]bool{
@@ -129,27 +98,11 @@ var supportedLanguages = map[string]bool{
 	"python":     true,
 }
 
-var supportedProviders = map[string]bool{
-	"none":   true,
-	"ollama": true,
-	"voyage": true,
-	"openai": true,
-}
-
 // Default returns a Config with sensible defaults for a freshly initialized repo.
 func Default() Config {
 	return Config{
 		Version:   CurrentVersion,
 		Languages: []string{"go", "typescript", "python"},
-		// v4 fix for the F1/T1 dts-indexing bug: the previous
-		// `src/**/*.{ts,tsx}` glob narrowed TS coverage to files inside
-		// `src/`, missing common type-definition locations like
-		// `lib/`, package roots (`vite.config.ts`), and ambient
-		// declaration files (`*.d.ts`) that monorepo-style TS repos
-		// place outside `src/`. Broadened to `**/*.{ts,tsx,d.ts,mts,cts}`
-		// so Codesphere-style monorepos and standard tsconfig layouts
-		// both index correctly. Compiled outputs continue to be
-		// excluded by the `**/dist/**` / `**/build/**` excludes below.
 		Include:   []string{"**/*.go", "**/*.{ts,tsx,d.ts,mts,cts}", "**/*.py"},
 		Exclude: []string{
 			"**/node_modules/**",
@@ -159,17 +112,6 @@ func Default() Config {
 			"**/testdata/**",
 			"**/*.generated.*",
 			"**/*.min.js",
-		},
-		Embedder: EmbedderConfig{
-			Provider:                 "none",
-			BatchSize:                16,
-			MaxConcurrency:           2,
-			RateLimitChunksPerMinute: 2000,
-		},
-		Chunking: ChunkingConfig{
-			SymbolMaxTokens:         1024,
-			IncludeDocstrings:       true,
-			FileFallbackWindowLines: 50,
 		},
 		Watcher: WatcherConfig{
 			DebounceMS: DefaultDebounceMS,
@@ -185,14 +127,10 @@ func Default() Config {
 		Index: IndexConfig{
 			Path:          DefaultIndexPath,
 			MaxFileSizeKB: 1024,
-			Vector: VectorConfig{
-				AutoCreate:  true, // create vss_chunks if extension loads
-				KNNEFSearch: 0,    // reserved for future HNSW tuning
-			},
 		},
 		Telemetry: TelemetryConfig{
-			Enabled: false, // opt-in only — see docs/research.md / v3 plan
-			Path:    "",    // resolved at daemon start to .mycelium/telemetry.jsonl
+			Enabled: false,
+			Path:    "",
 		},
 	}
 }
@@ -224,17 +162,6 @@ func (c Config) Validate() error {
 	for _, lang := range c.Languages {
 		if !supportedLanguages[lang] {
 			return fmt.Errorf("languages: %q is not supported (have: go, typescript, python)", lang)
-		}
-	}
-	if !supportedProviders[c.Embedder.Provider] {
-		return fmt.Errorf("embedder.provider: %q is not supported (have: none, ollama, voyage, openai)", c.Embedder.Provider)
-	}
-	if c.Embedder.Provider != "none" {
-		if c.Embedder.Model == "" {
-			return fmt.Errorf("embedder.model: required when provider is %q", c.Embedder.Provider)
-		}
-		if c.Embedder.Dimension <= 0 {
-			return fmt.Errorf("embedder.dimension: must be > 0 when provider is %q", c.Embedder.Provider)
 		}
 	}
 	if c.Daemon.HTTPPort < 0 || c.Daemon.HTTPPort > 65535 {

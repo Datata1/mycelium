@@ -24,11 +24,10 @@ const (
 	MethodSearchLexical   = "search_lexical"
 	MethodStats           = "stats"
 	MethodReindex         = "reindex"
-	MethodSearchSemantic  = "search_semantic"
-	MethodImpactAnalysis  = "impact_analysis"  // v1.6
-	MethodCriticalPath    = "critical_path"    // v1.6
-	MethodReadFocused     = "read_focused"     // v2.4
-	MethodFindDocumentKey = "find_document_key" // v3.3 documents surface
+	MethodImpactAnalysis  = "impact_analysis"
+	MethodCriticalPath    = "critical_path"
+	MethodReadFocused     = "read_focused"
+	MethodFindDocumentKey = "find_document_key"
 	MethodPing            = "ping"
 )
 
@@ -79,15 +78,6 @@ type ListFilesParams struct {
 type GetFileOutlineParams struct {
 	Path  string `json:"path"`
 	Focus string `json:"focus,omitempty"` // v2.4
-}
-
-type SearchSemanticParams struct {
-	Query        string `json:"query"`
-	K            int    `json:"k,omitempty"`
-	Kind         string `json:"kind,omitempty"`
-	PathContains string `json:"path_contains,omitempty"`
-	Project      string `json:"project,omitempty"`
-	Since        string `json:"since,omitempty"`
 }
 
 type SearchLexicalParams struct {

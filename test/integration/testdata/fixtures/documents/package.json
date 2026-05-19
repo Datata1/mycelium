@@ -1,0 +1,14 @@
+{
+  "name": "mycelium-test-fixture",
+  "version": "1.0.0",
+  "dependencies": {
+    "react": "^18.0.0",
+    "@codesphere/utils-common": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "peerDependencies": {
+    "react-dom": "^18.0.0"
+  }
+}

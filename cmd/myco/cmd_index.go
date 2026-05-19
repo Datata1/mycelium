@@ -1,0 +1,73 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+
+	"github.com/spf13/cobra"
+
+	"github.com/jdwiederstein/mycelium/internal/parser"
+	"github.com/jdwiederstein/mycelium/internal/parser/golang"
+	"github.com/jdwiederstein/mycelium/internal/parser/python"
+	"github.com/jdwiederstein/mycelium/internal/parser/typescript"
+	"github.com/jdwiederstein/mycelium/internal/pipeline"
+	"github.com/jdwiederstein/mycelium/internal/repo"
+)
+
+func newIndexCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "index",
+		Short: "Run a one-shot full index of the repo",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := context.Background()
+			rc, err := loadRepoCtx()
+			if err != nil {
+				return err
+			}
+			ix, err := openIndex(rc)
+			if err != nil {
+				return err
+			}
+			defer ix.Close()
+
+			reg := parser.NewRegistry()
+			for _, lang := range rc.Cfg.Languages {
+				switch lang {
+				case "go":
+					reg.Register(golang.New())
+				case "typescript":
+					reg.Register(typescript.New())
+				case "python":
+					reg.Register(python.New())
+				}
+			}
+
+			w := repo.NewWalker(rc.Root, rc.Cfg.Include, rc.Cfg.Exclude, rc.Cfg.Index.MaxFileSizeKB)
+			resolvers := loadResolvers(rc.Root, rc.Cfg.Languages)
+			wss, projFor, err := buildWorkspaces(ctx, rc, ix)
+			if err != nil {
+				return err
+			}
+			p := &pipeline.Pipeline{
+				Index: ix, Registry: reg, Walker: w,
+				Resolvers: resolvers, Workspaces: wss, FileProjectFor: projFor,
+				Documents: buildDocumentRegistry(),
+			}
+
+			rep, err := p.RunOnce(ctx)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("scanned=%d changed=%d skipped=%d symbols=%d refs=%d duration=%s\n",
+				rep.FilesScanned, rep.FilesChanged, rep.FilesSkipped, rep.Symbols, rep.Refs, rep.Duration)
+			if len(rep.Errors) > 0 {
+				fmt.Fprintf(os.Stderr, "errors (%d):\n", len(rep.Errors))
+				for _, e := range rep.Errors {
+					fmt.Fprintln(os.Stderr, " -", e)
+				}
+			}
+			return nil
+		},
+	}
+}

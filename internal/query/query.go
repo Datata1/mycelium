@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"path"
 	"sort"
 	"strings"
 	"time"
@@ -20,6 +19,8 @@ type Reader struct {
 	db *sql.DB
 }
 
+// NewReader returns a Reader backed by an already-open database handle.
+// The caller retains ownership of db and is responsible for closing it.
 func NewReader(db *sql.DB) *Reader { return &Reader{db: db} }
 
 // SymbolHit is the canonical shape returned by symbol-producing queries.
@@ -549,9 +550,7 @@ func outlineMatches(tokens []string, it FileOutlineItem) bool {
 	return false
 }
 
-// Stats mirrors the write-side stats but lives here so all reads come from
-// a single package.
-// Stats exposes point-in-time counts + quality signals for the index.
+// Stats exposes point-in-time counts and quality signals for the index.
 // Quality signals (self_loop_count, unresolved_by_language, stale_chunks)
 // were added in v1.1 so `myco doctor` and agents have honest numbers to
 // judge the index by before running expensive tools.
@@ -571,10 +570,6 @@ type Stats struct {
 	RecursionSelfLoops   int            `json:"recursion_self_loops"`   // v>=1 self-loops (real recursion)
 	UnresolvedByLanguage map[string]int `json:"unresolved_by_language"`
 	TotalByLanguage      map[string]int `json:"total_refs_by_language"`
-	Chunks               int            `json:"chunks"`
-	ChunksEmbedded       int            `json:"chunks_embedded"`
-	StaleChunks          int            `json:"stale_chunks"`
-	EmbedQueueDepth      int            `json:"embed_queue_depth"`
 	ByKind               map[string]int `json:"by_kind"`
 	ByLang               map[string]int `json:"by_language"`
 	DBSizeBytes          int64          `json:"db_size_bytes"`
@@ -586,12 +581,6 @@ type Stats struct {
 	// so users can confirm the fan-out is actually populated.
 	InterfaceImplementsRefs   int `json:"interface_implements_refs"`
 	InterfaceConcreteTypes    int `json:"interface_concrete_types"`
-	// v2.5 skills coverage: distinct package directories the index
-	// knows about. The on-disk count comes from a filesystem walk in
-	// the doctor layer (so missing files are caught even when the
-	// skill_files DB row still exists). 0 when the user never ran
-	// `myco skills compile`.
-	SkillsPackagesIndexed int `json:"skills_packages_indexed"`
 	// v3.3: per-kind document entry counts. Empty when no document
 	// parsers are wired up or the repo has no matching files.
 	// Doctor surfaces this as `documents_indexed`; a registered
@@ -638,6 +627,8 @@ func (s Stats) DBFragmentation() float64 {
 	return float64(s.DBFreelistPages) / float64(s.DBPageCount)
 }
 
+// Stats returns a point-in-time snapshot of the index state. Queries run
+// under ctx and cancel immediately when it is done.
 func (r *Reader) Stats(ctx context.Context) (Stats, error) {
 	s := Stats{
 		ByKind:               map[string]int{},
@@ -731,15 +722,6 @@ func (r *Reader) Stats(ctx context.Context) (Stats, error) {
 	}
 	rows.Close()
 
-	// Chunks + embed pipeline health. Stale = chunks that should have an
-	// embedding (the active embedder isn't none) but don't. Computed here
-	// as: total chunks - embedded chunks. The doctor layer reconciles with
-	// the configured provider to decide Pass vs Warn.
-	_ = r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM chunks`).Scan(&s.Chunks)
-	_ = r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL`).Scan(&s.ChunksEmbedded)
-	s.StaleChunks = s.Chunks - s.ChunksEmbedded
-	_ = r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM embed_queue`).Scan(&s.EmbedQueueDepth)
-
 	// v2.1: interface-implementer linkage. RefInherit edges link concrete
 	// types to interfaces they implement; agents querying upstream
 	// consumers depend on these to reach interface-typed callers.
@@ -749,23 +731,6 @@ func (r *Reader) Stats(ctx context.Context) (Stats, error) {
 	_ = r.db.QueryRowContext(ctx,
 		`SELECT COUNT(DISTINCT src_symbol_id) FROM refs WHERE kind = 'inherit'`,
 	).Scan(&s.InterfaceConcreteTypes)
-
-	// v2.5 skills coverage. SkillsPackagesIndexed = distinct
-	// directories holding indexed files (same shape as
-	// Compile.discoverPackages). On-disk count is computed by the
-	// caller (doctor) via a filesystem walk so missing-file detection
-	// works even when the skill_files DB row still exists.
-	if pathRows, err := r.db.QueryContext(ctx, `SELECT path FROM files`); err == nil {
-		dirs := map[string]struct{}{}
-		for pathRows.Next() {
-			var p string
-			if err := pathRows.Scan(&p); err == nil {
-				dirs[path.Dir(p)] = struct{}{}
-			}
-		}
-		pathRows.Close()
-		s.SkillsPackagesIndexed = len(dirs)
-	}
 
 	// v3.3: per-kind document entry counts. Empty result means no
 	// document parsers fired; doctor reads this alongside on-disk

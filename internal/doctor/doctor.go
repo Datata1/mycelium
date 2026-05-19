@@ -80,8 +80,6 @@ type Thresholds struct {
 	SelfLoopFail   int     // self-loops >= this number fail
 	FragmentWarn   float64 // e.g. 0.20 — warn above 20% SQLite freelist
 	FragmentFail   float64 // e.g. 0.50
-	StaleWarn      int     // chunks without embedding but embedder configured
-	StaleFail      int
 	// Inotify headroom (Linux only): ratio of repo dirs to the system's
 	// max_user_watches. Above InotifyWarn means the user is one big
 	// `git clone` away from fsnotify silently dropping watches.
@@ -120,8 +118,6 @@ func DefaultThresholds() Thresholds {
 		SelfLoopFail:   20,
 		FragmentWarn:   0.20,
 		FragmentFail:   0.50,
-		StaleWarn:      1,
-		StaleFail:      1000,
 		InotifyWarn:      0.50,
 		InotifyFail:      0.90,
 		FDHeadroomWarn:   0.60,
@@ -134,11 +130,10 @@ func DefaultThresholds() Thresholds {
 	}
 }
 
-// Run assembles the report. Callers pass the reader, the active embedder
-// provider string (from config) so the stale-chunk check knows whether
-// embeddings are expected at all, their preferred thresholds, and the
-// repo root (for the inotify headroom check; empty skips the check).
-func Run(ctx context.Context, r *query.Reader, embedderProvider string, th Thresholds, repoRoot string) (Report, error) {
+// Run assembles the report. Callers pass the reader, their preferred
+// thresholds, and the repo root (for the inotify headroom check; empty
+// skips the check).
+func Run(ctx context.Context, r *query.Reader, th Thresholds, repoRoot string) (Report, error) {
 	s, err := r.Stats(ctx)
 	if err != nil {
 		return Report{}, fmt.Errorf("stats: %w", err)
@@ -250,36 +245,6 @@ func Run(ctx context.Context, r *query.Reader, embedderProvider string, th Thres
 		})
 	}
 
-	// Stale chunks: only meaningful when the user configured an embedder.
-	// With provider=none, missing embeddings are expected — a stale count
-	// of 100% is the normal state, not a bug.
-	if embedderProvider == "" || embedderProvider == "none" {
-		add(Check{
-			Name:    "embedder",
-			Level:   LevelPass,
-			Message: "embedder disabled; semantic search unavailable",
-		})
-	} else {
-		lvl := LevelPass
-		switch {
-		case s.StaleChunks >= th.StaleFail:
-			lvl = LevelFail
-		case s.StaleChunks >= th.StaleWarn:
-			lvl = LevelWarn
-		}
-		add(Check{
-			Name:    "chunks_embedded",
-			Level:   lvl,
-			Message: fmt.Sprintf("%d/%d chunks embedded (%d pending, queue depth %d)", s.ChunksEmbedded, s.Chunks, s.StaleChunks, s.EmbedQueueDepth),
-			Detail: map[string]any{
-				"embedded":    s.ChunksEmbedded,
-				"total":       s.Chunks,
-				"stale":       s.StaleChunks,
-				"queue_depth": s.EmbedQueueDepth,
-			},
-		})
-	}
-
 	// SQLite fragmentation proxy. freelist / page_count >= 20% usually
 	// means a VACUUM would recover meaningful disk space.
 	frag := s.DBFragmentation()
@@ -373,40 +338,6 @@ func Run(ctx context.Context, r *query.Reader, embedderProvider string, th Thres
 				"warns":      warns,
 			},
 		})
-	}
-
-	// v2.5: skills tree coverage. Skipped entirely when
-	// .mycelium/skills/ doesn't exist — the feature is opt-in, so
-	// showing a failing check on a fresh repo would be noise. Once any
-	// package has been rendered we expect on-disk == indexed; warn
-	// below 0.95 and fail below 0.5 to flag stale / partially-deleted
-	// trees. Walking the filesystem (vs reading skill_files) catches
-	// the case where the DB row outlives the file on disk.
-	if repoRoot != "" {
-		skillsRoot := filepath.Join(repoRoot, ".mycelium", "skills", "packages")
-		if onDisk := countSkillFiles(skillsRoot); onDisk > 0 && s.SkillsPackagesIndexed > 0 {
-			coverage := float64(onDisk) / float64(s.SkillsPackagesIndexed)
-			level := LevelPass
-			switch {
-			case coverage < 0.5:
-				level = LevelFail
-			case coverage < 0.95:
-				level = LevelWarn
-			}
-			add(Check{
-				Name:  "skills_coverage",
-				Level: level,
-				Message: fmt.Sprintf(
-					"%d/%d packages have a SKILL.md (%.0f%%)",
-					onDisk, s.SkillsPackagesIndexed, coverage*100,
-				),
-				Detail: map[string]any{
-					"on_disk":  onDisk,
-					"indexed":  s.SkillsPackagesIndexed,
-					"coverage": coverage,
-				},
-			})
-		}
 	}
 
 	// v3.3 documents coverage. Reports per-kind entry counts and flags
@@ -567,27 +498,8 @@ func checkTelemetryDarkSpot(repoRoot string) *Check {
 	}
 }
 
-// countSkillFiles walks <skills>/packages/**/SKILL.md and returns the
-// count. Returns 0 (not an error) when the dir is missing — the doctor
-// caller treats absence as "skills feature not enabled" rather than a
-// failure.
-func countSkillFiles(skillsPackagesDir string) int {
-	count := 0
-	_ = filepath.Walk(skillsPackagesDir, func(p string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		if !info.IsDir() && filepath.Base(p) == "SKILL.md" {
-			count++
-		}
-		return nil
-	})
-	return count
-}
-
-// ThresholdsFromConfig lets users override defaults via the embedder block
-// in .mycelium.yml once we add a doctor section. For v1.1 we only consume
-// the embedder provider and keep everything else at DefaultThresholds().
+// ThresholdsFromConfig returns defaults from the config. Reserved for future
+// per-repo threshold overrides via .mycelium.yml.
 func ThresholdsFromConfig(_ config.Config) Thresholds {
 	return DefaultThresholds()
 }

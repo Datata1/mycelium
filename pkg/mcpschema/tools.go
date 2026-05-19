@@ -202,40 +202,6 @@ func Tools() []Tool {
 			},
 		},
 		{
-			Name:        "search_semantic",
-			Description: "Embedding-based search over code chunks. Use this for intent queries ('function that parses ISO dates', 'http handler for login') when you don't know the symbol name and lexical search would miss the wording. If you do know the name, prefer `find_symbol` — it's faster and exact. Requires an embedder configured; returns an error otherwise. Each hit carries `path` + `project` for `read_focused` follow-ups.",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"query": map[string]any{
-						"type":        "string",
-						"description": "Natural-language description of what you're looking for.",
-					},
-					"k": map[string]any{
-						"type":        "integer",
-						"description": "Number of results to return (default 10).",
-					},
-					"kind": map[string]any{
-						"type":        "string",
-						"description": "Optional symbol kind filter.",
-					},
-					"path_contains": map[string]any{
-						"type":        "string",
-						"description": "Restrict to files whose path contains this substring. Matches both project-relative and repo-relative forms in workspace mode.",
-					},
-					"project": map[string]any{
-						"type":        "string",
-						"description": "Optional workspace project name to scope the search to.",
-					},
-					"since": map[string]any{
-						"type":        "string",
-						"description": "Optional git ref. Restricts to files changed between <ref>...HEAD (v1.6).",
-					},
-				},
-				"required": []string{"query"},
-			},
-		},
-		{
 			Name:        "impact_analysis",
 			Description: "Transitive inbound closure around a symbol, ranked by distance. Reach for this when answering 'who's impacted if I change X?' — it's the right tool to scope a refactor before touching code. With a `kind` filter (e.g. 'test') it also answers 'what tests cover this?'. Returns a flat distance-sorted list; use `get_neighborhood` instead when you need the graph shape rather than a flat impact set. Each hit's `path` + `project` pass verbatim to `read_focused`.",
 			InputSchema: map[string]any{

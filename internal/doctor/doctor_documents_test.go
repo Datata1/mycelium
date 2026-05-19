@@ -42,7 +42,7 @@ func insertDocumentEntry(t *testing.T, db *sql.DB, fileID int64, kind, key, valu
 func TestDocumentsCheck_SkippedOnCodeOnlyRepo(t *testing.T) {
 	ix := openTestIndex(t)
 	r := query.NewReader(ix.DB())
-	rep, err := Run(context.Background(), r, "none", DefaultThresholds(), "")
+	rep, err := Run(context.Background(), r, DefaultThresholds(), "")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestDocumentsCheck_PassWithEntries(t *testing.T) {
 	insertDocumentEntry(t, ix.DB(), fid, "i18n_json", "topbar.fwd", "Go forward")
 
 	r := query.NewReader(ix.DB())
-	rep, err := Run(context.Background(), r, "none", DefaultThresholds(), "")
+	rep, err := Run(context.Background(), r, DefaultThresholds(), "")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestTelemetryDarkSpot_FlagsWhenSessionsButNoTelemetry(t *testing.T) {
 
 	ix := openTestIndex(t)
 	r := query.NewReader(ix.DB())
-	rep, err := Run(context.Background(), r, "none", DefaultThresholds(), repoRoot)
+	rep, err := Run(context.Background(), r, DefaultThresholds(), repoRoot)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestTelemetryDarkSpot_QuietWhenBothPresent(t *testing.T) {
 	}
 	ix := openTestIndex(t)
 	r := query.NewReader(ix.DB())
-	rep, err := Run(context.Background(), r, "none", DefaultThresholds(), repoRoot)
+	rep, err := Run(context.Background(), r, DefaultThresholds(), repoRoot)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestTelemetryDarkSpot_QuietOnFreshRepo(t *testing.T) {
 	}
 	ix := openTestIndex(t)
 	r := query.NewReader(ix.DB())
-	rep, err := Run(context.Background(), r, "none", DefaultThresholds(), repoRoot)
+	rep, err := Run(context.Background(), r, DefaultThresholds(), repoRoot)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestDocumentsCheck_WarnsOnEmptyDocumentFile(t *testing.T) {
 	// extracted entries.
 
 	r := query.NewReader(ix.DB())
-	rep, err := Run(context.Background(), r, "none", DefaultThresholds(), "")
+	rep, err := Run(context.Background(), r, DefaultThresholds(), "")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

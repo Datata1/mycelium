@@ -4,12 +4,19 @@ Mycelium is a local repository knowledge base for AI coding agents. The binary
 is `myco`; storage is a single SQLite file at `.mycelium/index.db`; three
 transports (MCP stdio, unix socket, HTTP :7777 loopback) share one dispatcher.
 
-See `README.md` for user-facing docs, `CONTEXT.md` for the problem + goals,
-`LIMITATIONS.md` for what doesn't work today (read before proposing new
-features), `CHANGELOG.md` for version history, and `docs/adoption.md` for
-guidance on verifying that an agent is actually reaching for myco tools.
+See `README.md` for user-facing docs, `docs/limitations.md` for what doesn't
+work today (read before proposing new features), `CHANGELOG.md` for version
+history, and `docs/adoption.md` for guidance on verifying that an agent is
+actually reaching for myco tools.
 
-Active roadmap: `~/.claude/plans/7-v3.1-broader-hyphae.md` (v3.2–v3.4 plan).
+## Problem and goals
+
+Mycelium gives AI coding agents structural, always-fresh knowledge of a repo
+without external services. Agents can ask for a symbol, its callers, its
+neighborhood, or a lexical match and get typed results with `file:line` anchors.
+
+Non-goals (current): type-perfect cross-file resolution, LLM summaries at index
+time, cross-repo federation, Docker image, hosted service, pre-commit hooks.
 
 ## Build + run
 
@@ -88,36 +95,20 @@ Enforce in review. Deviations need an explicit reason in CHANGELOG.
   criteria met (type-aware refs, workspace, graph tools, doctor, vec).
 - **v2.2** — Opt-in telemetry log (`internal/telemetry`). JSONL per-call
   recorder; `myco stats --telemetry` aggregator. Off by default.
-- **v2.3** — Static skills tree (`internal/skills`, `myco skills compile`).
-  Per-package `SKILL.md` + cross-cutting `aspects/` under `.mycelium/skills/`.
 - **v2.4** — Focused reads. `internal/focus` lexical filter; `read_focused`
   MCP tool + `myco read`; `--focus` on `find_symbol`, `get_file_outline`,
   `get_neighborhood`. Typical 80% byte reduction on large files.
-- **v2.5** — Incremental skills regen. `skill_files` hash gate; daemon-driven
-  batcher; `--status`/`--incremental` flags on `myco skills compile`.
-- **v3.0** — Agent-native release: bundled sqlite-vec in release tarball,
-  `docs/adoption.md`, `docs/navigation-example.md`, zero-config semantic
-  search on release builds, v3 plan pillars consolidated.
 - **v3.1** — Adoption fixes from first TS-monorepo field test:
   `FindSymbolResult{Matches,Hints}` envelope (no more `null` on miss),
   MCP tool descriptions rewritten for first-reach priming, `Stats.ConfiguredProjects`
   + `projects_configured_but_empty` doctor check.
-- **v3.1.1 (unreleased)** — Workspace-mode disk-read fix: `ReadFocused` and
-  `SearchLexical` now LEFT JOIN `projects` to recover the project root when
-  resolving paths on disk (project-relative storage + repo-root assumption
-  was returning ENOENT on every workspace-project file).
-- **Session telemetry (unreleased, between-roadmap)** — `myco session`
-  command group: per-conversation sessions, automatic Claude Code hook wiring
-  (`UserPromptSubmit` / `PostToolUse` / `Stop`), fallback-tool tracking
-  (grep/Read calls recorded alongside myco calls so adoption quality is
-  measurable). `telemetry.enabled: true` is set in `.mycelium.yml`.
-
-**Active next: v3.2 — Setup wizard** (C1 interactive `myco init`, C2 CLAUDE.md
-priming snippet, C3 `--doctor-after` for CI). Plan:
-`~/.claude/plans/7-v3.1-broader-hyphae.md`.
-
-After that: v3.3 (documents surface: i18n JSON / package.json / go.mod
-indexing + `find_document_key` tool), v3.4 (route literals + new languages).
+- **Session telemetry** — `myco session` command group: per-conversation sessions,
+  automatic Claude Code hook wiring, fallback-tool tracking. `telemetry.enabled: true`
+  is set in `.mycelium.yml`.
+- **v4.0** — Adoption fixed-point, bug triage, polish.
+- **v5.0 (current)** — Cleanup milestone: embeddings removed, skills compilation
+  removed, cmd package split, integration tests moved to `test/integration/`,
+  language extension contract documented in `docs/adding-a-language.md`.
 
 ## Dogfooding — use mycelium to develop mycelium
 
@@ -151,8 +142,8 @@ made instead of using myco. Low ratio = myco is covering the use case.
 
 Available MCP tools (all active):
 `find_symbol`, `get_references`, `get_definition`, `get_neighborhood`,
-`search_lexical`, `search_semantic`, `get_file_outline`, `get_file_summary`,
-`read_focused`, `impact_analysis`, `critical_path`, `stats`, `list_files`.
+`search_lexical`, `get_file_outline`, `get_file_summary`, `read_focused`,
+`impact_analysis`, `critical_path`, `stats`, `list_files`, `find_document_key`.
 
 ## Conventions
 

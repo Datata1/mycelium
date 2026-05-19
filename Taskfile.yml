@@ -156,3 +156,32 @@ tasks:
     deps: [build]
     cmds:
       - '{{.BIN}} session hooks install'
+
+  # ── release ──────────────────────────────────────────────────────────────────
+
+  tag:
+    desc: |
+      Create the next release tag (annotated). Defaults to patch bump of the
+      latest vX.Y.Z tag. Override: task tag -- v5.0.0
+      Push afterwards with: git push origin <tag>
+    cmds:
+      - |
+        set -eu
+        latest=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)
+        [ -z "$latest" ] && latest="v0.0.0"
+
+        if [ -n "{{.CLI_ARGS}}" ]; then
+          next="{{.CLI_ARGS}}"
+        else
+          major=$(echo "$latest" | sed 's/v\([0-9]*\)\..*/\1/')
+          minor=$(echo "$latest" | sed 's/v[0-9]*\.\([0-9]*\)\..*/\1/')
+          patch=$(echo "$latest" | sed 's/v[0-9]*\.[0-9]*\.\([0-9]*\).*/\1/')
+          next="v${major}.${minor}.$((patch + 1))"
+        fi
+
+        echo "latest tag : $latest"
+        echo "new tag    : $next"
+        git tag -a "$next" -m "release $next"
+        echo ""
+        echo "Tag created. Push with:"
+        echo "  git push origin $next"
