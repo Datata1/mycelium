@@ -56,7 +56,7 @@ func runDaemon(ctx context.Context, backendOverride string) error {
 	// Write a PID file so `myco doctor` can probe /proc/<pid>/fd for
 	// fd-headroom warnings. Best-effort; failure to write doesn't stop
 	// the daemon.
-	pidPath := filepath.Join(rc.Root, ".mycelium", "daemon.pid")
+	pidPath := filepath.Join(rc.AbsStateDir(), "daemon.pid")
 	if err := os.WriteFile(pidPath, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "[daemon] could not write pid file %s: %v\n", pidPath, err)
 	} else {
@@ -126,13 +126,13 @@ func runDaemon(ctx context.Context, backendOverride string) error {
 	if rc.Cfg.Telemetry.Enabled {
 		path := rc.Cfg.Telemetry.Path
 		if path == "" {
-			path = filepath.Join(rc.Root, ".mycelium", "telemetry.jsonl")
+			path = filepath.Join(rc.AbsStateDir(), "telemetry.jsonl")
 		}
 		fr, err := telemetry.Open(path)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[daemon] telemetry disabled: %v\n", err)
 		} else {
-			sessionFile := filepath.Join(rc.Root, ".mycelium", "current_session.json")
+			sessionFile := filepath.Join(rc.AbsStateDir(), "current_session.json")
 			fr.SetSessionFile(sessionFile)
 			rec = fr
 			fmt.Fprintf(os.Stderr, "[daemon] telemetry on: %s\n", path)
@@ -144,7 +144,7 @@ func runDaemon(ctx context.Context, backendOverride string) error {
 		Pipeline:  p,
 		Reader:    query.NewReader(ix.DB()),
 		Watcher:   wat,
-		Socket:    rc.Root + "/" + rc.Cfg.Daemon.Socket,
+		Socket:    rc.AbsSocketPath(),
 		RepoRoot:  rc.Root,
 		Telemetry: rec,
 	}

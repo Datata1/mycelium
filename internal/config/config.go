@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"gopkg.in/yaml.v3"
 )
@@ -200,4 +201,89 @@ func (c Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+// UserConfig is the subset of Config that makes sense as a user-level global
+// default. It intentionally omits Projects (always repo-specific) and Include
+// (too repo-specific). Index.Path and Daemon.Socket may hold ~/... paths set
+// by `myco init --user` to store the index outside the repo.
+type UserConfig struct {
+	Version   int             `yaml:"version"`
+	Languages []string        `yaml:"languages"`
+	Exclude   []string        `yaml:"exclude"`
+	Watcher   WatcherConfig   `yaml:"watcher"`
+	Daemon    DaemonConfig    `yaml:"daemon"`
+	Index     IndexConfig     `yaml:"index"`
+	Telemetry TelemetryConfig `yaml:"telemetry"`
+}
+
+// UserConfigPath returns the XDG-compliant user-level config path
+// ($XDG_CONFIG_HOME/myco/config.yml, falling back to ~/.config/myco/config.yml).
+// os.UserConfigDir() implements the XDG spec on Linux and platform equivalents
+// on macOS/Windows.
+func UserConfigPath() (string, error) {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("user config dir: %w", err)
+	}
+	return filepath.Join(dir, "myco", "config.yml"), nil
+}
+
+// LoadUser reads a UserConfig from path. Missing fields stay at zero values
+// (not defaults) so applyUserConfig can distinguish "user set this" from "user
+// left this empty".
+func LoadUser(path string) (UserConfig, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return UserConfig{}, fmt.Errorf("read %s: %w", path, err)
+	}
+	var u UserConfig
+	if err := yaml.Unmarshal(b, &u); err != nil {
+		return UserConfig{}, fmt.Errorf("parse %s: %w", path, err)
+	}
+	return u, nil
+}
+
+// ApplyUserConfig overlays non-zero fields from u onto base. Slice fields
+// (Languages, Exclude) replace the base slice when non-empty. Scalar fields
+// replace the base value when non-zero. Repo-level .mycelium.yml always
+// supersedes this because loadRepoCtx applies it last.
+func ApplyUserConfig(base Config, u UserConfig) Config {
+	if len(u.Languages) > 0 {
+		base.Languages = u.Languages
+	}
+	if len(u.Exclude) > 0 {
+		base.Exclude = u.Exclude
+	}
+	if u.Watcher.Backend != "" {
+		base.Watcher.Backend = u.Watcher.Backend
+	}
+	if u.Watcher.DebounceMS != 0 {
+		base.Watcher.DebounceMS = u.Watcher.DebounceMS
+	}
+	if u.Watcher.CoalesceMS != 0 {
+		base.Watcher.CoalesceMS = u.Watcher.CoalesceMS
+	}
+	if u.Daemon.Socket != "" {
+		base.Daemon.Socket = u.Daemon.Socket
+	}
+	if u.Daemon.HTTPPort != 0 {
+		base.Daemon.HTTPPort = u.Daemon.HTTPPort
+	}
+	if u.Index.Path != "" {
+		base.Index.Path = u.Index.Path
+	}
+	if u.Index.MaxFileSizeKB != 0 {
+		base.Index.MaxFileSizeKB = u.Index.MaxFileSizeKB
+	}
+	if u.Telemetry.Enabled {
+		base.Telemetry.Enabled = true
+	}
+	if u.Telemetry.Path != "" {
+		base.Telemetry.Path = u.Telemetry.Path
+	}
+	if u.Telemetry.CharsPerToken != 0 {
+		base.Telemetry.CharsPerToken = u.Telemetry.CharsPerToken
+	}
+	return base
 }

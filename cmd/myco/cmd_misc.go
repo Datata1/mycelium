@@ -35,7 +35,7 @@ func newHookCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return hook.RunPostCommit(ctx, rc.Root+"/"+rc.Cfg.Daemon.Socket)
+			return hook.RunPostCommit(ctx, rc.AbsSocketPath())
 		},
 	})
 	return cmd
@@ -52,9 +52,9 @@ func newMCPCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := ipc.NewClient(rc.Root + "/" + rc.Cfg.Daemon.Socket)
+			client := ipc.NewClient(rc.AbsSocketPath())
 			if !client.IsReachable() {
-				return fmt.Errorf("daemon is not running at %s — start it with `myco daemon &`", rc.Root+"/"+rc.Cfg.Daemon.Socket)
+				return fmt.Errorf("daemon is not running at %s — start it with `myco daemon &`", rc.AbsSocketPath())
 			}
 			srv := &mcp.Server{In: os.Stdin, Out: os.Stdout, Client: client, Version: version}
 			return srv.Run(ctx)

@@ -23,8 +23,8 @@ import (
 // startup): the bump preempts most EMFILE cases on macOS; this
 // check surfaces remaining headroom pressure on Linux where
 // monorepo-scale fsnotify-watched repos can still exhaust fds.
-func daemonFDHeadroomCheck(repoRoot string, th Thresholds) *Check {
-	pid, ok := readDaemonPID(repoRoot)
+func daemonFDHeadroomCheck(stateDir string, th Thresholds) *Check {
+	pid, ok := readDaemonPID(stateDir)
 	if !ok {
 		return nil
 	}
@@ -64,8 +64,8 @@ func daemonFDHeadroomCheck(repoRoot string, th Thresholds) *Check {
 	}
 }
 
-func readDaemonPID(repoRoot string) (int, bool) {
-	b, err := os.ReadFile(filepath.Join(repoRoot, ".mycelium", "daemon.pid"))
+func readDaemonPID(stateDir string) (int, bool) {
+	b, err := os.ReadFile(filepath.Join(stateDir, "daemon.pid"))
 	if err != nil {
 		return 0, false
 	}

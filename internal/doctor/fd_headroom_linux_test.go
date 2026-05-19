@@ -16,11 +16,12 @@ import (
 func TestDaemonFDHeadroomCheck_SkipsWhenNoPIDFile(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, ".mycelium"), 0o755); err != nil {
+	stateDir := filepath.Join(dir, ".mycelium")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 	// No daemon.pid file written.
-	got := daemonFDHeadroomCheck(dir, DefaultThresholds())
+	got := daemonFDHeadroomCheck(stateDir, DefaultThresholds())
 	if got != nil {
 		t.Errorf("expected nil when pid file is absent; got %+v", got)
 	}
@@ -33,7 +34,8 @@ func TestDaemonFDHeadroomCheck_SkipsWhenNoPIDFile(t *testing.T) {
 func TestDaemonFDHeadroomCheck_SkipsOnStalePID(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, ".mycelium"), 0o755); err != nil {
+	stateDir := filepath.Join(dir, ".mycelium")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 	// PID 1 is init — exists on every Linux box but isn't us.
@@ -41,12 +43,12 @@ func TestDaemonFDHeadroomCheck_SkipsOnStalePID(t *testing.T) {
 	// definitely doesn't exist. 0x7fffffff is the int32 max,
 	// well above any sane process count.
 	if err := os.WriteFile(
-		filepath.Join(dir, ".mycelium", "daemon.pid"),
+		filepath.Join(stateDir, "daemon.pid"),
 		[]byte("2147483647\n"), 0o644,
 	); err != nil {
 		t.Fatalf("write pid: %v", err)
 	}
-	got := daemonFDHeadroomCheck(dir, DefaultThresholds())
+	got := daemonFDHeadroomCheck(stateDir, DefaultThresholds())
 	if got != nil {
 		t.Errorf("expected nil for stale PID; got %+v", got)
 	}
@@ -58,17 +60,18 @@ func TestDaemonFDHeadroomCheck_SkipsOnStalePID(t *testing.T) {
 func TestDaemonFDHeadroomCheck_RealProcess(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, ".mycelium"), 0o755); err != nil {
+	stateDir := filepath.Join(dir, ".mycelium")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 	pid := os.Getpid()
 	if err := os.WriteFile(
-		filepath.Join(dir, ".mycelium", "daemon.pid"),
+		filepath.Join(stateDir, "daemon.pid"),
 		[]byte(fmt.Sprintf("%d\n", pid)), 0o644,
 	); err != nil {
 		t.Fatalf("write pid: %v", err)
 	}
-	got := daemonFDHeadroomCheck(dir, DefaultThresholds())
+	got := daemonFDHeadroomCheck(stateDir, DefaultThresholds())
 	if got == nil {
 		t.Fatal("expected non-nil check; got nil")
 	}

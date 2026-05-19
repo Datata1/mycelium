@@ -41,7 +41,7 @@ func newDoctorCmd() *cobra.Command {
 				th.AdoptionWindow = window
 			}
 			r := query.NewReader(ix.DB())
-			rep, err := doctor.Run(ctx, r, th, rc.Root)
+			rep, err := doctor.Run(ctx, r, th, rc.Root, rc.AbsStateDir())
 			if err != nil {
 				return err
 			}

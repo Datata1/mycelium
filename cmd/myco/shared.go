@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 
 	"github.com/jdwiederstein/mycelium/internal/index"
@@ -15,10 +16,14 @@ import (
 	tsresolver "github.com/jdwiederstein/mycelium/internal/resolver/typescript"
 )
 
-// openIndex opens the repo's SQLite index. The returned Index handles
-// both sqlite-vec and fallback paths transparently.
+// openIndex opens the repo's SQLite index, creating parent directories when
+// the index lives outside the repo (e.g. a ~/... path from `myco init --user`).
 func openIndex(rc repoCtx) (*index.Index, error) {
-	return index.Open(rc.Root + "/" + rc.Cfg.Index.Path)
+	p := rc.AbsIndexPath()
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return nil, fmt.Errorf("mkdir index dir: %w", err)
+	}
+	return index.Open(p)
 }
 
 // buildWorkspaces materializes the v1.5 per-project walkers from config

@@ -63,26 +63,26 @@ Requires a running daemon (start with ` + "`myco daemon`" + `).`,
 
 func runBenchCounterfactual(driftThreshold float64, format, repoOverride, language string, adaptive bool) error {
 	root := repoOverride
-	socket := ""
+	var socketPath string
 	if root == "" {
 		rc, err := loadRepoCtx()
 		if err != nil {
 			return err
 		}
 		root = rc.Root
-		socket = rc.Cfg.Daemon.Socket
+		socketPath = rc.AbsSocketPath()
 	} else {
 		// When --repo is passed, build a thin context from the path —
 		// don't run loadRepoCtx (which would still discover from cwd
 		// and ignore the override). Default socket name matches the
 		// out-of-box config.
-		socket = config.Default().Daemon.Socket
+		socketPath = resolvePath(root, config.Default().Daemon.Socket, config.DefaultSocket)
 	}
 
-	client := ipc.NewClient(root + "/" + socket)
+	client := ipc.NewClient(socketPath)
 	if !client.IsReachable() {
-		return fmt.Errorf("daemon not reachable at %s/%s — start it with `myco daemon` (in that repo)",
-			root, socket)
+		return fmt.Errorf("daemon not reachable at %s — start it with `myco daemon` (in that repo)",
+			socketPath)
 	}
 
 	// v4 T4: adaptive corpus probes the daemon for real targets in the

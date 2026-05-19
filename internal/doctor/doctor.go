@@ -130,10 +130,12 @@ func DefaultThresholds() Thresholds {
 	}
 }
 
-// Run assembles the report. Callers pass the reader, their preferred
-// thresholds, and the repo root (for the inotify headroom check; empty
-// skips the check).
-func Run(ctx context.Context, r *query.Reader, th Thresholds, repoRoot string) (Report, error) {
+// Run assembles the report. repoRoot is used for the inotify headroom check
+// (directory count); stateDir is where the daemon writes its PID file,
+// telemetry log, and session files (usually .mycelium/ inside the repo, but
+// may be an external path when the user configures ~/... index paths).
+// Pass empty strings to skip those checks.
+func Run(ctx context.Context, r *query.Reader, th Thresholds, repoRoot, stateDir string) (Report, error) {
 	s, err := r.Stats(ctx)
 	if err != nil {
 		return Report{}, fmt.Errorf("stats: %w", err)
@@ -274,12 +276,21 @@ func Run(ctx context.Context, r *query.Reader, th Thresholds, repoRoot string) (
 		if c := inotifyCheck(repoRoot, th); c != nil {
 			add(*c)
 		}
-		// v4 T2 layer 1: read the daemon's PID file (written by
-		// runDaemon) and probe /proc/<pid>/fd to surface fd-headroom
-		// pressure before EMFILE hits. Linux-only; no-op stub on
-		// macOS / Windows.
-		if c := daemonFDHeadroomCheck(repoRoot, th); c != nil {
-			add(*c)
+	}
+	{
+		// Resolve the state dir: explicit stateDir > repoRoot/.mycelium fallback.
+		sd := stateDir
+		if sd == "" && repoRoot != "" {
+			sd = filepath.Join(repoRoot, ".mycelium")
+		}
+		if sd != "" {
+			// v4 T2 layer 1: read the daemon's PID file (written by
+			// runDaemon) and probe /proc/<pid>/fd to surface fd-headroom
+			// pressure before EMFILE hits. Linux-only; no-op stub on
+			// macOS / Windows.
+			if c := daemonFDHeadroomCheck(sd, th); c != nil {
+				add(*c)
+			}
 		}
 	}
 
@@ -377,23 +388,29 @@ func Run(ctx context.Context, r *query.Reader, th Thresholds, repoRoot string) (
 	// CI). The legacy v3.4 telemetry-dark-spot warning still fires as
 	// a regular Check because "telemetry off in a dogfood repo" is a
 	// configuration bug, not an adoption insight.
-	if repoRoot != "" {
-		rep.Adoption = evaluateAdoptionForRepo(repoRoot, th)
-		if c := checkTelemetryDarkSpot(repoRoot); c != nil {
-			add(*c)
+	{
+		sd := stateDir
+		if sd == "" && repoRoot != "" {
+			sd = filepath.Join(repoRoot, ".mycelium")
+		}
+		if sd != "" {
+			rep.Adoption = evaluateAdoptionForStateDir(sd, th)
+			if c := checkTelemetryDarkSpot(sd); c != nil {
+				add(*c)
+			}
 		}
 	}
 
 	return rep, nil
 }
 
-// evaluateAdoptionForRepo is the I/O wrapper around EvaluateAdoption:
-// reads the windowed myco + fallback summaries from disk, counts
-// distinct sessions in the window, and hands the result to the pure
-// evaluator. Empty (or no-telemetry) repos return nil — the renderer
-// then suppresses the section entirely.
-func evaluateAdoptionForRepo(repoRoot string, th Thresholds) []AdoptionFinding {
-	mDir := filepath.Join(repoRoot, ".mycelium")
+// evaluateAdoptionForStateDir is the I/O wrapper around EvaluateAdoption:
+// reads the windowed myco + fallback summaries from stateDir (the directory
+// that holds telemetry.jsonl and session_*_external.jsonl files), counts
+// distinct sessions in the window, and hands the result to the pure evaluator.
+// Empty (or no-telemetry) state dirs return nil.
+func evaluateAdoptionForStateDir(stateDir string, th Thresholds) []AdoptionFinding {
+	mDir := stateDir
 	since := time.Time{}
 	if th.AdoptionWindow > 0 {
 		since = time.Now().Add(-th.AdoptionWindow)
@@ -461,8 +478,8 @@ func sortedDocKindKeys(m map[string]int) []string {
 // Returns nil when neither stream is present (a quiet repo, no
 // adoption story yet) or when both are present (telemetry on, all
 // good).
-func checkTelemetryDarkSpot(repoRoot string) *Check {
-	mDir := filepath.Join(repoRoot, ".mycelium")
+func checkTelemetryDarkSpot(stateDir string) *Check {
+	mDir := stateDir
 	hasSessions := false
 	entries, err := os.ReadDir(mDir)
 	if err != nil {

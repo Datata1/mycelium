@@ -44,7 +44,7 @@ func transcriptFor(rep telemetry.SessionReport, repoRoot string) string {
 }
 
 func sessionPaths(rc repoCtx) (jsonlPath, sessionFilePath, hookMetaDir string) {
-	base := filepath.Join(rc.Root, ".mycelium")
+	base := rc.AbsStateDir()
 	jsonlPath = rc.Cfg.Telemetry.Path
 	if jsonlPath == "" {
 		jsonlPath = filepath.Join(base, "telemetry.jsonl")

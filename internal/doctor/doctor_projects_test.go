@@ -68,7 +68,7 @@ func TestProjectsCheck_SkippedWhenSingleProject(t *testing.T) {
 	ix := openTestIndex(t)
 	r := query.NewReader(ix.DB())
 
-	rep, err := Run(context.Background(), r, DefaultThresholds(), "")
+	rep, err := Run(context.Background(), r, DefaultThresholds(), "", "")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestProjectsCheck_PassWhenAllPopulated(t *testing.T) {
 	}
 
 	r := query.NewReader(ix.DB())
-	rep, err := Run(context.Background(), r, DefaultThresholds(), "")
+	rep, err := Run(context.Background(), r, DefaultThresholds(), "", "")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestProjectsCheck_FailsOnEmptyProject(t *testing.T) {
 	}
 
 	r := query.NewReader(ix.DB())
-	rep, err := Run(context.Background(), r, DefaultThresholds(), "")
+	rep, err := Run(context.Background(), r, DefaultThresholds(), "", "")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestProjectsCheck_WarnsOnTinyProject(t *testing.T) {
 	}
 
 	r := query.NewReader(ix.DB())
-	rep, err := Run(context.Background(), r, DefaultThresholds(), "")
+	rep, err := Run(context.Background(), r, DefaultThresholds(), "", "")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

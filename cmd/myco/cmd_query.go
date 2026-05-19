@@ -177,7 +177,7 @@ func newQueryCmd() *cobra.Command {
 // configured socket. Callers that can fall back to a direct DB read use
 // this to avoid double-opening SQLite when the daemon owns the file.
 func daemonClient(rc repoCtx) (*ipc.Client, bool) {
-	c := ipc.NewClient(rc.Root + "/" + rc.Cfg.Daemon.Socket)
+	c := ipc.NewClient(rc.AbsSocketPath())
 	if c.IsReachable() {
 		return c, true
 	}
