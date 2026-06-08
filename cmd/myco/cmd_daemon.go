@@ -55,8 +55,9 @@ func runDaemon(ctx context.Context, backendOverride string) error {
 
 	// Write a PID file so `myco doctor` can probe /proc/<pid>/fd for
 	// fd-headroom warnings. Best-effort; failure to write doesn't stop
-	// the daemon.
+	// the daemon. MkdirAll here because openIndex hasn't run yet.
 	pidPath := filepath.Join(rc.AbsStateDir(), "daemon.pid")
+	_ = os.MkdirAll(rc.AbsStateDir(), 0o755)
 	if err := os.WriteFile(pidPath, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "[daemon] could not write pid file %s: %v\n", pidPath, err)
 	} else {
@@ -95,6 +96,7 @@ func runDaemon(ctx context.Context, backendOverride string) error {
 
 	// Catch-up scan before accepting connections so the index reflects
 	// any changes that happened while the daemon was down.
+	fmt.Fprintf(os.Stderr, "[daemon] catch-up scan starting (this may take a while on first run)…\n")
 	if rep, err := p.RunOnce(ctx); err != nil {
 		return fmt.Errorf("catch-up scan: %w", err)
 	} else {
