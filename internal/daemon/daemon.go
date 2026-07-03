@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -31,27 +32,26 @@ type Daemon struct {
 	// to telemetry.Disabled{} so the dispatcher path is uniform — no
 	// nil checks at every call site.
 	Telemetry telemetry.Recorder
-	Logger    Logger
+	// Log defaults to a text handler on stderr; set it to share a root
+	// logger (or silence the daemon in tests).
+	Log *slog.Logger
 }
 
-type Logger interface {
-	Printf(format string, args ...any)
+// log is the nil-safe accessor so handleConn works on a bare Daemon.
+func (d *Daemon) log() *slog.Logger {
+	if d.Log == nil {
+		return discardLog
+	}
+	return d.Log
 }
 
-type stderrLogger struct{}
-
-func (stderrLogger) Printf(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "[daemon] "+format+"\n", args...)
-}
-
-// NewStderrLogger is a convenience default.
-func NewStderrLogger() Logger { return stderrLogger{} }
+var discardLog = slog.New(slog.DiscardHandler)
 
 // Run starts the watcher, listens on the unix socket, and blocks until ctx
 // is cancelled. On shutdown the socket file is removed.
 func (d *Daemon) Run(ctx context.Context) error {
-	if d.Logger == nil {
-		d.Logger = NewStderrLogger()
+	if d.Log == nil {
+		d.Log = slog.New(slog.NewTextHandler(os.Stderr, nil)).With("component", "daemon")
 	}
 	if err := os.MkdirAll(filepath.Dir(d.Socket), 0o755); err != nil {
 		return fmt.Errorf("mkdir socket dir: %w", err)
@@ -86,21 +86,21 @@ func (d *Daemon) Run(ctx context.Context) error {
 	go func() {
 		defer wg.Done()
 		for ev := range d.Watcher.Events() {
-			d.Logger.Printf("change %s (removed=%v)", ev.RelPath, ev.Removed)
+			d.Log.Info("file change", "path", ev.RelPath, "removed", ev.Removed)
 			if _, err := d.Pipeline.HandleChange(ctx, ev.RelPath, ev.AbsPath, ev.Removed); err != nil {
-				d.Logger.Printf("handle %s: %v", ev.RelPath, err)
+				d.Log.Error("handle change", "path", ev.RelPath, "err", err)
 			}
 		}
 	}()
 
-	d.Logger.Printf("listening on %s", d.Socket)
+	d.Log.Info("listening", "socket", d.Socket)
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			if ctx.Err() != nil {
 				break
 			}
-			d.Logger.Printf("accept error: %v", err)
+			d.Log.Warn("accept", "err", err)
 			continue
 		}
 		wg.Add(1)
@@ -310,13 +310,13 @@ func (d *Daemon) writeOK(conn net.Conn, result any) {
 	}
 	resp := ipc.Response{OK: true, Result: payload}
 	if err := json.NewEncoder(conn).Encode(&resp); err != nil {
-		d.Logger.Printf("write response: %v", err)
+		d.log().Warn("write response", "err", err)
 	}
 }
 
 func (d *Daemon) writeErr(conn net.Conn, callErr error) {
 	resp := ipc.Response{OK: false, Error: callErr.Error(), Code: ipc.CodeFor(callErr)}
 	if err := json.NewEncoder(conn).Encode(&resp); err != nil {
-		d.Logger.Printf("write response: %v", err)
+		d.log().Warn("write response", "err", err)
 	}
 }

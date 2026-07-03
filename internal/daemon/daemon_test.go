@@ -22,7 +22,7 @@ func testDaemon(t *testing.T) *Daemon {
 		t.Fatalf("open index: %v", err)
 	}
 	t.Cleanup(func() { _ = ix.Close() })
-	return &Daemon{Reader: query.NewReader(ix.DB()), Logger: NewStderrLogger()}
+	return &Daemon{Reader: query.NewReader(ix.DB())}
 }
 
 // callPipe drives handleConn over an in-memory pipe: one request in, one

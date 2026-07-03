@@ -3,7 +3,6 @@ package pipeline
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"runtime"
 	"sync"
@@ -62,7 +61,6 @@ type Pipeline struct {
 	// Resolvers is keyed by language ("go", "typescript", "python"). A
 	// missing entry means textual resolution only for that language.
 	Resolvers map[string]Resolver
-	Logger    Logger
 
 	// Deprecated: kept for legacy callers; prefer Resolvers["go"].
 	GoResolver *goresolver.Resolver
@@ -71,20 +69,6 @@ type Pipeline struct {
 	// construction for the v1.5 workspace path; nil for single-project use.
 	FileProjectFor func(absPath string) int64
 }
-
-// Logger is a minimal dependency so callers can plug in whatever they have.
-type Logger interface {
-	Printf(format string, args ...any)
-}
-
-type stdoutLogger struct{ w io.Writer }
-
-func (l stdoutLogger) Printf(format string, args ...any) {
-	fmt.Fprintf(l.w, format, args...)
-}
-
-// NewStdoutLogger is a convenience for the `myco index` command.
-func NewStdoutLogger() Logger { return stdoutLogger{w: os.Stdout} }
 
 // Report summarizes a pipeline run.
 type Report struct {
@@ -465,11 +449,6 @@ func (p *Pipeline) writeParsed(ctx context.Context, f repo.File, prs parser.Pars
 	}
 	return true, len(result.Symbols), len(result.References), nil
 }
-
-// NullLogger discards all log output.
-type NullLogger struct{}
-
-func (NullLogger) Printf(string, ...any) {}
 
 // resolverFor returns the resolver registered for lang, falling back to the
 // legacy GoResolver field so pre-v1.3 construction keeps working unchanged.

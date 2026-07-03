@@ -9,7 +9,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"strconv"
@@ -35,7 +37,7 @@ type Dispatcher interface {
 type Server struct {
 	Port       int
 	Dispatcher Dispatcher
-	Logger     func(format string, args ...any)
+	Log        *slog.Logger
 
 	srv  *http.Server
 	ln   net.Listener
@@ -64,8 +66,8 @@ func (s *Server) Start(ctx context.Context) error {
 		_ = s.Close()
 	}()
 	go func() {
-		if err := s.srv.Serve(ln); err != nil && err != http.ErrServerClosed && s.Logger != nil {
-			s.Logger("http server: %v", err)
+		if err := s.srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) && s.Log != nil {
+			s.Log.Error("http server", "err", err)
 		}
 	}()
 	return nil

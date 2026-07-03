@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -44,13 +45,16 @@ func runDaemon(ctx context.Context, backendOverride string) error {
 	if err != nil {
 		return err
 	}
+	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	dlog := log.With("component", "daemon")
+
 	// v4 T2: bump RLIMIT_NOFILE soft → hard before anything opens fds.
 	// Failure is non-fatal; daemon continues at the original limit and
 	// the doctor check will warn when fd usage gets close.
 	if soft, hard, rerr := daemon.RaiseFileDescriptorLimit(); rerr != nil {
-		fmt.Fprintf(os.Stderr, "[daemon] could not raise RLIMIT_NOFILE: %v (continuing at default)\n", rerr)
+		dlog.Warn("could not raise RLIMIT_NOFILE; continuing at default", "err", rerr)
 	} else if soft > 0 {
-		fmt.Fprintf(os.Stderr, "[daemon] RLIMIT_NOFILE raised to %d (hard cap %d)\n", soft, hard)
+		dlog.Info("RLIMIT_NOFILE raised", "soft", soft, "hard", hard)
 	}
 
 	// Write a PID file so `myco doctor` can probe /proc/<pid>/fd for
@@ -59,7 +63,7 @@ func runDaemon(ctx context.Context, backendOverride string) error {
 	pidPath := filepath.Join(rc.AbsStateDir(), "daemon.pid")
 	_ = os.MkdirAll(rc.AbsStateDir(), 0o755)
 	if err := os.WriteFile(pidPath, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o644); err != nil {
-		fmt.Fprintf(os.Stderr, "[daemon] could not write pid file %s: %v\n", pidPath, err)
+		dlog.Warn("could not write pid file", "path", pidPath, "err", err)
 	} else {
 		defer os.Remove(pidPath)
 	}
@@ -96,12 +100,12 @@ func runDaemon(ctx context.Context, backendOverride string) error {
 
 	// Catch-up scan before accepting connections so the index reflects
 	// any changes that happened while the daemon was down.
-	fmt.Fprintf(os.Stderr, "[daemon] catch-up scan starting (this may take a while on first run)…\n")
+	dlog.Info("catch-up scan starting (this may take a while on first run)")
 	if rep, err := p.RunOnce(ctx); err != nil {
 		return fmt.Errorf("catch-up scan: %w", err)
 	} else {
-		fmt.Fprintf(os.Stderr, "[daemon] catch-up: scanned=%d changed=%d duration=%s\n",
-			rep.FilesScanned, rep.FilesChanged, rep.Duration)
+		dlog.Info("catch-up done",
+			"scanned", rep.FilesScanned, "changed", rep.FilesChanged, "duration", rep.Duration)
 	}
 
 	backend := rc.Cfg.Watcher.Backend
@@ -132,12 +136,12 @@ func runDaemon(ctx context.Context, backendOverride string) error {
 		}
 		fr, err := telemetry.Open(path)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "[daemon] telemetry disabled: %v\n", err)
+			dlog.Warn("telemetry disabled", "err", err)
 		} else {
 			sessionFile := filepath.Join(rc.AbsStateDir(), "current_session.json")
 			fr.SetSessionFile(sessionFile)
 			rec = fr
-			fmt.Fprintf(os.Stderr, "[daemon] telemetry on: %s\n", path)
+			dlog.Info("telemetry on", "path", path)
 			defer fr.Close()
 		}
 	}
@@ -149,6 +153,7 @@ func runDaemon(ctx context.Context, backendOverride string) error {
 		Socket:    rc.AbsSocketPath(),
 		RepoRoot:  rc.Root,
 		Telemetry: rec,
+		Log:       dlog,
 	}
 
 	// Start the HTTP transport alongside the unix socket. Disabled when
@@ -157,12 +162,12 @@ func runDaemon(ctx context.Context, backendOverride string) error {
 		httpSrv := &mychttp.Server{
 			Port:       rc.Cfg.Daemon.HTTPPort,
 			Dispatcher: d,
-			Logger:     func(f string, a ...any) { fmt.Fprintf(os.Stderr, "[http] "+f+"\n", a...) },
+			Log:        log.With("component", "http"),
 		}
 		if err := httpSrv.Start(ctx); err != nil {
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "[daemon] http api on 127.0.0.1:%d\n", rc.Cfg.Daemon.HTTPPort)
+		dlog.Info("http api listening", "addr", fmt.Sprintf("127.0.0.1:%d", rc.Cfg.Daemon.HTTPPort))
 		defer httpSrv.Close()
 	}
 
