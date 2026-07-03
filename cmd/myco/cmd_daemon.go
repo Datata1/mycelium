@@ -15,8 +15,8 @@ import (
 	mychttp "github.com/datata1/mycelium/internal/http"
 	"github.com/datata1/mycelium/internal/languages"
 	"github.com/datata1/mycelium/internal/pipeline"
-	"github.com/datata1/mycelium/internal/query"
 	"github.com/datata1/mycelium/internal/repo"
+	"github.com/datata1/mycelium/internal/service"
 	"github.com/datata1/mycelium/internal/telemetry"
 	"github.com/datata1/mycelium/internal/watch"
 )
@@ -134,10 +134,9 @@ func runDaemon(ctx context.Context, backendOverride string) error {
 
 	d := &daemon.Daemon{
 		Pipeline:  p,
-		Reader:    query.NewReader(ix.DB()),
+		Service:   service.NewReadOnly(ix, rc.Root, dlog),
 		Watcher:   wat,
 		Socket:    rc.AbsSocketPath(),
-		RepoRoot:  rc.Root,
 		Telemetry: rec,
 		Log:       dlog,
 	}

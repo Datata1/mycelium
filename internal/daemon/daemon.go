@@ -12,22 +12,20 @@ import (
 	"sync"
 	"time"
 
-	"github.com/datata1/mycelium/internal/gitref"
 	"github.com/datata1/mycelium/internal/ipc"
 	"github.com/datata1/mycelium/internal/pipeline"
-	"github.com/datata1/mycelium/internal/query"
+	"github.com/datata1/mycelium/internal/service"
 	"github.com/datata1/mycelium/internal/telemetry"
 	"github.com/datata1/mycelium/internal/watch"
 )
 
 // Daemon bundles the long-running process: a file watcher feeding a pipeline,
-// and a unix-socket server answering queries via internal/query.
+// and a unix-socket server answering queries via internal/service.
 type Daemon struct {
 	Pipeline *pipeline.Pipeline
-	Reader   *query.Reader
+	Service  *service.Service
 	Watcher  watch.Watcher
 	Socket   string
-	RepoRoot string // absolute path; lexical search needs it to open files
 	// Telemetry records per-call timing/byte stats when enabled. Defaults
 	// to telemetry.Disabled{} so the dispatcher path is uniform — no
 	// nil checks at every call site.
@@ -170,126 +168,94 @@ func (d *Daemon) dispatchInner(ctx context.Context, req ipc.Request) (any, error
 	case ipc.MethodPing:
 		return map[string]string{"status": "ok"}, nil
 
+	// Reindex is the one write-path method; it stays explicit here so
+	// the Service can remain read-only by construction.
+	case ipc.MethodReindex:
+		return d.Pipeline.RunOnce(ctx)
+
 	case ipc.MethodFindSymbol:
 		var p ipc.FindSymbolParams
 		if err := unmarshal(req.Params, &p); err != nil {
 			return nil, err
 		}
-		paths, err := d.resolveSince(ctx, p.Since)
-		if err != nil {
-			return nil, err
-		}
-		return d.Reader.FindSymbol(ctx, p.Name, p.Kind, p.Project, p.Limit, paths, p.Focus)
+		return d.Service.FindSymbol(ctx, p)
 
 	case ipc.MethodGetReferences:
 		var p ipc.GetReferencesParams
 		if err := unmarshal(req.Params, &p); err != nil {
 			return nil, err
 		}
-		paths, err := d.resolveSince(ctx, p.Since)
-		if err != nil {
-			return nil, err
-		}
-		return d.Reader.GetReferences(ctx, p.Target, p.Project, p.Limit, paths)
+		return d.Service.GetReferences(ctx, p)
 
 	case ipc.MethodListFiles:
 		var p ipc.ListFilesParams
 		if err := unmarshal(req.Params, &p); err != nil {
 			return nil, err
 		}
-		paths, err := d.resolveSince(ctx, p.Since)
-		if err != nil {
-			return nil, err
-		}
-		return d.Reader.ListFiles(ctx, p.Language, p.NameContains, p.Project, p.Limit, paths)
+		return d.Service.ListFiles(ctx, p)
 
 	case ipc.MethodGetFileOutline:
 		var p ipc.GetFileOutlineParams
 		if err := unmarshal(req.Params, &p); err != nil {
 			return nil, err
 		}
-		return d.Reader.GetFileOutline(ctx, p.Path, p.Focus)
+		return d.Service.GetFileOutline(ctx, p)
 
 	case ipc.MethodStats:
-		return d.Reader.Stats(ctx)
-
-	case ipc.MethodReindex:
-		return d.Pipeline.RunOnce(ctx)
+		return d.Service.Stats(ctx)
 
 	case ipc.MethodSearchLexical:
 		var p ipc.SearchLexicalParams
 		if err := unmarshal(req.Params, &p); err != nil {
 			return nil, err
 		}
-		paths, err := d.resolveSince(ctx, p.Since)
-		if err != nil {
-			return nil, err
-		}
-		return d.Reader.SearchLexical(ctx, p.Pattern, p.PathContains, p.Project, p.K, d.RepoRoot, paths)
+		return d.Service.SearchLexical(ctx, p)
 
 	case ipc.MethodGetFileSummary:
 		var p ipc.GetFileSummaryParams
 		if err := unmarshal(req.Params, &p); err != nil {
 			return nil, err
 		}
-		return d.Reader.GetFileSummary(ctx, p.Path)
+		return d.Service.GetFileSummary(ctx, p)
 
 	case ipc.MethodGetNeighborhood:
 		var p ipc.GetNeighborhoodParams
 		if err := unmarshal(req.Params, &p); err != nil {
 			return nil, err
 		}
-		dir, err := query.ParseDirection(p.Direction)
-		if err != nil {
-			return nil, fmt.Errorf("%w: %v", ipc.ErrBadParams, err)
-		}
-		return d.Reader.GetNeighborhood(ctx, p.Target, p.Project, p.Depth, dir, p.Focus)
+		return d.Service.GetNeighborhood(ctx, p)
 
 	case ipc.MethodImpactAnalysis:
 		var p ipc.ImpactAnalysisParams
 		if err := unmarshal(req.Params, &p); err != nil {
 			return nil, err
 		}
-		paths, err := d.resolveSince(ctx, p.Since)
-		if err != nil {
-			return nil, err
-		}
-		return d.Reader.ImpactAnalysis(ctx, p.Target, p.Kind, p.Project, p.Depth, paths)
+		return d.Service.ImpactAnalysis(ctx, p)
 
 	case ipc.MethodCriticalPath:
 		var p ipc.CriticalPathParams
 		if err := unmarshal(req.Params, &p); err != nil {
 			return nil, err
 		}
-		return d.Reader.CriticalPath(ctx, p.From, p.To, p.Project, p.Depth, p.K)
+		return d.Service.CriticalPath(ctx, p)
 
 	case ipc.MethodReadFocused:
 		var p ipc.ReadFocusedParams
 		if err := unmarshal(req.Params, &p); err != nil {
 			return nil, err
 		}
-		return d.Reader.ReadFocused(ctx, d.RepoRoot, p.Path, p.Focus)
+		return d.Service.ReadFocused(ctx, p)
 
 	case ipc.MethodFindDocumentKey:
 		var p ipc.FindDocumentKeyParams
 		if err := unmarshal(req.Params, &p); err != nil {
 			return nil, err
 		}
-		return d.Reader.FindDocumentKey(ctx, p.Key, p.Kind, p.Project, p.Limit)
+		return d.Service.FindDocumentKey(ctx, p)
 
 	default:
 		return nil, fmt.Errorf("%w %q", ipc.ErrUnknownMethod, req.Method)
 	}
-}
-
-// resolveSince turns the optional git-ref string into a resolved path
-// list. Empty ref -> nil (unscoped). Git errors surface to the caller
-// rather than silently becoming an empty filter.
-func (d *Daemon) resolveSince(ctx context.Context, ref string) ([]string, error) {
-	if ref == "" {
-		return nil, nil
-	}
-	return gitref.ResolveSince(ctx, d.RepoRoot, ref)
 }
 
 func unmarshal(raw json.RawMessage, out any) error {

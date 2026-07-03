@@ -12,7 +12,7 @@ import (
 
 	"github.com/datata1/mycelium/internal/index"
 	"github.com/datata1/mycelium/internal/ipc"
-	"github.com/datata1/mycelium/internal/query"
+	"github.com/datata1/mycelium/internal/service"
 )
 
 func testDaemon(t *testing.T) *Daemon {
@@ -22,7 +22,7 @@ func testDaemon(t *testing.T) *Daemon {
 		t.Fatalf("open index: %v", err)
 	}
 	t.Cleanup(func() { _ = ix.Close() })
-	return &Daemon{Reader: query.NewReader(ix.DB())}
+	return &Daemon{Service: service.NewReadOnly(ix, t.TempDir(), nil)}
 }
 
 // callPipe drives handleConn over an in-memory pipe: one request in, one
