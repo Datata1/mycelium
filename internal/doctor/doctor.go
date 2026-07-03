@@ -16,9 +16,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jdwiederstein/mycelium/internal/config"
-	"github.com/jdwiederstein/mycelium/internal/query"
-	"github.com/jdwiederstein/mycelium/internal/telemetry"
+	"github.com/datata1/mycelium/internal/config"
+	"github.com/datata1/mycelium/internal/query"
+	"github.com/datata1/mycelium/internal/telemetry"
 )
 
 // Level classifies a check result.
@@ -112,12 +112,12 @@ type Thresholds struct {
 
 func DefaultThresholds() Thresholds {
 	return Thresholds{
-		UnresolvedWarn: 0.25,
-		UnresolvedFail: 0.50,
-		SelfLoopWarn:   1,
-		SelfLoopFail:   20,
-		FragmentWarn:   0.20,
-		FragmentFail:   0.50,
+		UnresolvedWarn:   0.25,
+		UnresolvedFail:   0.50,
+		SelfLoopWarn:     1,
+		SelfLoopFail:     20,
+		FragmentWarn:     0.20,
+		FragmentFail:     0.50,
 		InotifyWarn:      0.50,
 		InotifyFail:      0.90,
 		FDHeadroomWarn:   0.60,
@@ -188,8 +188,8 @@ func Run(ctx context.Context, r *query.Reader, th Thresholds, repoRoot, stateDir
 			s.SelfLoopCount, s.RecursionSelfLoops,
 		),
 		Detail: map[string]any{
-			"resolution_bugs":  s.SelfLoopCount,
-			"real_recursion":   s.RecursionSelfLoops,
+			"resolution_bugs": s.SelfLoopCount,
+			"real_recursion":  s.RecursionSelfLoops,
 		},
 	})
 

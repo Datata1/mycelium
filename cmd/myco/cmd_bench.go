@@ -7,9 +7,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/jdwiederstein/mycelium/internal/bench"
-	"github.com/jdwiederstein/mycelium/internal/config"
-	"github.com/jdwiederstein/mycelium/internal/ipc"
+	"github.com/datata1/mycelium/internal/bench"
+	"github.com/datata1/mycelium/internal/config"
+	"github.com/datata1/mycelium/internal/ipc"
 )
 
 func newBenchCounterfactualCmd() *cobra.Command {

@@ -11,12 +11,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jdwiederstein/mycelium/internal/gitref"
-	"github.com/jdwiederstein/mycelium/internal/ipc"
-	"github.com/jdwiederstein/mycelium/internal/pipeline"
-	"github.com/jdwiederstein/mycelium/internal/query"
-	"github.com/jdwiederstein/mycelium/internal/telemetry"
-	"github.com/jdwiederstein/mycelium/internal/watch"
+	"github.com/datata1/mycelium/internal/gitref"
+	"github.com/datata1/mycelium/internal/ipc"
+	"github.com/datata1/mycelium/internal/pipeline"
+	"github.com/datata1/mycelium/internal/query"
+	"github.com/datata1/mycelium/internal/telemetry"
+	"github.com/datata1/mycelium/internal/watch"
 )
 
 // Daemon bundles the long-running process: a file watcher feeding a pipeline,

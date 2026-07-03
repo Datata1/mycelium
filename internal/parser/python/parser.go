@@ -9,8 +9,8 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/python"
 
-	"github.com/jdwiederstein/mycelium/internal/parser"
-	"github.com/jdwiederstein/mycelium/internal/parser/tsutil"
+	"github.com/datata1/mycelium/internal/parser"
+	"github.com/datata1/mycelium/internal/parser/tsutil"
 )
 
 // Parser extracts symbols and refs from Python via tree-sitter.

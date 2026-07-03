@@ -10,17 +10,17 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/jdwiederstein/mycelium/internal/daemon"
-	mychttp "github.com/jdwiederstein/mycelium/internal/http"
-	"github.com/jdwiederstein/mycelium/internal/parser"
-	"github.com/jdwiederstein/mycelium/internal/parser/golang"
-	"github.com/jdwiederstein/mycelium/internal/parser/python"
-	"github.com/jdwiederstein/mycelium/internal/parser/typescript"
-	"github.com/jdwiederstein/mycelium/internal/pipeline"
-	"github.com/jdwiederstein/mycelium/internal/query"
-	"github.com/jdwiederstein/mycelium/internal/repo"
-	"github.com/jdwiederstein/mycelium/internal/telemetry"
-	"github.com/jdwiederstein/mycelium/internal/watch"
+	"github.com/datata1/mycelium/internal/daemon"
+	mychttp "github.com/datata1/mycelium/internal/http"
+	"github.com/datata1/mycelium/internal/parser"
+	"github.com/datata1/mycelium/internal/parser/golang"
+	"github.com/datata1/mycelium/internal/parser/python"
+	"github.com/datata1/mycelium/internal/parser/typescript"
+	"github.com/datata1/mycelium/internal/pipeline"
+	"github.com/datata1/mycelium/internal/query"
+	"github.com/datata1/mycelium/internal/repo"
+	"github.com/datata1/mycelium/internal/telemetry"
+	"github.com/datata1/mycelium/internal/watch"
 )
 
 func newDaemonCmd() *cobra.Command {

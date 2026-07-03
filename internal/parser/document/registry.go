@@ -7,7 +7,7 @@ package document
 import (
 	"sync"
 
-	"github.com/jdwiederstein/mycelium/internal/parser"
+	"github.com/datata1/mycelium/internal/parser"
 )
 
 // Registry holds the set of document parsers available at runtime.

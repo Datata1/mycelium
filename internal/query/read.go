@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/jdwiederstein/mycelium/internal/focus"
+	"github.com/datata1/mycelium/internal/focus"
 )
 
 // FocusedRead is the result of ReadFocused: a single file's content

@@ -8,9 +8,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/jdwiederstein/mycelium/internal/ipc"
-	"github.com/jdwiederstein/mycelium/internal/query"
-	"github.com/jdwiederstein/mycelium/internal/telemetry"
+	"github.com/datata1/mycelium/internal/ipc"
+	"github.com/datata1/mycelium/internal/query"
+	"github.com/datata1/mycelium/internal/telemetry"
 )
 
 func newStatsCmd() *cobra.Command {
@@ -120,4 +120,3 @@ func humanBytes(n int64) string {
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
-

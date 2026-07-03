@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jdwiederstein/mycelium/internal/focus"
+	"github.com/datata1/mycelium/internal/focus"
 )
 
 // Reader is the query-side handle. It takes an already-open *sql.DB (owned by
@@ -188,17 +188,17 @@ func applyFocusToHits(tokens []string, hits []SymbolHit) []SymbolHit {
 // `SrcProject` (v3.1.2+) is the workspace project of the source file,
 // or "" when the file has no configured project.
 type ReferenceHit struct {
-	ID             int64  `json:"id"`
-	SrcPath        string `json:"src_path"`
-	SrcProject     string `json:"src_project,omitempty"`
-	SrcLine        int    `json:"src_line"`
-	SrcCol         int    `json:"src_col"`
-	SrcSymbolID    int64  `json:"src_symbol_id,omitempty"`
-	SrcSymbolName  string `json:"src_symbol_name,omitempty"`
-	DstName        string `json:"dst_name"`
-	DstSymbolID    int64  `json:"dst_symbol_id,omitempty"`
-	Kind           string `json:"kind"`
-	Resolved       bool   `json:"resolved"`
+	ID            int64  `json:"id"`
+	SrcPath       string `json:"src_path"`
+	SrcProject    string `json:"src_project,omitempty"`
+	SrcLine       int    `json:"src_line"`
+	SrcCol        int    `json:"src_col"`
+	SrcSymbolID   int64  `json:"src_symbol_id,omitempty"`
+	SrcSymbolName string `json:"src_symbol_name,omitempty"`
+	DstName       string `json:"dst_name"`
+	DstSymbolID   int64  `json:"dst_symbol_id,omitempty"`
+	Kind          string `json:"kind"`
+	Resolved      bool   `json:"resolved"`
 }
 
 // GetReferences returns use-sites for a symbol. The target can be specified
@@ -447,14 +447,14 @@ func (r *Reader) ListFiles(ctx context.Context, language, nameContains, project 
 
 // FileOutlineItem is one entry in the hierarchical outline of a file.
 type FileOutlineItem struct {
-	SymbolID   int64             `json:"symbol_id"`
-	Name       string            `json:"name"`
-	Qualified  string            `json:"qualified"`
-	Kind       string            `json:"kind"`
-	StartLine  int               `json:"start_line"`
-	EndLine    int               `json:"end_line"`
-	Signature  string            `json:"signature,omitempty"`
-	Children   []FileOutlineItem `json:"children,omitempty"`
+	SymbolID  int64             `json:"symbol_id"`
+	Name      string            `json:"name"`
+	Qualified string            `json:"qualified"`
+	Kind      string            `json:"kind"`
+	StartLine int               `json:"start_line"`
+	EndLine   int               `json:"end_line"`
+	Signature string            `json:"signature,omitempty"`
+	Children  []FileOutlineItem `json:"children,omitempty"`
 }
 
 // GetFileOutline returns the hierarchical symbol tree for a file. Parent
@@ -555,19 +555,19 @@ func outlineMatches(tokens []string, it FileOutlineItem) bool {
 // were added in v1.1 so `myco doctor` and agents have honest numbers to
 // judge the index by before running expensive tools.
 type Stats struct {
-	Files                int            `json:"files"`
-	Symbols              int            `json:"symbols"`
-	Refs                 int            `json:"refs"`
-	Resolved             int            `json:"refs_resolved"`
+	Files    int `json:"files"`
+	Symbols  int `json:"symbols"`
+	Refs     int `json:"refs"`
+	Resolved int `json:"refs_resolved"`
 	// v1.2 refs breakdown — captures the three honest states.
 	// Invariant: Resolved + RefsExternalKnown + RefsTrulyUnresolved + <v0 short-name resolves>
 	// = NonImportRefs. Import refs are counted separately.
-	NonImportRefs        int            `json:"non_import_refs"`        // kind != 'import'
-	RefsTypeResolved     int            `json:"refs_type_resolved"`     // resolver_version >= 1
-	RefsExternalKnown    int            `json:"refs_external_known"`    // v1 + dst NULL (stdlib / deps)
-	RefsTrulyUnresolved  int            `json:"refs_truly_unresolved"`  // v0 + dst NULL + kind != import
-	SelfLoopCount        int            `json:"self_loop_count"`        // v0 self-loops (resolution bugs)
-	RecursionSelfLoops   int            `json:"recursion_self_loops"`   // v>=1 self-loops (real recursion)
+	NonImportRefs        int            `json:"non_import_refs"`       // kind != 'import'
+	RefsTypeResolved     int            `json:"refs_type_resolved"`    // resolver_version >= 1
+	RefsExternalKnown    int            `json:"refs_external_known"`   // v1 + dst NULL (stdlib / deps)
+	RefsTrulyUnresolved  int            `json:"refs_truly_unresolved"` // v0 + dst NULL + kind != import
+	SelfLoopCount        int            `json:"self_loop_count"`       // v0 self-loops (resolution bugs)
+	RecursionSelfLoops   int            `json:"recursion_self_loops"`  // v>=1 self-loops (real recursion)
 	UnresolvedByLanguage map[string]int `json:"unresolved_by_language"`
 	TotalByLanguage      map[string]int `json:"total_refs_by_language"`
 	ByKind               map[string]int `json:"by_kind"`
@@ -579,8 +579,8 @@ type Stats struct {
 	// emitted by language resolvers and the distinct concrete types they
 	// originate from. Surfaces via doctor as `interface_expansion_coverage`
 	// so users can confirm the fan-out is actually populated.
-	InterfaceImplementsRefs   int `json:"interface_implements_refs"`
-	InterfaceConcreteTypes    int `json:"interface_concrete_types"`
+	InterfaceImplementsRefs int `json:"interface_implements_refs"`
+	InterfaceConcreteTypes  int `json:"interface_concrete_types"`
 	// v3.3: per-kind document entry counts. Empty when no document
 	// parsers are wired up or the repo has no matching files.
 	// Doctor surfaces this as `documents_indexed`; a registered
@@ -593,8 +593,8 @@ type Stats struct {
 	// everywhere). Used by doctor to flag misconfigured projects whose
 	// include patterns matched nothing, and by FindSymbol's hint
 	// generator to tell agents which project names are valid.
-	ConfiguredProjects        []ProjectStats `json:"configured_projects,omitempty"`
-	LastScan                  time.Time      `json:"last_scan"`
+	ConfiguredProjects []ProjectStats `json:"configured_projects,omitempty"`
+	LastScan           time.Time      `json:"last_scan"`
 }
 
 // ProjectStats is the per-project file count surfaced via Stats.

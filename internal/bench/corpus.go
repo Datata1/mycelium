@@ -27,7 +27,7 @@
 package bench
 
 import (
-	"github.com/jdwiederstein/mycelium/internal/ipc"
+	"github.com/datata1/mycelium/internal/ipc"
 )
 
 // Case pairs one myco call with its shell-fallback equivalent.

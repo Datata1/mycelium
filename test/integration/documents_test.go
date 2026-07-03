@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jdwiederstein/mycelium/internal/parser"
-	"github.com/jdwiederstein/mycelium/internal/parser/document"
-	"github.com/jdwiederstein/mycelium/internal/pipeline"
-	"github.com/jdwiederstein/mycelium/internal/query"
-	"github.com/jdwiederstein/mycelium/internal/repo"
+	"github.com/datata1/mycelium/internal/parser"
+	"github.com/datata1/mycelium/internal/parser/document"
+	"github.com/datata1/mycelium/internal/pipeline"
+	"github.com/datata1/mycelium/internal/query"
+	"github.com/datata1/mycelium/internal/repo"
 )
 
 func TestIntegration_DocumentsI18NJSON(t *testing.T) {

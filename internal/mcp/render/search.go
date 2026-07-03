@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jdwiederstein/mycelium/internal/query"
+	"github.com/datata1/mycelium/internal/query"
 )
 
 func renderLexical(raw json.RawMessage) string {

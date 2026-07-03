@@ -147,9 +147,9 @@ func (s *Subscription) pump(ctx context.Context, relativeRoot string) {
 				return
 			}
 			var env struct {
-				Subscription string       `json:"subscription"`
-				Files        []FileChange `json:"files"`
-				IsFreshInstance bool       `json:"is_fresh_instance"`
+				Subscription    string       `json:"subscription"`
+				Files           []FileChange `json:"files"`
+				IsFreshInstance bool         `json:"is_fresh_instance"`
 			}
 			if err := json.Unmarshal(pdu, &env); err != nil {
 				// Skip garbled frames rather than tearing down the

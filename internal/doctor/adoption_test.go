@@ -3,7 +3,7 @@ package doctor
 import (
 	"testing"
 
-	"github.com/jdwiederstein/mycelium/internal/telemetry"
+	"github.com/datata1/mycelium/internal/telemetry"
 )
 
 // TestEvaluateAdoption_InsufficientData: when sessionCount < MinSessions,

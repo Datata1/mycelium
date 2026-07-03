@@ -12,8 +12,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/jdwiederstein/mycelium/internal/config"
-	"github.com/jdwiederstein/mycelium/internal/repo"
+	"github.com/datata1/mycelium/internal/config"
+	"github.com/datata1/mycelium/internal/repo"
 )
 
 // version is set at release build time via -ldflags "-X main.version=v3.x.y".

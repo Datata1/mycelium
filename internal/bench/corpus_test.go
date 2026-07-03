@@ -3,7 +3,7 @@ package bench
 import (
 	"testing"
 
-	"github.com/jdwiederstein/mycelium/internal/ipc"
+	"github.com/datata1/mycelium/internal/ipc"
 )
 
 // TestMyceliumDefaultCorpus_Wellformed pins the v4 B3 extracted corpus

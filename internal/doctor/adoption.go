@@ -28,7 +28,7 @@ package doctor
 import (
 	"fmt"
 
-	"github.com/jdwiederstein/mycelium/internal/telemetry"
+	"github.com/datata1/mycelium/internal/telemetry"
 )
 
 // AdoptionFindingLevel grades a single adoption check. Mirrors the
@@ -206,7 +206,7 @@ func EvaluateAdoption(myco []telemetry.Summary, fallback []telemetry.ExternalSum
 			Mode:   ModeReadFocusedUnderUsed,
 			Metric: ratio,
 			Detail: map[string]any{
-				"read_focused_calls": readFocused,
+				"read_focused_calls":  readFocused,
 				"read_fallback_calls": readFallback,
 			},
 		}

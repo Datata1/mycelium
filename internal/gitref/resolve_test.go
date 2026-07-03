@@ -8,7 +8,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/jdwiederstein/mycelium/internal/gitref"
+	"github.com/datata1/mycelium/internal/gitref"
 )
 
 func TestResolveSince(t *testing.T) {

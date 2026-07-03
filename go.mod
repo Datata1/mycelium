@@ -1,4 +1,4 @@
-module github.com/jdwiederstein/mycelium
+module github.com/datata1/mycelium
 
 go 1.25.0
 

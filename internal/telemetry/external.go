@@ -25,10 +25,10 @@ import (
 type ExternalRecord struct {
 	Timestamp  time.Time `json:"ts"`
 	SessionID  string    `json:"sid"`
-	ToolName   string    `json:"tool"`             // "Bash", "Read", "WebSearch", …
-	Category   string    `json:"category"`         // "exploratory" | "action" | "other"
-	Detail     string    `json:"detail"`           // command keyword for Bash, empty otherwise
-	InputSize  int       `json:"input_size"`       // rough byte count of tool input
+	ToolName   string    `json:"tool"`                  // "Bash", "Read", "WebSearch", …
+	Category   string    `json:"category"`              // "exploratory" | "action" | "other"
+	Detail     string    `json:"detail"`                // command keyword for Bash, empty otherwise
+	InputSize  int       `json:"input_size"`            // rough byte count of tool input
 	OutputSize int       `json:"output_size,omitempty"` // v3.4 A1: raw bytes of tool response payload
 }
 

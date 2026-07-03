@@ -10,8 +10,8 @@ import (
 	"github.com/smacker/go-tree-sitter/typescript/tsx"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
 
-	"github.com/jdwiederstein/mycelium/internal/parser"
-	"github.com/jdwiederstein/mycelium/internal/parser/tsutil"
+	"github.com/datata1/mycelium/internal/parser"
+	"github.com/datata1/mycelium/internal/parser/tsutil"
 )
 
 // Parser extracts symbols and refs from TypeScript / TSX via tree-sitter.
@@ -19,9 +19,9 @@ import (
 // *sitter.Parser is created per call (tree-sitter parsers are not
 // thread-safe).
 type Parser struct {
-	once     sync.Once
-	langTS   *sitter.Language
-	langTSX  *sitter.Language
+	once    sync.Once
+	langTS  *sitter.Language
+	langTSX *sitter.Language
 }
 
 func New() *Parser { return &Parser{} }
@@ -153,10 +153,10 @@ func (ex *extractor) emitFunction(parent, n *sitter.Node, ownerName string, kind
 	sl, sc, el, ec := tsutil.Position(n)
 	vis := parser.VisPublic // TS top-level functions are public by default; class members handled below
 	sym := parser.Symbol{
-		Name:       name,
-		Qualified:  qualified,
-		Kind:       kind,
-		StartLine:  sl, StartCol: sc,
+		Name:      name,
+		Qualified: qualified,
+		Kind:      kind,
+		StartLine: sl, StartCol: sc,
 		EndLine: el, EndCol: ec,
 		Signature:  sig,
 		Docstring:  tsutil.PrecedingComments(ex.content, parent, n, ex.commentTypes),
@@ -236,7 +236,7 @@ func (ex *extractor) emitField(parent, n *sitter.Node, owner string) {
 	sig := tsutil.Slice(ex.content, n)
 	ex.symbols = append(ex.symbols, parser.Symbol{
 		Name: name, Qualified: ex.pkg + "." + owner + "." + name,
-		Kind: parser.KindVar,
+		Kind:      parser.KindVar,
 		StartLine: sl, StartCol: sc, EndLine: el, EndCol: ec,
 		Signature:  truncateLine(sig, 160),
 		Visibility: visibilityFromNode(ex.content, n),

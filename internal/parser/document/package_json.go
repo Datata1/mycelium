@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/jdwiederstein/mycelium/internal/parser"
+	"github.com/datata1/mycelium/internal/parser"
 )
 
 // PackageJSONParser extracts dependency entries from `package.json`

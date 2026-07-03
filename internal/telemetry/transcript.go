@@ -43,7 +43,9 @@ type TranscriptSummary struct {
 // transcriptLine is a single JSON object in the Claude Code conversation JSONL.
 //
 // Claude Code's modern format nests role + content under `message`:
-//   {"type":"user", "message":{"role":"user", "content":[...]}, ...}
+//
+//	{"type":"user", "message":{"role":"user", "content":[...]}, ...}
+//
 // Older / non-conversation lines may carry role + content at the top level,
 // or be unrelated bookkeeping (type: "queue-operation" etc.). normalize()
 // folds both shapes into Role + Content and returns false for lines that

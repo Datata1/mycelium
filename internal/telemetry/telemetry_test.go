@@ -244,9 +244,9 @@ func TestParseHookStdin(t *testing.T) {
 func TestClassifyTool(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		tool     string
-		command  string
-		wantCat  string
+		tool       string
+		command    string
+		wantCat    string
 		wantDetail string
 	}{
 		{"Bash", "grep -r 'foo' src/", "exploratory", "grep"},
@@ -565,7 +565,7 @@ func TestEstimateCounterfactual_KnownAndUnknown(t *testing.T) {
 		{"read_focused", 10_000, 40_000, EstimateQualityHigh}, // 10000 × 4.0 (post-B1 preview-mode lighter than Read)
 		{"search_lexical", 3_000, 3_000, EstimateQualityHigh}, // 3000 × 1.0
 		{"get_neighborhood", 1_000, 2_500, EstimateQualityLow},
-		{"stats", 500, 0, EstimateQualityNone},        // zero multiplier → no estimate
+		{"stats", 500, 0, EstimateQualityNone},          // zero multiplier → no estimate
 		{"unknown_tool", 1_000, 0, EstimateQualityNone}, // missing entry → no estimate
 	}
 	for _, tc := range cases {
@@ -587,9 +587,9 @@ func TestEstimateCounterfactual_KnownAndUnknown(t *testing.T) {
 func TestComputeSessionCost_Counterfactual(t *testing.T) {
 	t.Parallel()
 	myco := []Summary{
-		{Tool: "find_symbol", Count: 5, OK: 5, OutputBytes: 5_000, OutputBytesOK: 5_000},   // 0.8 medium → 4000
+		{Tool: "find_symbol", Count: 5, OK: 5, OutputBytes: 5_000, OutputBytesOK: 5_000},    // 0.8 medium → 4000
 		{Tool: "read_focused", Count: 3, OK: 3, OutputBytes: 30_000, OutputBytesOK: 30_000}, // 4.0 high → 120000 (v4 B1 preview mode)
-		{Tool: "stats", Count: 2, OK: 2, OutputBytes: 200, OutputBytesOK: 200},               // 0 none → skipped
+		{Tool: "stats", Count: 2, OK: 2, OutputBytes: 200, OutputBytesOK: 200},              // 0 none → skipped
 	}
 	fallback := []ExternalSummary{
 		{Tool: "Read", Count: 4, InputBytes: 40, OutputBytes: 20_000},

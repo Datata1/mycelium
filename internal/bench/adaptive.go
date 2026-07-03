@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/jdwiederstein/mycelium/internal/ipc"
+	"github.com/datata1/mycelium/internal/ipc"
 )
 
 // BuildAdaptiveCorpus probes the daemon to construct a corpus targeting
@@ -123,11 +123,11 @@ func buildCorpusForTarget(t probeTarget) Corpus {
 		Name: "adaptive",
 		Cases: []Case{
 			{Tool: "find_symbol", Method: ipc.MethodFindSymbol,
-				Params: ipc.FindSymbolParams{Name: t.Symbol},
+				Params:      ipc.FindSymbolParams{Name: t.Symbol},
 				FallbackCmd: cmdSymbol,
 				Note:        fmt.Sprintf("probe symbol: %s", t.Symbol)},
 			{Tool: "get_references", Method: ipc.MethodGetReferences,
-				Params: ipc.GetReferencesParams{Target: t.Symbol},
+				Params:      ipc.GetReferencesParams{Target: t.Symbol},
 				FallbackCmd: cmdSymbol,
 				Note:        fmt.Sprintf("callers of %s", t.Symbol)},
 			{Tool: "read_focused", Method: ipc.MethodReadFocused,
@@ -164,7 +164,7 @@ func buildCorpusForTarget(t probeTarget) Corpus {
 
 // shellQuote single-quotes a string for safe inclusion in a `bash -c`
 // command. Embedded single quotes are escaped via the standard
-// '\'' sequence — bash's only safe way to embed a quote in a
+// '\” sequence — bash's only safe way to embed a quote in a
 // single-quoted string. Used to keep the adaptive grep patterns
 // safe even when the probed symbol name contains shell-special chars.
 func shellQuote(s string) string {
@@ -184,4 +184,3 @@ type fileSlice struct {
 type outlineEntry struct {
 	Name string `json:"name"`
 }
-

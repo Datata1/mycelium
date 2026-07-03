@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/jdwiederstein/mycelium/internal/ipc"
-	"github.com/jdwiederstein/mycelium/pkg/mcpschema"
+	"github.com/datata1/mycelium/internal/ipc"
+	"github.com/datata1/mycelium/pkg/mcpschema"
 )
 
 // TestMapToolToIPC_AllSchemaToolsHaveDispatch is the protective

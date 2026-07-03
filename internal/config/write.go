@@ -15,7 +15,7 @@ func Write(path string, cfg Config) error {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 	preamble := []byte("# Mycelium configuration. Edit to suit your repo.\n" +
-		"# See https://github.com/jdwiederstein/mycelium for the full schema.\n")
+		"# See https://github.com/datata1/mycelium for the full schema.\n")
 	return os.WriteFile(path, append(preamble, out...), 0o644)
 }
 
@@ -29,7 +29,7 @@ func WriteUser(path string, u UserConfig) error {
 		return fmt.Errorf("marshal user config: %w", err)
 	}
 	preamble := []byte("# Mycelium user-level config. Per-repo .mycelium.yml always takes priority.\n" +
-		"# See https://github.com/jdwiederstein/mycelium for the full schema.\n")
+		"# See https://github.com/datata1/mycelium for the full schema.\n")
 	return os.WriteFile(path, append(preamble, out...), 0o644)
 }
 
@@ -45,7 +45,7 @@ func WriteDefault(path string) error {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 	preamble := []byte(`# Mycelium configuration. Edit to suit your repo.
-# See https://github.com/jdwiederstein/mycelium for the full schema.
+# See https://github.com/datata1/mycelium for the full schema.
 `)
 	if err := os.WriteFile(path, append(preamble, out...), 0o644); err != nil {
 		return fmt.Errorf("write config: %w", err)

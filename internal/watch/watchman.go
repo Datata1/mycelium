@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/jdwiederstein/mycelium/internal/watch/watchman"
+	"github.com/datata1/mycelium/internal/watch/watchman"
 )
 
 // watchmanSource is a rawSource backed by a watchman subscription.

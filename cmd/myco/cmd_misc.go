@@ -12,12 +12,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/jdwiederstein/mycelium/internal/hook"
-	"github.com/jdwiederstein/mycelium/internal/ipc"
-	"github.com/jdwiederstein/mycelium/internal/mcp"
-	"github.com/jdwiederstein/mycelium/internal/query"
-	"github.com/jdwiederstein/mycelium/internal/repo"
-	"github.com/jdwiederstein/mycelium/internal/wizard"
+	"github.com/datata1/mycelium/internal/hook"
+	"github.com/datata1/mycelium/internal/ipc"
+	"github.com/datata1/mycelium/internal/mcp"
+	"github.com/datata1/mycelium/internal/query"
+	"github.com/datata1/mycelium/internal/repo"
+	"github.com/datata1/mycelium/internal/wizard"
 )
 
 func newHookCmd() *cobra.Command {

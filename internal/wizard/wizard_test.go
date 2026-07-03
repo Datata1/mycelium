@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jdwiederstein/mycelium/internal/wizard"
+	"github.com/datata1/mycelium/internal/wizard"
 )
 
 // ── DetectLanguages ──────────────────────────────────────────────────────────
@@ -78,15 +78,15 @@ func TestSuggestProjectName(t *testing.T) {
 		relDir string
 		want   string
 	}{
-		{"services/api", "api"},              // non-generic → keep as-is
-		{"xxx-service/common", "xxx-service-common"}, // generic → parent-base
-		{"xxx-service/node", "xxx-service-node"},     // generic → parent-base
-		{"yyy-svc/shared", "yyy-svc-shared"},          // generic → parent-base
-		{"packages/lib", "packages-lib"},     // generic → parent-base
-		{"backend", "backend"},               // single component → as-is
+		{"services/api", "api"},                        // non-generic → keep as-is
+		{"xxx-service/common", "xxx-service-common"},   // generic → parent-base
+		{"xxx-service/node", "xxx-service-node"},       // generic → parent-base
+		{"yyy-svc/shared", "yyy-svc-shared"},           // generic → parent-base
+		{"packages/lib", "packages-lib"},               // generic → parent-base
+		{"backend", "backend"},                         // single component → as-is
 		{"xxx-service/browser", "xxx-service-browser"}, // generic → parent-base
 		{"apps/dashboard", "dashboard"},                // non-generic → as-is
-		{"services/worker", "worker"},        // non-generic → as-is
+		{"services/worker", "worker"},                  // non-generic → as-is
 	}
 	for _, tc := range cases {
 		got := wizard.SuggestProjectName(tc.relDir)

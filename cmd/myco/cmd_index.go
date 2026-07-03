@@ -7,12 +7,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/jdwiederstein/mycelium/internal/parser"
-	"github.com/jdwiederstein/mycelium/internal/parser/golang"
-	"github.com/jdwiederstein/mycelium/internal/parser/python"
-	"github.com/jdwiederstein/mycelium/internal/parser/typescript"
-	"github.com/jdwiederstein/mycelium/internal/pipeline"
-	"github.com/jdwiederstein/mycelium/internal/repo"
+	"github.com/datata1/mycelium/internal/parser"
+	"github.com/datata1/mycelium/internal/parser/golang"
+	"github.com/datata1/mycelium/internal/parser/python"
+	"github.com/datata1/mycelium/internal/parser/typescript"
+	"github.com/datata1/mycelium/internal/pipeline"
+	"github.com/datata1/mycelium/internal/repo"
 )
 
 func newIndexCmd() *cobra.Command {

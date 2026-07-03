@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jdwiederstein/mycelium/internal/index"
-	"github.com/jdwiederstein/mycelium/internal/query"
+	"github.com/datata1/mycelium/internal/index"
+	"github.com/datata1/mycelium/internal/query"
 )
 
 // copyFixture copies testdata/fixtures/<name> into a fresh temp dir so tests

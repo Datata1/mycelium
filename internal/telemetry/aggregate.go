@@ -16,11 +16,11 @@ import (
 // duration sits at p50/p95. `myco stats --telemetry` renders one row
 // per tool plus an "all" row.
 type Summary struct {
-	Tool         string        `json:"tool"`
-	Count        int           `json:"count"`
-	OK           int           `json:"ok"`
-	InputBytes   int64         `json:"in_bytes_total"`
-	OutputBytes  int64         `json:"out_bytes_total"`
+	Tool        string `json:"tool"`
+	Count       int    `json:"count"`
+	OK          int    `json:"ok"`
+	InputBytes  int64  `json:"in_bytes_total"`
+	OutputBytes int64  `json:"out_bytes_total"`
 	// v4 T5: bytes from successful calls only — counterfactual basis.
 	// `OutputBytes` includes failed-call bytes (e.g. 4-14 bytes for a
 	// "null" response on find_symbol when the symbol isn't indexed),
@@ -29,11 +29,11 @@ type Summary struct {
 	// Tracking the OK-only sum lets ComputeSessionCost gate per-tool
 	// counterfactual contributions on whether myco actually succeeded.
 	OutputBytesOK int64         `json:"out_bytes_ok,omitempty"`
-	MeanDuration time.Duration `json:"mean_duration"`
-	P50Duration  time.Duration `json:"p50_duration"`
-	P95Duration  time.Duration `json:"p95_duration"`
-	First        time.Time     `json:"first_ts"`
-	Last         time.Time     `json:"last_ts"`
+	MeanDuration  time.Duration `json:"mean_duration"`
+	P50Duration   time.Duration `json:"p50_duration"`
+	P95Duration   time.Duration `json:"p95_duration"`
+	First         time.Time     `json:"first_ts"`
+	Last          time.Time     `json:"last_ts"`
 }
 
 // accum holds running totals while Aggregate streams the log. Lifted
@@ -172,13 +172,13 @@ type SessionCost struct {
 	// adoption-fixed-point gaps; see G2 from the Go field test).
 	// SavingsRatio: savings / without_myco, [-1.0, 1.0]. Positive
 	// means myco saved bytes; the headline number for trends.
-	MycoCounterfactualBytes  int64   `json:"myco_counterfactual_bytes"`
-	MycoCounterfactualTokens int64   `json:"myco_counterfactual_tokens"`
-	WithoutMycoEstimateBytes int64   `json:"without_myco_estimate_bytes"`
-	WithoutMycoEstimateTokens int64  `json:"without_myco_estimate_tokens"`
-	EstimatedSavingsBytes    int64   `json:"estimated_savings_bytes"`
-	EstimatedSavingsTokens   int64   `json:"estimated_savings_tokens"`
-	SavingsRatio             float64 `json:"savings_ratio"`
+	MycoCounterfactualBytes   int64   `json:"myco_counterfactual_bytes"`
+	MycoCounterfactualTokens  int64   `json:"myco_counterfactual_tokens"`
+	WithoutMycoEstimateBytes  int64   `json:"without_myco_estimate_bytes"`
+	WithoutMycoEstimateTokens int64   `json:"without_myco_estimate_tokens"`
+	EstimatedSavingsBytes     int64   `json:"estimated_savings_bytes"`
+	EstimatedSavingsTokens    int64   `json:"estimated_savings_tokens"`
+	SavingsRatio              float64 `json:"savings_ratio"`
 
 	// CounterfactualQualityMix is the count of myco calls per estimate-
 	// quality bucket. Lets the renderer say "savings include N

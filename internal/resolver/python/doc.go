@@ -6,19 +6,19 @@
 //
 // What we resolve:
 //
-//   import foo                       -> local "foo" = module "foo"
-//   import foo as f                  -> local "f" = module "foo"
-//   from foo import bar              -> local "bar" = symbol foo.bar
-//   from foo import bar as b         -> local "b" = symbol foo.bar
-//   from foo.sub import baz          -> local "baz" = symbol sub.baz
-//   self.method(...)  inside class C -> resolves to C.method
-//   cls.method(...)   inside class C -> resolves to C.method
+//	import foo                       -> local "foo" = module "foo"
+//	import foo as f                  -> local "f" = module "foo"
+//	from foo import bar              -> local "bar" = symbol foo.bar
+//	from foo import bar as b         -> local "b" = symbol foo.bar
+//	from foo.sub import baz          -> local "baz" = symbol sub.baz
+//	self.method(...)  inside class C -> resolves to C.method
+//	cls.method(...)   inside class C -> resolves to C.method
 //
 // What we don't:
 //
-//   super().x()                      -> needs class hierarchy (out of scope)
-//   getattr(obj, "m")(...)           -> dynamic, out of scope
-//   type-based method dispatch       -> requires inference, out of scope
+//	super().x()                      -> needs class hierarchy (out of scope)
+//	getattr(obj, "m")(...)           -> dynamic, out of scope
+//	type-based method dispatch       -> requires inference, out of scope
 //
 // ResolverVersion is 3 on every visited call, regardless of whether a
 // qualified name got rewritten. This follows the v1.2 Go resolver's

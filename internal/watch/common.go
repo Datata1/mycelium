@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jdwiederstein/mycelium/internal/repo"
+	"github.com/datata1/mycelium/internal/repo"
 )
 
 // wrapped is the default public Watcher implementation: it owns a

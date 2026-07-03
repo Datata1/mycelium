@@ -7,9 +7,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/jdwiederstein/mycelium/internal/gitref"
-	"github.com/jdwiederstein/mycelium/internal/ipc"
-	"github.com/jdwiederstein/mycelium/internal/query"
+	"github.com/datata1/mycelium/internal/gitref"
+	"github.com/datata1/mycelium/internal/ipc"
+	"github.com/datata1/mycelium/internal/query"
 )
 
 func newQueryCmd() *cobra.Command {

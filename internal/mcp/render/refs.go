@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jdwiederstein/mycelium/internal/query"
+	"github.com/datata1/mycelium/internal/query"
 )
 
 func renderReferences(raw json.RawMessage) string {

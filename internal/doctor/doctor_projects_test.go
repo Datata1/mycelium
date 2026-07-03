@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jdwiederstein/mycelium/internal/index"
-	"github.com/jdwiederstein/mycelium/internal/query"
+	"github.com/datata1/mycelium/internal/index"
+	"github.com/datata1/mycelium/internal/query"
 )
 
 // findCheck returns the first check with the given name, or nil. Doctor

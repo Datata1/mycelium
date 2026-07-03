@@ -54,8 +54,9 @@ type Symbol struct {
 // Reference is a use-site pointing at a (possibly unresolved) target name.
 //
 // ResolverVersion records which resolver produced the final DstName:
-//   0 = textual only (parser's raw output, suitable for unique-short-name matching)
-//   1 = go-types resolver (v1.2), authoritative shortpkg.Receiver.Method form
+//
+//	0 = textual only (parser's raw output, suitable for unique-short-name matching)
+//	1 = go-types resolver (v1.2), authoritative shortpkg.Receiver.Method form
 //
 // Downstream (internal/index) uses this to decide whether to trust the ref
 // for ambiguous names: a version=1 ref never falls back to the textual
@@ -71,10 +72,10 @@ type Reference struct {
 
 // ParseResult bundles everything a parser extracts from a single file.
 type ParseResult struct {
-	Path       string
-	Language   string
-	Symbols    []Symbol
-	References []Reference
+	Path        string
+	Language    string
+	Symbols     []Symbol
+	References  []Reference
 	ContentHash []byte
 	ParseHash   []byte
 }

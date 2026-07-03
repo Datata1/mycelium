@@ -10,9 +10,8 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
-	"github.com/jdwiederstein/mycelium/internal/parser"
+	"github.com/datata1/mycelium/internal/parser"
 )
-
 
 // Index is the write-side handle to the SQLite-backed knowledge base.
 // Open() applies migrations; Close() should be called on shutdown.

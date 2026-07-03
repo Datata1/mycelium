@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/jdwiederstein/mycelium/internal/parser"
+	"github.com/datata1/mycelium/internal/parser"
 )
 
 // I18NJSONParser handles i18n locale files. It walks the JSON object

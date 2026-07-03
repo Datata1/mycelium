@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jdwiederstein/mycelium/internal/ipc"
-	"github.com/jdwiederstein/mycelium/internal/telemetry"
+	"github.com/datata1/mycelium/internal/ipc"
+	"github.com/datata1/mycelium/internal/telemetry"
 )
 
 // Run executes every Case in the corpus against the daemon at client,

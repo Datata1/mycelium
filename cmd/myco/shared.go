@@ -7,13 +7,13 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/jdwiederstein/mycelium/internal/index"
-	"github.com/jdwiederstein/mycelium/internal/parser/document"
-	"github.com/jdwiederstein/mycelium/internal/pipeline"
-	"github.com/jdwiederstein/mycelium/internal/repo"
-	goresolver "github.com/jdwiederstein/mycelium/internal/resolver/golang"
-	pyresolver "github.com/jdwiederstein/mycelium/internal/resolver/python"
-	tsresolver "github.com/jdwiederstein/mycelium/internal/resolver/typescript"
+	"github.com/datata1/mycelium/internal/index"
+	"github.com/datata1/mycelium/internal/parser/document"
+	"github.com/datata1/mycelium/internal/pipeline"
+	"github.com/datata1/mycelium/internal/repo"
+	goresolver "github.com/datata1/mycelium/internal/resolver/golang"
+	pyresolver "github.com/datata1/mycelium/internal/resolver/python"
+	tsresolver "github.com/datata1/mycelium/internal/resolver/typescript"
 )
 
 // openIndex opens the repo's SQLite index, creating parent directories when

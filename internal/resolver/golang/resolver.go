@@ -12,7 +12,7 @@ import (
 
 	"golang.org/x/tools/go/packages"
 
-	"github.com/jdwiederstein/mycelium/internal/parser"
+	"github.com/datata1/mycelium/internal/parser"
 )
 
 // debug is flipped on by MYCELIUM_RESOLVER_DEBUG=1; useful when diagnosing

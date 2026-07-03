@@ -9,7 +9,7 @@ import (
 
 	"golang.org/x/mod/modfile"
 
-	"github.com/jdwiederstein/mycelium/internal/parser"
+	"github.com/datata1/mycelium/internal/parser"
 )
 
 // GoModParser surfaces require directives from `go.mod` files.

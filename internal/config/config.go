@@ -19,14 +19,14 @@ const (
 )
 
 type Config struct {
-	Version   int             `yaml:"version"`
-	Languages []string        `yaml:"languages"`
-	Include   []string        `yaml:"include"`
-	Exclude   []string        `yaml:"exclude"`
-	Watcher   WatcherConfig   `yaml:"watcher"`
-	Daemon    DaemonConfig    `yaml:"daemon"`
-	Hooks     HooksConfig     `yaml:"hooks"`
-	Index     IndexConfig     `yaml:"index"`
+	Version   int           `yaml:"version"`
+	Languages []string      `yaml:"languages"`
+	Include   []string      `yaml:"include"`
+	Exclude   []string      `yaml:"exclude"`
+	Watcher   WatcherConfig `yaml:"watcher"`
+	Daemon    DaemonConfig  `yaml:"daemon"`
+	Hooks     HooksConfig   `yaml:"hooks"`
+	Index     IndexConfig   `yaml:"index"`
 	// Telemetry is v2.2's opt-in, local-only call-frequency log.
 	// Default: disabled. When enabled, the daemon writes one JSON line
 	// per dispatched IPC/MCP call to .mycelium/telemetry.jsonl. No

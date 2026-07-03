@@ -46,11 +46,11 @@ type Subproject struct {
 
 // subprojectMarkers maps marker filenames to the language they indicate.
 var subprojectMarkers = map[string]string{
-	"go.mod":          "go",
-	"package.json":    "typescript",
-	"pyproject.toml":  "python",
-	"setup.py":        "python",
-	"setup.cfg":       "python",
+	"go.mod":         "go",
+	"package.json":   "typescript",
+	"pyproject.toml": "python",
+	"setup.py":       "python",
+	"setup.cfg":      "python",
 }
 
 // DetectLanguages walks the repo tree and returns which languages have

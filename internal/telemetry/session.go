@@ -168,9 +168,9 @@ func ReadHookMeta(dir, sessionID string) (HookMeta, bool) {
 // HookStdinData is the parsed result of a Claude Code hook's stdin payload.
 // All fields are best-effort — hook versions and contexts vary.
 type HookStdinData struct {
-	Name           string // first 8 words of the prompt, for session naming
-	InputTokens    int
-	OutputTokens   int
+	Name            string // first 8 words of the prompt, for session naming
+	InputTokens     int
+	OutputTokens    int
 	ClaudeSessionID string // Claude Code's UUID for this conversation
 	TranscriptPath  string // absolute path to the conversation JSONL
 }
@@ -333,9 +333,9 @@ func buildReports(records []Record) []SessionReport {
 	}
 
 	var (
-		buckets  []*bucket
-		byID     = map[string]*bucket{}
-		current  *bucket
+		buckets []*bucket
+		byID    = map[string]*bucket{}
+		current *bucket
 	)
 
 	for _, r := range records {

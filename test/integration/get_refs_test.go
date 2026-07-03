@@ -15,12 +15,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jdwiederstein/mycelium/internal/parser"
-	"github.com/jdwiederstein/mycelium/internal/parser/typescript"
-	"github.com/jdwiederstein/mycelium/internal/pipeline"
-	"github.com/jdwiederstein/mycelium/internal/query"
-	"github.com/jdwiederstein/mycelium/internal/repo"
-	tsresolver "github.com/jdwiederstein/mycelium/internal/resolver/typescript"
+	"github.com/datata1/mycelium/internal/parser"
+	"github.com/datata1/mycelium/internal/parser/typescript"
+	"github.com/datata1/mycelium/internal/pipeline"
+	"github.com/datata1/mycelium/internal/query"
+	"github.com/datata1/mycelium/internal/repo"
+	tsresolver "github.com/datata1/mycelium/internal/resolver/typescript"
 )
 
 func TestIntegration_GetReferences_ClassStaticMethods(t *testing.T) {

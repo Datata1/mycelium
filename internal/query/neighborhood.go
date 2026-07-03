@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jdwiederstein/mycelium/internal/focus"
+	"github.com/datata1/mycelium/internal/focus"
 )
 
 // Direction controls which edges get traversed by GetNeighborhood.
@@ -57,10 +57,10 @@ type NeighborNode struct {
 // was silently clamped). Transports (CLI, MCP, HTTP) pass these through
 // verbatim so agents can reason about the result quality.
 type Neighborhood struct {
-	Seed  NeighborNode    `json:"seed"`
-	Nodes []NeighborNode  `json:"nodes"`
-	Edges []NeighborEdge  `json:"edges"`
-	Notes []string        `json:"notes,omitempty"`
+	Seed  NeighborNode   `json:"seed"`
+	Nodes []NeighborNode `json:"nodes"`
+	Edges []NeighborEdge `json:"edges"`
+	Notes []string       `json:"notes,omitempty"`
 }
 
 // MaxNeighborhoodDepth is the hard ceiling a caller-visible note is emitted

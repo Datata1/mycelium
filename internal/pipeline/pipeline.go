@@ -9,11 +9,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jdwiederstein/mycelium/internal/index"
-	"github.com/jdwiederstein/mycelium/internal/parser"
-	"github.com/jdwiederstein/mycelium/internal/parser/document"
-	"github.com/jdwiederstein/mycelium/internal/repo"
-	goresolver "github.com/jdwiederstein/mycelium/internal/resolver/golang"
+	"github.com/datata1/mycelium/internal/index"
+	"github.com/datata1/mycelium/internal/parser"
+	"github.com/datata1/mycelium/internal/parser/document"
+	"github.com/datata1/mycelium/internal/repo"
+	goresolver "github.com/datata1/mycelium/internal/resolver/golang"
 )
 
 // Resolver is any per-language ref resolver. v1.2 introduced the Go type
@@ -482,4 +482,3 @@ func (p *Pipeline) resolverFor(lang string) Resolver {
 	}
 	return nil
 }
-

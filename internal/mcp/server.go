@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/jdwiederstein/mycelium/internal/ipc"
-	"github.com/jdwiederstein/mycelium/internal/mcp/render"
-	"github.com/jdwiederstein/mycelium/pkg/mcpschema"
+	"github.com/datata1/mycelium/internal/ipc"
+	"github.com/datata1/mycelium/internal/mcp/render"
+	"github.com/datata1/mycelium/pkg/mcpschema"
 )
 
 // Server implements a minimal Model Context Protocol server over stdio.
@@ -218,10 +218,10 @@ type jsonrpcRequest struct {
 }
 
 type jsonrpcResponse struct {
-	JSONRPC string         `json:"jsonrpc"`
+	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id,omitempty"`
-	Result  any            `json:"result,omitempty"`
-	Error   *jsonrpcError  `json:"error,omitempty"`
+	Result  any             `json:"result,omitempty"`
+	Error   *jsonrpcError   `json:"error,omitempty"`
 }
 
 type jsonrpcError struct {

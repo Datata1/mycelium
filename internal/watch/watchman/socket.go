@@ -18,9 +18,9 @@ const SockEnv = "MYCELIUM_WATCHMAN_SOCK"
 
 // GetSocketPath returns the path to the watchman unix socket.
 //
-//   1. $MYCELIUM_WATCHMAN_SOCK wins if set (covers exotic setups).
-//   2. Otherwise: run `watchman get-sockname --no-pretty`, parse
-//      the JSON, return the `sockname` field.
+//  1. $MYCELIUM_WATCHMAN_SOCK wins if set (covers exotic setups).
+//  2. Otherwise: run `watchman get-sockname --no-pretty`, parse
+//     the JSON, return the `sockname` field.
 //
 // Runs with a 5-second timeout so a hung watchman daemon can't wedge
 // daemon startup.

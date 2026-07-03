@@ -9,8 +9,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/jdwiederstein/mycelium/internal/doctor"
-	"github.com/jdwiederstein/mycelium/internal/query"
+	"github.com/datata1/mycelium/internal/doctor"
+	"github.com/datata1/mycelium/internal/query"
 )
 
 func newDoctorCmd() *cobra.Command {

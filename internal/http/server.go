@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jdwiederstein/mycelium/internal/ipc"
+	"github.com/datata1/mycelium/internal/ipc"
 )
 
 // Dispatcher is the subset of daemon.Daemon that the HTTP server needs.
@@ -28,8 +28,8 @@ type Dispatcher interface {
 // Server is a loopback HTTP API. Start binds a listener on 127.0.0.1:<port>;
 // Close shuts the server down cleanly. The server exposes two routes:
 //
-//   POST /rpc            - body: {"method": "...", "params": {...}}
-//   POST /<method>       - body: params object; method inferred from path
+//	POST /rpc            - body: {"method": "...", "params": {...}}
+//	POST /<method>       - body: params object; method inferred from path
 //
 // Both return {"ok": true, "result": ...} or {"ok": false, "error": "..."}.
 type Server struct {

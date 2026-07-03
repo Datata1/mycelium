@@ -34,13 +34,13 @@ type Watcher interface {
 // positional-arg list in v1.7 so adding another knob (like `Backend`)
 // doesn't keep shifting positional call-sites around.
 type Options struct {
-	Root           string   // absolute repo root
-	Include        []string // doublestar globs (nil = all)
-	Exclude        []string // doublestar globs
-	MaxFileSizeKB  int      // drop events on files larger than this (0 = no limit)
-	DebounceMS     int      // per-file quiet window before the event is emitted
-	CoalesceMS     int      // cross-file batch window after debounce (0 = no batching)
-	Backend        string   // "fsnotify" (default) | "watchman"
+	Root          string   // absolute repo root
+	Include       []string // doublestar globs (nil = all)
+	Exclude       []string // doublestar globs
+	MaxFileSizeKB int      // drop events on files larger than this (0 = no limit)
+	DebounceMS    int      // per-file quiet window before the event is emitted
+	CoalesceMS    int      // cross-file batch window after debounce (0 = no batching)
+	Backend       string   // "fsnotify" (default) | "watchman"
 }
 
 // rawSource is the minimal internal surface each backend implements.

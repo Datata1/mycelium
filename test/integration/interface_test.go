@@ -14,12 +14,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jdwiederstein/mycelium/internal/parser"
-	"github.com/jdwiederstein/mycelium/internal/parser/golang"
-	"github.com/jdwiederstein/mycelium/internal/pipeline"
-	"github.com/jdwiederstein/mycelium/internal/query"
-	"github.com/jdwiederstein/mycelium/internal/repo"
-	goresolver "github.com/jdwiederstein/mycelium/internal/resolver/golang"
+	"github.com/datata1/mycelium/internal/parser"
+	"github.com/datata1/mycelium/internal/parser/golang"
+	"github.com/datata1/mycelium/internal/pipeline"
+	"github.com/datata1/mycelium/internal/query"
+	"github.com/datata1/mycelium/internal/repo"
+	goresolver "github.com/datata1/mycelium/internal/resolver/golang"
 )
 
 func TestIntegration_InterfaceConsumerExpansion(t *testing.T) {

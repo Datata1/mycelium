@@ -11,8 +11,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/jdwiederstein/mycelium/internal/config"
-	"github.com/jdwiederstein/mycelium/internal/telemetry"
+	"github.com/datata1/mycelium/internal/config"
+	"github.com/datata1/mycelium/internal/telemetry"
 )
 
 func newSessionCmd() *cobra.Command {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/jdwiederstein/mycelium/internal/ipc"
+	"github.com/datata1/mycelium/internal/ipc"
 )
 
 // RunPostCommit is the body of `myco hook post-commit`. It asks the daemon

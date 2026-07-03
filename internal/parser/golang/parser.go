@@ -11,7 +11,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/jdwiederstein/mycelium/internal/parser"
+	"github.com/datata1/mycelium/internal/parser"
 )
 
 // Parser implements parser.Parser for Go source using the standard go/ast.

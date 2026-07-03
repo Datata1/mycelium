@@ -10,7 +10,7 @@ import (
 
 	sitter "github.com/smacker/go-tree-sitter"
 
-	"github.com/jdwiederstein/mycelium/internal/parser"
+	"github.com/datata1/mycelium/internal/parser"
 )
 
 // Slice returns the source text covered by a node.

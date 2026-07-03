@@ -11,14 +11,14 @@ import (
 //
 // `Project` (v3.1.2+) is the workspace project of the file, or "".
 type FileSummary struct {
-	Path        string            `json:"path"`
-	Project     string            `json:"project,omitempty"`
-	Language    string            `json:"language"`
-	LOC         int               `json:"loc"`
-	SymbolCount int               `json:"symbol_count"`
-	ByKind      map[string]int    `json:"by_kind"`
-	Exports     []ExportEntry     `json:"exports"`
-	Imports     []string          `json:"imports"`
+	Path        string         `json:"path"`
+	Project     string         `json:"project,omitempty"`
+	Language    string         `json:"language"`
+	LOC         int            `json:"loc"`
+	SymbolCount int            `json:"symbol_count"`
+	ByKind      map[string]int `json:"by_kind"`
+	Exports     []ExportEntry  `json:"exports"`
+	Imports     []string       `json:"imports"`
 }
 
 // ExportEntry is one publicly-visible symbol. We filter on visibility=public

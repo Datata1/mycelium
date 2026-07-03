@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jdwiederstein/mycelium/internal/query"
+	"github.com/datata1/mycelium/internal/query"
 )
 
 // insertDocumentFile registers a file under a non-NULL document_kind

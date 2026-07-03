@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/jdwiederstein/mycelium/internal/query"
+	"github.com/datata1/mycelium/internal/query"
 )
 
 func renderStats(raw json.RawMessage) string {
