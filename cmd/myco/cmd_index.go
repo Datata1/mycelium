@@ -1,16 +1,12 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
 
-	"github.com/datata1/mycelium/internal/parser"
-	"github.com/datata1/mycelium/internal/parser/golang"
-	"github.com/datata1/mycelium/internal/parser/python"
-	"github.com/datata1/mycelium/internal/parser/typescript"
+	"github.com/datata1/mycelium/internal/languages"
 	"github.com/datata1/mycelium/internal/pipeline"
 	"github.com/datata1/mycelium/internal/repo"
 )
@@ -20,7 +16,7 @@ func newIndexCmd() *cobra.Command {
 		Use:   "index",
 		Short: "Run a one-shot full index of the repo",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := context.Background()
+			ctx := cmd.Context()
 			rc, err := loadRepoCtx()
 			if err != nil {
 				return err
@@ -31,20 +27,9 @@ func newIndexCmd() *cobra.Command {
 			}
 			defer ix.Close()
 
-			reg := parser.NewRegistry()
-			for _, lang := range rc.Cfg.Languages {
-				switch lang {
-				case "go":
-					reg.Register(golang.New())
-				case "typescript":
-					reg.Register(typescript.New())
-				case "python":
-					reg.Register(python.New())
-				}
-			}
-
+			reg := languages.Registry(rc.Cfg.Languages)
 			w := repo.NewWalker(rc.Root, rc.Cfg.Include, rc.Cfg.Exclude, rc.Cfg.Index.MaxFileSizeKB)
-			resolvers := loadResolvers(rc.Root, rc.Cfg.Languages)
+			resolvers := languages.Resolvers(rc.Root, rc.Cfg.Languages, nil)
 			wss, projFor, err := buildWorkspaces(ctx, rc, ix)
 			if err != nil {
 				return err

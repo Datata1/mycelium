@@ -6,6 +6,46 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Error/logging foundations (refactoring workstream 02)
+
+#### Added
+
+- **Sentinel errors across the transport boundary**: `ipc.ErrNotFound` /
+  `ErrUnknownMethod` / `ErrBadParams` (re-exported as `query.ErrNotFound`).
+  `ipc.Response` gained an additive machine-readable `code` field; the
+  daemon maps sentinels to codes, `ipc.Client` maps them back — callers
+  branch with `errors.Is` instead of string matching.
+- `query.ParseDirection` — invalid neighborhood directions now fail with
+  `bad_params` instead of silently traversing nothing.
+
+#### Changed
+
+- **Logging is `log/slog`** with structured fields. The two identical
+  custom `Logger` interfaces (daemon, pipeline) are gone; daemon log line
+  format changed from `[daemon] ...` to slog text format.
+- `ipc.Method` and `watch.Backend` are typed strings; `Request.Method`,
+  `Client.Call`, and `bench.Case.Method` use them.
+- Context is threaded through `pipeline.Resolver.ResolveFile` and all CLI
+  query handlers (one signal-rooted context via `ExecuteContext`) — Ctrl-C
+  now cancels in-flight queries.
+- `query.ReadFocusedPreviewLines` (exported mutable package var) became a
+  `Reader` field with `SetReadPreviewLines`.
+- Response-write failures on the daemon socket are logged instead of
+  silently swallowed.
+
+### Language unification (refactoring workstream 06)
+
+#### Changed
+
+- **New `internal/languages` package** is the single registration point for
+  parsers and resolvers; the duplicated inline registration blocks in
+  `cmd/myco/cmd_index.go` / `cmd_daemon.go` and `shared.go:loadResolvers`
+  are gone. Adding a language is now one edit in one file.
+- Deleted the dead `Pipeline.GoResolver` legacy field and its fallback
+  branch — Go is resolved through the `Resolvers` map like TS/Python.
+- `docs/adding-a-language.md` rewritten against the actual code (it
+  previously referenced a `buildRegistry` function that did not exist).
+
 ### OSS hygiene (refactoring workstream 01, see `plans/refac/`)
 
 #### Added

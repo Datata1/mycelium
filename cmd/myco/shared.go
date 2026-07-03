@@ -11,9 +11,6 @@ import (
 	"github.com/datata1/mycelium/internal/parser/document"
 	"github.com/datata1/mycelium/internal/pipeline"
 	"github.com/datata1/mycelium/internal/repo"
-	goresolver "github.com/datata1/mycelium/internal/resolver/golang"
-	pyresolver "github.com/datata1/mycelium/internal/resolver/python"
-	tsresolver "github.com/datata1/mycelium/internal/resolver/typescript"
 )
 
 // openIndex opens the repo's SQLite index, creating parent directories when
@@ -93,34 +90,6 @@ func buildDocumentRegistry() *document.Registry {
 	r.Register(document.NewPackageJSON())
 	r.Register(document.NewGoMod())
 	return r
-}
-
-// loadResolvers constructs one resolver per enabled language. Languages
-// without a resolver fall back to textual-only resolution automatically.
-// Go needs an up-front go/packages load; TS and Python are stateless and
-// always ready.
-func loadResolvers(repoRoot string, languages []string) map[string]pipeline.Resolver {
-	out := map[string]pipeline.Resolver{}
-	for _, l := range languages {
-		switch l {
-		case "go":
-			r := goresolver.New(repoRoot)
-			errCount, err := r.Load()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "[resolver] go-types unavailable: %v — falling back to textual resolution\n", err)
-				continue
-			}
-			if errCount > 0 {
-				fmt.Fprintf(os.Stderr, "[resolver] go-types loaded with %d package errors (inspect via `myco doctor`)\n", errCount)
-			}
-			out["go"] = r
-		case "typescript":
-			out["typescript"] = tsresolver.New()
-		case "python":
-			out["python"] = pyresolver.New()
-		}
-	}
-	return out
 }
 
 // truncate shortens s to at most max bytes, appending "..." when cut.

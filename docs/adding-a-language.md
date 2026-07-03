@@ -1,7 +1,8 @@
 # Adding a language to Mycelium
 
 Mycelium's parser layer is a small, stable interface. Adding a new language
-requires no changes outside the files listed here.
+touches exactly one wiring file — [internal/languages/languages.go](../internal/languages/languages.go)
+— plus your new parser package and tests.
 
 ---
 
@@ -27,6 +28,8 @@ Rules:
 - `ParseResult.ContentHash` and `ParseResult.ParseHash` — SHA-256 of the
   raw source bytes and the parse output respectively. The pipeline uses
   these to skip writes when nothing changed.
+- Parsers emit plain structs and know nothing about storage — do not import
+  `internal/index` or issue SQL.
 
 Place the implementation in:
 
@@ -40,14 +43,16 @@ Use stdlib AST packages where they exist (Go's `go/ast` is the canonical example
 
 ---
 
-## 2. Register the parser
+## 2. Register the parser in internal/languages
 
-In [cmd/myco/shared.go](../cmd/myco/shared.go), `loadResolvers` already
-builds the per-language resolver map. Register the new parser in `buildRegistry`
-(called from daemon, index, and session commands) by adding:
+[internal/languages/languages.go](../internal/languages/languages.go) is the
+single registration point — the daemon (`myco daemon`) and the one-shot
+indexer (`myco index`) both build their registry there. Add one case to
+`Registry`:
 
 ```go
-reg.Register(yourlang.New())
+case "yourlang":
+    reg.Register(yourlang.New())
 ```
 
 `internal/parser/registry.go` does first-match dispatch by `Supports`, so
@@ -58,19 +63,24 @@ registration order only matters when two parsers claim the same extension.
 ## 3. (Optional) Implement a Resolver
 
 Raw textual refs (`ResolverVersion=0`) work for basic call graphs. For
-precise cross-file resolution, implement `pipeline.Resolver`:
+precise cross-file resolution, implement `pipeline.Resolver`
+([internal/pipeline/pipeline.go](../internal/pipeline/pipeline.go)):
 
 ```go
 type Resolver interface {
-    ResolveFile(absPath string, pr *parser.ParseResult) (resolved, total int)
+    ResolveFile(ctx context.Context, absPath string, pr *parser.ParseResult) (resolved, total int)
     Ready() bool
 }
 ```
 
 `ResolveFile` rewrites `pr.References` in place, setting `DstName` to the
 qualified form and bumping `ResolverVersion` to ≥ 1 on each rewritten ref.
-`Ready()` returns false when the resolver hasn't finished loading (e.g. while
+`Ready()` returns false while the resolver is still loading (e.g. while
 `go/packages` type-checks).
+
+Resolvers that can compute type-inheritance edges additionally implement
+`pipeline.InheritanceEmitter` — the pipeline detects it via type assertion,
+so this is non-breaking.
 
 Place the resolver in:
 
@@ -79,25 +89,29 @@ internal/resolver/<lang>/resolver.go
 internal/resolver/<lang>/doc.go
 ```
 
-Register it in `cmd/myco/shared.go:loadResolvers`:
+Register it in `internal/languages/languages.go:Resolvers`:
 
 ```go
-if slices.Contains(languages, "yourlang") {
-    m["yourlang"] = yourlangresolver.New(repoRoot)
-}
+case "yourlang":
+    out["yourlang"] = yourlangresolver.New()
 ```
 
 ---
 
-## 4. Add an integration test fixture
+## 4. Add tests
 
-Add a minimal source file to:
+**Parser unit test** (cheap, fast feedback): a table-driven test in
+`internal/parser/<lang>/parser_test.go` — source snippet in, expected
+`Symbol`/`Reference` structs out. The existing parser tests double as
+examples.
+
+**Integration fixture**: add a minimal source file to
 
 ```
 test/integration/testdata/fixtures/sample/<lang>/
 ```
 
-Then add assertions to `test/integration/index_test.go` (or a new file
+then add assertions to `test/integration/index_test.go` (or a new
 `test/integration/<lang>_test.go`) verifying:
 - `stats.ByLang["yourlang"] > 0`
 - at least one known symbol is findable via `reader.FindSymbol`
@@ -107,9 +121,11 @@ Then add assertions to `test/integration/index_test.go` (or a new file
 
 ## 5. Update `.mycelium.yml` defaults
 
-In [internal/config/config.go](../internal/config/config.go), add the new
-language identifier to the default `Languages` list if it should be on by
-default, and add a default `Include` glob pattern.
+In [internal/config/config.go](../internal/config/config.go):
+- add the identifier to `supportedLanguages` (config validation rejects
+  unknown names),
+- add it to the default `Languages` list if it should be on by default,
+- add a default `Include` glob pattern.
 
 ---
 
@@ -117,10 +133,11 @@ default, and add a default `Include` glob pattern.
 
 - [ ] `internal/parser/<lang>/parser.go` — implements `parser.Parser`
 - [ ] `internal/parser/<lang>/doc.go` — package comment
-- [ ] Registered in `cmd/myco/shared.go` (parser registry)
+- [ ] Registered in `internal/languages/languages.go:Registry`
 - [ ] (Optional) `internal/resolver/<lang>/resolver.go` — implements `pipeline.Resolver`
-- [ ] (Optional) Registered in `cmd/myco/shared.go` (resolver map)
+- [ ] (Optional) Registered in `internal/languages/languages.go:Resolvers`
+- [ ] Parser unit test in `internal/parser/<lang>/parser_test.go`
 - [ ] Fixture added to `test/integration/testdata/fixtures/sample/`
 - [ ] Integration test assertions added
-- [ ] `go test -tags sqlite_fts5 -race ./test/integration/...` passes
+- [ ] `internal/config/config.go` — `supportedLanguages` + defaults updated
 - [ ] `task check` passes

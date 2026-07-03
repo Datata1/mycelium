@@ -50,12 +50,13 @@ func Resolvers(root string, enabled []string) map[string]pipeline.Resolver
 - Bodies move verbatim from the two inline registration blocks and from
   `shared.go:loadResolvers`. Both cmd call sites (and later the service
   wiring) call these.
-- Pipeline cleanup: delete `Pipeline.GoResolver`, `Pipeline.Walker`, the
-  `resolverFor` legacy branch (`pipeline.go:475-481`), and the
-  Walker-fallback branches. Before deleting, grep module-wide for
-  `GoResolver` and `.Walker` — check `internal/bench` and tests construct
-  Pipeline via `Workspaces`, not the legacy fields. These are `internal/`
-  types; deleting deprecated exported fields is free within the module.
+- Pipeline cleanup: delete `Pipeline.GoResolver` and the `resolverFor`
+  legacy branch. **Implementation note (2026-07-03):** `Pipeline.Walker`
+  stays — it is not legacy but the live single-root path
+  (`buildWorkspaces` returns nil when no `projects:` are configured) and
+  is constructed at 11 sites incl. all integration tests. Only its
+  misleading "legacy" comment was corrected. Collapsing Walker into a
+  synthesized root Workspace remains a possible follow-up in WS04.
 - If WS02's resolver-ctx threading hasn't landed yet, do it here in the same
   PR that touches the `Resolver` interface.
 - **Rewrite `docs/adding-a-language.md` against reality:** point at

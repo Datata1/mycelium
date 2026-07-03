@@ -12,7 +12,6 @@ import (
 	"github.com/datata1/mycelium/internal/parser"
 	"github.com/datata1/mycelium/internal/parser/document"
 	"github.com/datata1/mycelium/internal/repo"
-	goresolver "github.com/datata1/mycelium/internal/resolver/golang"
 )
 
 // Resolver is any per-language ref resolver. v1.2 introduced the Go type
@@ -47,7 +46,7 @@ type Workspace struct {
 type Pipeline struct {
 	Index    *index.Index
 	Registry *parser.Registry
-	Walker   *repo.Walker // legacy single-root path; used only when Workspaces is empty
+	Walker   *repo.Walker // single-root path; used only when Workspaces is empty
 	// Workspaces is the v1.5 multi-project path. When non-empty it
 	// replaces Walker entirely — each project is walked with its own
 	// root + filters and tagged with its project_id on index write.
@@ -58,12 +57,10 @@ type Pipeline struct {
 	// pass finishes, RunOnce iterates the same file list and dispatches
 	// every file no symbol parser claimed through this registry.
 	Documents *document.Registry
-	// Resolvers is keyed by language ("go", "typescript", "python"). A
-	// missing entry means textual resolution only for that language.
+	// Resolvers is keyed by language ("go", "typescript", "python").
+	// A missing entry means textual resolution only for that language.
+	// internal/languages builds the canonical set.
 	Resolvers map[string]Resolver
-
-	// Deprecated: kept for legacy callers; prefer Resolvers["go"].
-	GoResolver *goresolver.Resolver
 
 	// FileProjectFor maps an absolute path to its project_id. Populated at
 	// construction for the v1.5 workspace path; nil for single-project use.
@@ -450,14 +447,8 @@ func (p *Pipeline) writeParsed(ctx context.Context, f repo.File, prs parser.Pars
 	return true, len(result.Symbols), len(result.References), nil
 }
 
-// resolverFor returns the resolver registered for lang, falling back to the
-// legacy GoResolver field so pre-v1.3 construction keeps working unchanged.
+// resolverFor returns the resolver registered for lang, or nil for
+// textual-only resolution.
 func (p *Pipeline) resolverFor(lang string) Resolver {
-	if r, ok := p.Resolvers[lang]; ok {
-		return r
-	}
-	if lang == "go" && p.GoResolver != nil {
-		return p.GoResolver
-	}
-	return nil
+	return p.Resolvers[lang]
 }

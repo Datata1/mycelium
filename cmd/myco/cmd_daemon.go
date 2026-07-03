@@ -13,10 +13,7 @@ import (
 
 	"github.com/datata1/mycelium/internal/daemon"
 	mychttp "github.com/datata1/mycelium/internal/http"
-	"github.com/datata1/mycelium/internal/parser"
-	"github.com/datata1/mycelium/internal/parser/golang"
-	"github.com/datata1/mycelium/internal/parser/python"
-	"github.com/datata1/mycelium/internal/parser/typescript"
+	"github.com/datata1/mycelium/internal/languages"
 	"github.com/datata1/mycelium/internal/pipeline"
 	"github.com/datata1/mycelium/internal/query"
 	"github.com/datata1/mycelium/internal/repo"
@@ -74,20 +71,9 @@ func runDaemon(ctx context.Context, backendOverride string) error {
 	}
 	defer ix.Close()
 
-	reg := parser.NewRegistry()
-	for _, lang := range rc.Cfg.Languages {
-		switch lang {
-		case "go":
-			reg.Register(golang.New())
-		case "typescript":
-			reg.Register(typescript.New())
-		case "python":
-			reg.Register(python.New())
-		}
-	}
-
+	reg := languages.Registry(rc.Cfg.Languages)
 	w := repo.NewWalker(rc.Root, rc.Cfg.Include, rc.Cfg.Exclude, rc.Cfg.Index.MaxFileSizeKB)
-	resolvers := loadResolvers(rc.Root, rc.Cfg.Languages)
+	resolvers := languages.Resolvers(rc.Root, rc.Cfg.Languages, log.With("component", "resolver"))
 	wss, projFor, err := buildWorkspaces(ctx, rc, ix)
 	if err != nil {
 		return err
