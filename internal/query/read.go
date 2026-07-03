@@ -13,43 +13,6 @@ import (
 	"github.com/datata1/mycelium/internal/focus"
 )
 
-// FocusedRead is the result of ReadFocused: a single file's content
-// rendered with focus-matched symbols expanded in full and non-matched
-// symbols collapsed to a one-line marker. Stats let agents reason about
-// how much was hidden and which line ranges to drill into next.
-//
-// `Hint` is populated only in the v4 no-focus preview path (focus=""):
-// it tells the agent that Content is a truncated preview and how to get
-// more (pass focus, or call get_file_outline). When focus is set, Hint
-// is empty.
-type FocusedRead struct {
-	Path    string           `json:"path"`
-	Focus   string           `json:"focus"`
-	Content string           `json:"content"`
-	Stats   FocusedReadStats `json:"stats"`
-	Hint    string           `json:"hint,omitempty"`
-	// Expanded reports each symbol that survived the filter, with its
-	// original line range, so agents can map back to source for follow-ups.
-	Expanded []FocusedSymbol `json:"expanded,omitempty"`
-}
-
-// FocusedReadStats summarises the collapse outcome.
-type FocusedReadStats struct {
-	TotalSymbols    int `json:"total_symbols"`
-	ExpandedSymbols int `json:"expanded_symbols"`
-	OriginalBytes   int `json:"original_bytes"`
-	ReturnedBytes   int `json:"returned_bytes"`
-}
-
-// FocusedSymbol is a kept-after-filter symbol's location.
-type FocusedSymbol struct {
-	Qualified string  `json:"qualified"`
-	Kind      string  `json:"kind"`
-	StartLine int     `json:"start_line"`
-	EndLine   int     `json:"end_line"`
-	Score     float64 `json:"score"`
-}
-
 // flatSymbol is the symbol view ReadFocused walks: top-level + nested,
 // flattened to a list ordered by start_line. Children are kept inline
 // because collapsing a class hides its methods regardless of nesting.

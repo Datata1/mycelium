@@ -14,17 +14,6 @@ import (
 	"sync"
 )
 
-// LexicalHit is one matching line in a file.
-//
-// `Project` (v3.1.2+) is the workspace project the file belongs to, or
-// "" in single-project mode.
-type LexicalHit struct {
-	Path    string `json:"path"`
-	Project string `json:"project,omitempty"`
-	Line    int    `json:"line"`
-	Snippet string `json:"snippet"`
-}
-
 // SearchLexical does a ripgrep-style scan of every indexed file. Pattern is
 // treated as a Go regexp; callers who want a plain substring can escape it
 // with regexp.QuoteMeta before calling.

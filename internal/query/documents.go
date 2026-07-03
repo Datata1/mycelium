@@ -5,21 +5,6 @@ import (
 	"strings"
 )
 
-// DocumentHit is one (key, value, line) entry from the v3.3 documents
-// surface. Project annotates the workspace project the entry's file
-// belongs to ("" in single-project mode); Path follows the v3.1.2
-// convention — pass it verbatim to `read_focused` / `get_file_outline`
-// without prepending project roots.
-type DocumentHit struct {
-	ID      int64  `json:"id"`
-	Kind    string `json:"kind"`
-	Path    string `json:"path"`
-	Project string `json:"project,omitempty"`
-	Key     string `json:"key"`
-	Value   string `json:"value"`
-	Line    int    `json:"line"`
-}
-
 // FindDocumentKey looks up entries whose key matches the supplied
 // query. Match semantics:
 //

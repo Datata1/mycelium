@@ -6,33 +6,6 @@ import (
 	"errors"
 )
 
-// FileSummary is a structural summary of a single file. For v1.0 we stay
-// firmly on the "derivable from the index" side — no LLM calls. Agents use
-// this as a quick orientation before deciding whether to read the file.
-//
-// `Project` (v3.1.2+) is the workspace project of the file, or "".
-type FileSummary struct {
-	Path        string         `json:"path"`
-	Project     string         `json:"project,omitempty"`
-	Language    string         `json:"language"`
-	LOC         int            `json:"loc"`
-	SymbolCount int            `json:"symbol_count"`
-	ByKind      map[string]int `json:"by_kind"`
-	Exports     []ExportEntry  `json:"exports"`
-	Imports     []string       `json:"imports"`
-}
-
-// ExportEntry is one publicly-visible symbol. We filter on visibility=public
-// which covers Go capital-names, TS export_statement-wrapped defs, and Python
-// non-underscore names.
-type ExportEntry struct {
-	Name      string `json:"name"`
-	Qualified string `json:"qualified"`
-	Kind      string `json:"kind"`
-	StartLine int    `json:"start_line"`
-	Signature string `json:"signature,omitempty"`
-}
-
 // GetFileSummary returns the summary for one file. If the file is not in the
 // index, returns a FileSummary with Path set and other fields zero.
 func (r *Reader) GetFileSummary(ctx context.Context, path string) (FileSummary, error) {

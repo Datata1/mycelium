@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/datata1/mycelium/internal/query"
+	"github.com/datata1/mycelium/internal/ipc"
 )
 
 func renderFindSymbol(raw json.RawMessage) string {
-	var r query.FindSymbolResult
+	var r ipc.FindSymbolResult
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return fallback(raw)
 	}
@@ -40,7 +40,7 @@ func renderFindSymbol(raw json.RawMessage) string {
 }
 
 func renderFileOutline(raw json.RawMessage) string {
-	var items []query.FileOutlineItem
+	var items []ipc.FileOutlineItem
 	if err := json.Unmarshal(raw, &items); err != nil {
 		return fallback(raw)
 	}
@@ -52,7 +52,7 @@ func renderFileOutline(raw json.RawMessage) string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-func writeOutlineItems(sb *strings.Builder, items []query.FileOutlineItem, depth int) {
+func writeOutlineItems(sb *strings.Builder, items []ipc.FileOutlineItem, depth int) {
 	indent := strings.Repeat("  ", depth)
 	for _, it := range items {
 		fmt.Fprintf(sb, "%s%-10s %-40s :%d\n", indent, it.Kind, it.Name, it.StartLine)
@@ -63,7 +63,7 @@ func writeOutlineItems(sb *strings.Builder, items []query.FileOutlineItem, depth
 }
 
 func renderFileSummary(raw json.RawMessage) string {
-	var s query.FileSummary
+	var s ipc.FileSummary
 	if err := json.Unmarshal(raw, &s); err != nil {
 		return fallback(raw)
 	}

@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/datata1/mycelium/internal/query"
+	"github.com/datata1/mycelium/internal/ipc"
 )
 
 func renderReferences(raw json.RawMessage) string {
-	var hits []query.ReferenceHit
+	var hits []ipc.ReferenceHit
 	if err := json.Unmarshal(raw, &hits); err != nil {
 		return fallback(raw)
 	}
@@ -28,7 +28,7 @@ func renderReferences(raw json.RawMessage) string {
 }
 
 func renderNeighborhood(raw json.RawMessage) string {
-	var n query.Neighborhood
+	var n ipc.Neighborhood
 	if err := json.Unmarshal(raw, &n); err != nil {
 		return fallback(raw)
 	}
@@ -37,7 +37,7 @@ func renderNeighborhood(raw json.RawMessage) string {
 		n.Seed.Qualified, n.Seed.Kind, n.Seed.Path, n.Seed.StartLine)
 
 	// Split edges into callers (in) and callees (out)
-	var in, out []query.NeighborEdge
+	var in, out []ipc.NeighborEdge
 	for _, e := range n.Edges {
 		switch e.Direction {
 		case "in":
@@ -47,7 +47,7 @@ func renderNeighborhood(raw json.RawMessage) string {
 		}
 	}
 
-	nodeByID := make(map[int64]query.NeighborNode, len(n.Nodes))
+	nodeByID := make(map[int64]ipc.NeighborNode, len(n.Nodes))
 	for _, nd := range n.Nodes {
 		nodeByID[nd.ID] = nd
 	}
@@ -73,7 +73,7 @@ func renderNeighborhood(raw json.RawMessage) string {
 }
 
 func renderImpact(raw json.RawMessage) string {
-	var imp query.Impact
+	var imp ipc.Impact
 	if err := json.Unmarshal(raw, &imp); err != nil {
 		return fallback(raw)
 	}
@@ -96,7 +96,7 @@ func renderImpact(raw json.RawMessage) string {
 }
 
 func renderCriticalPath(raw json.RawMessage) string {
-	var r query.CriticalPathResult
+	var r ipc.CriticalPathResult
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return fallback(raw)
 	}

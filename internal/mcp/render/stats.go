@@ -6,11 +6,11 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/datata1/mycelium/internal/query"
+	"github.com/datata1/mycelium/internal/ipc"
 )
 
 func renderStats(raw json.RawMessage) string {
-	var s query.Stats
+	var s ipc.Stats
 	if err := json.Unmarshal(raw, &s); err != nil {
 		return fallback(raw)
 	}

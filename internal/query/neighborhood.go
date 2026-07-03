@@ -34,49 +34,6 @@ func ParseDirection(s string) (Direction, error) {
 	}
 }
 
-// NeighborEdge is one edge in the returned graph.
-//
-// `SrcProject` (v3.1.2+) is the workspace project of the source-file
-// edge location, or "" in single-project mode.
-type NeighborEdge struct {
-	FromID     int64  `json:"from_id"`
-	FromName   string `json:"from_name"`
-	ToID       int64  `json:"to_id"`
-	ToName     string `json:"to_name"`
-	Kind       string `json:"kind"` // call | import | type_ref | inherit
-	SrcPath    string `json:"src_path,omitempty"`
-	SrcProject string `json:"src_project,omitempty"`
-	SrcLine    int    `json:"src_line,omitempty"`
-	Depth      int    `json:"depth"`
-	Direction  string `json:"direction"` // "out" or "in"
-}
-
-// NeighborNode is one vertex in the returned graph.
-//
-// `Project` (v3.1.2+) is the workspace project the symbol's file
-// belongs to, or "" in single-project mode.
-type NeighborNode struct {
-	ID        int64  `json:"id"`
-	Qualified string `json:"qualified"`
-	Kind      string `json:"kind"`
-	Path      string `json:"path"`
-	Project   string `json:"project,omitempty"`
-	StartLine int    `json:"start_line"`
-	Depth     int    `json:"depth"` // 0 = seed, 1 = direct neighbor, ...
-}
-
-// Neighborhood is the result of a traversal.
-//
-// Notes carries non-fatal messages the caller should surface (e.g. depth
-// was silently clamped). Transports (CLI, MCP, HTTP) pass these through
-// verbatim so agents can reason about the result quality.
-type Neighborhood struct {
-	Seed  NeighborNode   `json:"seed"`
-	Nodes []NeighborNode `json:"nodes"`
-	Edges []NeighborEdge `json:"edges"`
-	Notes []string       `json:"notes,omitempty"`
-}
-
 // MaxNeighborhoodDepth is the hard ceiling a caller-visible note is emitted
 // for. See LIMITATIONS.md "get_neighborhood silently caps depth at 5" —
 // now "get_neighborhood caps depth at 5, surfaces a note."

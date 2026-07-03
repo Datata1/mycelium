@@ -25,30 +25,6 @@ const MaxCriticalPathDepth = 8
 // when the caller doesn't specify.
 const DefaultCriticalPathK = 5
 
-// ImpactHit is one transitive caller of the seed symbol, ranked by
-// distance. Lower distance = closer to the seed (distance 1 = direct
-// caller).
-//
-// `Project` (v3.1.2+) is the workspace project the caller's file
-// belongs to, or "" in single-project mode.
-type ImpactHit struct {
-	ID        int64  `json:"id"`
-	Qualified string `json:"qualified"`
-	Kind      string `json:"kind"`
-	Path      string `json:"path"`
-	Project   string `json:"project,omitempty"`
-	StartLine int    `json:"start_line"`
-	Distance  int    `json:"distance"`
-}
-
-// Impact is the result of ImpactAnalysis. Notes mirrors the
-// Neighborhood convention for surfacing depth-clamp messages.
-type Impact struct {
-	Seed  NeighborNode `json:"seed"`
-	Hits  []ImpactHit  `json:"hits"`
-	Notes []string     `json:"notes,omitempty"`
-}
-
 // ImpactAnalysis returns the transitive inbound closure around the
 // target symbol — every symbol that directly or transitively calls
 // into it, ranked by shortest-distance.
@@ -143,29 +119,6 @@ func (r *Reader) ImpactAnalysis(ctx context.Context, target, kind, project strin
 		result.Hits = append(result.Hits, h)
 	}
 	return result, rows.Err()
-}
-
-// PathVertex is one step in a CriticalPath result.
-//
-// `Project` (v3.1.2+) is the workspace project the vertex's file
-// belongs to, or "" in single-project mode.
-type PathVertex struct {
-	ID        int64  `json:"id"`
-	Qualified string `json:"qualified"`
-	Kind      string `json:"kind"`
-	Path      string `json:"path"`
-	Project   string `json:"project,omitempty"`
-	StartLine int    `json:"start_line"`
-}
-
-// CriticalPathResult carries one or more shortest outbound paths from
-// the `from` seed to the `to` target. Empty Paths means no route was
-// found within the depth cap.
-type CriticalPathResult struct {
-	From  NeighborNode   `json:"from"`
-	To    NeighborNode   `json:"to"`
-	Paths [][]PathVertex `json:"paths"`
-	Notes []string       `json:"notes,omitempty"`
 }
 
 // CriticalPath returns up to k shortest outbound paths from `from` to

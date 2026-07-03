@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/datata1/mycelium/internal/query"
+	"github.com/datata1/mycelium/internal/ipc"
 )
 
 func renderLexical(raw json.RawMessage) string {
-	var hits []query.LexicalHit
+	var hits []ipc.LexicalHit
 	if err := json.Unmarshal(raw, &hits); err != nil {
 		return fallback(raw)
 	}
@@ -25,7 +25,7 @@ func renderLexical(raw json.RawMessage) string {
 }
 
 func renderListFiles(raw json.RawMessage) string {
-	var files []query.FileHit
+	var files []ipc.FileHit
 	if err := json.Unmarshal(raw, &files); err != nil {
 		return fallback(raw)
 	}
@@ -40,7 +40,7 @@ func renderListFiles(raw json.RawMessage) string {
 }
 
 func renderDocumentKey(raw json.RawMessage) string {
-	var hits []query.DocumentHit
+	var hits []ipc.DocumentHit
 	if err := json.Unmarshal(raw, &hits); err != nil {
 		return fallback(raw)
 	}
