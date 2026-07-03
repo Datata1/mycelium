@@ -10,7 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/datata1/mycelium/internal/doctor"
-	"github.com/datata1/mycelium/internal/query"
+	"github.com/datata1/mycelium/internal/service"
 )
 
 func newDoctorCmd() *cobra.Command {
@@ -40,7 +40,7 @@ func newDoctorCmd() *cobra.Command {
 			if window > 0 {
 				th.AdoptionWindow = window
 			}
-			r := query.NewReader(ix.DB())
+			r := service.NewReadOnly(ix, rc.Root, nil).Reader()
 			rep, err := doctor.Run(ctx, r, th, rc.Root, rc.AbsStateDir())
 			if err != nil {
 				return err

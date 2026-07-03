@@ -44,8 +44,10 @@ func Open(path string) (*Index, error) {
 func (ix *Index) Close() error { return ix.db.Close() }
 func (ix *Index) Path() string { return ix.path }
 
-// DB exposes the underlying handle for the read-side query package.
-// Write-side callers must go through the methods on Index instead.
+// DB exposes the underlying handle. Its only legitimate consumers are
+// internal/pipeline (the sole writer), internal/service (which builds the
+// sole reader, query.Reader), and tests. Command/transport code must go
+// through internal/service — never take this handle directly.
 func (ix *Index) DB() *sql.DB { return ix.db }
 
 // UpsertFileResult reports what UpsertFile did, so the caller can skip embed work

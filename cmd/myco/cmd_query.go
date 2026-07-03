@@ -7,9 +7,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/datata1/mycelium/internal/gitref"
 	"github.com/datata1/mycelium/internal/ipc"
-	"github.com/datata1/mycelium/internal/query"
+	"github.com/datata1/mycelium/internal/service"
 )
 
 func newQueryCmd() *cobra.Command {
@@ -184,14 +183,24 @@ func daemonClient(rc repoCtx) (*ipc.Client, bool) {
 	return nil, false
 }
 
-// resolveCLISince turns --since <ref> into the resolved path list.
-// Empty ref returns nil (unscoped). Any git error surfaces verbatim;
-// the CLI prefers a loud failure over a silently unfiltered result.
-func resolveCLISince(ctx context.Context, rc repoCtx, since string) ([]string, error) {
-	if since == "" {
-		return nil, nil
+// callRead executes one read request: over the daemon socket when the
+// daemon is reachable, otherwise via a local read-only Service on the
+// index. Both paths run the identical internal/service code (including
+// --since resolution), so daemon-up and daemon-down output cannot drift.
+// `local` is the Service method expression matching `method`.
+func callRead[P, R any](ctx context.Context, rc repoCtx, method ipc.Method, params P,
+	local func(*service.Service, context.Context, P) (R, error)) (R, error) {
+	var out R
+	if c, ok := daemonClient(rc); ok {
+		err := c.Call(method, params, &out)
+		return out, err
 	}
-	return gitref.ResolveSince(ctx, rc.Root, since)
+	ix, err := openIndex(rc)
+	if err != nil {
+		return out, err
+	}
+	defer ix.Close()
+	return local(service.NewReadOnly(ix, rc.Root, nil), ctx, params)
 }
 
 // newTopLevelFindCmd is a v4 T6 ergonomics alias: `myco find` delegates
@@ -247,26 +256,11 @@ func runQueryFind(ctx context.Context, name, kind, project, since, focus string,
 	if err != nil {
 		return err
 	}
-	var result query.FindSymbolResult
-	if c, ok := daemonClient(rc); ok {
-		if err := c.Call(ipc.MethodFindSymbol, ipc.FindSymbolParams{Name: name, Kind: kind, Project: project, Since: since, Limit: limit, Focus: focus}, &result); err != nil {
-			return err
-		}
-	} else {
-		paths, err := resolveCLISince(ctx, rc, since)
-		if err != nil {
-			return err
-		}
-		ix, err := openIndex(rc)
-		if err != nil {
-			return err
-		}
-		defer ix.Close()
-		r := query.NewReader(ix.DB())
-		result, err = r.FindSymbol(ctx, name, kind, project, limit, paths, focus)
-		if err != nil {
-			return err
-		}
+	result, err := callRead(ctx, rc, ipc.MethodFindSymbol,
+		ipc.FindSymbolParams{Name: name, Kind: kind, Project: project, Since: since, Limit: limit, Focus: focus},
+		(*service.Service).FindSymbol)
+	if err != nil {
+		return err
 	}
 	hits := result.Matches
 	if len(hits) == 0 {
@@ -290,26 +284,11 @@ func runQueryRefs(ctx context.Context, target, project, since string, limit int)
 	if err != nil {
 		return err
 	}
-	var hits []query.ReferenceHit
-	if c, ok := daemonClient(rc); ok {
-		if err := c.Call(ipc.MethodGetReferences, ipc.GetReferencesParams{Target: target, Project: project, Since: since, Limit: limit}, &hits); err != nil {
-			return err
-		}
-	} else {
-		paths, err := resolveCLISince(ctx, rc, since)
-		if err != nil {
-			return err
-		}
-		ix, err := openIndex(rc)
-		if err != nil {
-			return err
-		}
-		defer ix.Close()
-		r := query.NewReader(ix.DB())
-		hits, err = r.GetReferences(ctx, target, project, limit, paths)
-		if err != nil {
-			return err
-		}
+	hits, err := callRead(ctx, rc, ipc.MethodGetReferences,
+		ipc.GetReferencesParams{Target: target, Project: project, Since: since, Limit: limit},
+		(*service.Service).GetReferences)
+	if err != nil {
+		return err
 	}
 	if len(hits) == 0 {
 		fmt.Fprintln(os.Stderr, "no references")
@@ -334,26 +313,11 @@ func runQueryFiles(ctx context.Context, nameContains, language, project, since s
 	if err != nil {
 		return err
 	}
-	var hits []query.FileHit
-	if c, ok := daemonClient(rc); ok {
-		if err := c.Call(ipc.MethodListFiles, ipc.ListFilesParams{Language: language, NameContains: nameContains, Project: project, Since: since, Limit: limit}, &hits); err != nil {
-			return err
-		}
-	} else {
-		paths, err := resolveCLISince(ctx, rc, since)
-		if err != nil {
-			return err
-		}
-		ix, err := openIndex(rc)
-		if err != nil {
-			return err
-		}
-		defer ix.Close()
-		r := query.NewReader(ix.DB())
-		hits, err = r.ListFiles(ctx, language, nameContains, project, limit, paths)
-		if err != nil {
-			return err
-		}
+	hits, err := callRead(ctx, rc, ipc.MethodListFiles,
+		ipc.ListFilesParams{Language: language, NameContains: nameContains, Project: project, Since: since, Limit: limit},
+		(*service.Service).ListFiles)
+	if err != nil {
+		return err
 	}
 	for _, h := range hits {
 		fmt.Printf("%s  [%s]  %d symbols  %d bytes\n", h.Path, h.Language, h.SymbolCount, h.SizeBytes)
@@ -366,26 +330,11 @@ func runQueryLexical(ctx context.Context, pattern, pathContains, project, since 
 	if err != nil {
 		return err
 	}
-	var hits []query.LexicalHit
-	if c, ok := daemonClient(rc); ok {
-		if err := c.Call(ipc.MethodSearchLexical, ipc.SearchLexicalParams{Pattern: pattern, PathContains: pathContains, Project: project, Since: since, K: k}, &hits); err != nil {
-			return err
-		}
-	} else {
-		paths, err := resolveCLISince(ctx, rc, since)
-		if err != nil {
-			return err
-		}
-		ix, err := openIndex(rc)
-		if err != nil {
-			return err
-		}
-		defer ix.Close()
-		r := query.NewReader(ix.DB())
-		hits, err = r.SearchLexical(ctx, pattern, pathContains, project, k, rc.Root, paths)
-		if err != nil {
-			return err
-		}
+	hits, err := callRead(ctx, rc, ipc.MethodSearchLexical,
+		ipc.SearchLexicalParams{Pattern: pattern, PathContains: pathContains, Project: project, Since: since, K: k},
+		(*service.Service).SearchLexical)
+	if err != nil {
+		return err
 	}
 	for _, h := range hits {
 		fmt.Printf("%s:%d  %s\n", h.Path, h.Line, truncate(h.Snippet, 160))
@@ -398,22 +347,11 @@ func runQuerySummary(ctx context.Context, path string) error {
 	if err != nil {
 		return err
 	}
-	var s query.FileSummary
-	if c, ok := daemonClient(rc); ok {
-		if err := c.Call(ipc.MethodGetFileSummary, ipc.GetFileSummaryParams{Path: path}, &s); err != nil {
-			return err
-		}
-	} else {
-		ix, err := openIndex(rc)
-		if err != nil {
-			return err
-		}
-		defer ix.Close()
-		r := query.NewReader(ix.DB())
-		s, err = r.GetFileSummary(ctx, path)
-		if err != nil {
-			return err
-		}
+	s, err := callRead(ctx, rc, ipc.MethodGetFileSummary,
+		ipc.GetFileSummaryParams{Path: path},
+		(*service.Service).GetFileSummary)
+	if err != nil {
+		return err
 	}
 	fmt.Printf("%s  [%s]  LOC=%d  symbols=%d\n", s.Path, s.Language, s.LOC, s.SymbolCount)
 	if len(s.ByKind) > 0 {
@@ -443,26 +381,11 @@ func runQueryNeighborhood(ctx context.Context, target, project string, depth int
 	if err != nil {
 		return err
 	}
-	var nb query.Neighborhood
-	if c, ok := daemonClient(rc); ok {
-		if err := c.Call(ipc.MethodGetNeighborhood, ipc.GetNeighborhoodParams{Target: target, Project: project, Depth: depth, Direction: direction, Focus: focus}, &nb); err != nil {
-			return err
-		}
-	} else {
-		ix, err := openIndex(rc)
-		if err != nil {
-			return err
-		}
-		defer ix.Close()
-		r := query.NewReader(ix.DB())
-		dir, err := query.ParseDirection(direction)
-		if err != nil {
-			return err
-		}
-		nb, err = r.GetNeighborhood(ctx, target, project, depth, dir, focus)
-		if err != nil {
-			return err
-		}
+	nb, err := callRead(ctx, rc, ipc.MethodGetNeighborhood,
+		ipc.GetNeighborhoodParams{Target: target, Project: project, Depth: depth, Direction: direction, Focus: focus},
+		(*service.Service).GetNeighborhood)
+	if err != nil {
+		return err
 	}
 	for _, note := range nb.Notes {
 		fmt.Fprintf(os.Stderr, "note: %s\n", note)
@@ -483,26 +406,11 @@ func runQueryImpact(ctx context.Context, target, kind, project, since string, de
 	if err != nil {
 		return err
 	}
-	var imp query.Impact
-	if c, ok := daemonClient(rc); ok {
-		if err := c.Call(ipc.MethodImpactAnalysis, ipc.ImpactAnalysisParams{Target: target, Kind: kind, Depth: depth, Project: project, Since: since}, &imp); err != nil {
-			return err
-		}
-	} else {
-		paths, err := resolveCLISince(ctx, rc, since)
-		if err != nil {
-			return err
-		}
-		ix, err := openIndex(rc)
-		if err != nil {
-			return err
-		}
-		defer ix.Close()
-		r := query.NewReader(ix.DB())
-		imp, err = r.ImpactAnalysis(ctx, target, kind, project, depth, paths)
-		if err != nil {
-			return err
-		}
+	imp, err := callRead(ctx, rc, ipc.MethodImpactAnalysis,
+		ipc.ImpactAnalysisParams{Target: target, Kind: kind, Depth: depth, Project: project, Since: since},
+		(*service.Service).ImpactAnalysis)
+	if err != nil {
+		return err
 	}
 	for _, note := range imp.Notes {
 		fmt.Fprintf(os.Stderr, "note: %s\n", note)
@@ -523,22 +431,11 @@ func runQueryCriticalPath(ctx context.Context, from, to, project string, depth, 
 	if err != nil {
 		return err
 	}
-	var cp query.CriticalPathResult
-	if c, ok := daemonClient(rc); ok {
-		if err := c.Call(ipc.MethodCriticalPath, ipc.CriticalPathParams{From: from, To: to, Depth: depth, K: k, Project: project}, &cp); err != nil {
-			return err
-		}
-	} else {
-		ix, err := openIndex(rc)
-		if err != nil {
-			return err
-		}
-		defer ix.Close()
-		r := query.NewReader(ix.DB())
-		cp, err = r.CriticalPath(ctx, from, to, project, depth, k)
-		if err != nil {
-			return err
-		}
+	cp, err := callRead(ctx, rc, ipc.MethodCriticalPath,
+		ipc.CriticalPathParams{From: from, To: to, Depth: depth, K: k, Project: project},
+		(*service.Service).CriticalPath)
+	if err != nil {
+		return err
 	}
 	for _, note := range cp.Notes {
 		fmt.Fprintf(os.Stderr, "note: %s\n", note)
@@ -574,29 +471,18 @@ func runQueryOutline(ctx context.Context, path, focus string) error {
 	if err != nil {
 		return err
 	}
-	var items []query.FileOutlineItem
-	if c, ok := daemonClient(rc); ok {
-		if err := c.Call(ipc.MethodGetFileOutline, ipc.GetFileOutlineParams{Path: path, Focus: focus}, &items); err != nil {
-			return err
-		}
-	} else {
-		ix, err := openIndex(rc)
-		if err != nil {
-			return err
-		}
-		defer ix.Close()
-		r := query.NewReader(ix.DB())
-		items, err = r.GetFileOutline(ctx, path, focus)
-		if err != nil {
-			return err
-		}
+	items, err := callRead(ctx, rc, ipc.MethodGetFileOutline,
+		ipc.GetFileOutlineParams{Path: path, Focus: focus},
+		(*service.Service).GetFileOutline)
+	if err != nil {
+		return err
 	}
 	if len(items) == 0 {
 		fmt.Fprintln(os.Stderr, "no symbols (is the path indexed?)")
 		return nil
 	}
-	var printItem func(it query.FileOutlineItem, depth int)
-	printItem = func(it query.FileOutlineItem, depth int) {
+	var printItem func(it ipc.FileOutlineItem, depth int)
+	printItem = func(it ipc.FileOutlineItem, depth int) {
 		prefix := ""
 		for i := 0; i < depth; i++ {
 			prefix += "  "

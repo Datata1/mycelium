@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -15,8 +14,8 @@ import (
 	"github.com/datata1/mycelium/internal/hook"
 	"github.com/datata1/mycelium/internal/ipc"
 	"github.com/datata1/mycelium/internal/mcp"
-	"github.com/datata1/mycelium/internal/query"
 	"github.com/datata1/mycelium/internal/repo"
+	"github.com/datata1/mycelium/internal/service"
 	"github.com/datata1/mycelium/internal/wizard"
 )
 
@@ -75,28 +74,15 @@ func newReadCmd() *cobra.Command {
 		Short: "Read one indexed file with non-matching symbols collapsed (v2.4)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := context.Background()
 			rc, err := loadRepoCtx()
 			if err != nil {
 				return err
 			}
-			path := args[0]
-			var fr query.FocusedRead
-			if c, ok := daemonClient(rc); ok {
-				if err := c.Call(ipc.MethodReadFocused, ipc.ReadFocusedParams{Path: path, Focus: focus}, &fr); err != nil {
-					return err
-				}
-			} else {
-				ix, err := openIndex(rc)
-				if err != nil {
-					return err
-				}
-				defer ix.Close()
-				r := query.NewReader(ix.DB())
-				fr, err = r.ReadFocused(ctx, rc.Root, path, focus)
-				if err != nil {
-					return err
-				}
+			fr, err := callRead(cmd.Context(), rc, ipc.MethodReadFocused,
+				ipc.ReadFocusedParams{Path: args[0], Focus: focus},
+				(*service.Service).ReadFocused)
+			if err != nil {
+				return err
 			}
 			if showHdr {
 				fmt.Fprintf(os.Stderr,

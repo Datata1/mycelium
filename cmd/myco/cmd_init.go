@@ -15,8 +15,8 @@ import (
 	"github.com/datata1/mycelium/internal/config"
 	"github.com/datata1/mycelium/internal/doctor"
 	"github.com/datata1/mycelium/internal/hook"
-	"github.com/datata1/mycelium/internal/query"
 	"github.com/datata1/mycelium/internal/repo"
+	"github.com/datata1/mycelium/internal/service"
 	"github.com/datata1/mycelium/internal/wizard"
 )
 
@@ -241,7 +241,7 @@ func runWizard(yes, doctorAfter, gitExclude bool) error {
 		}
 		defer ix.Close()
 		ctx := context.Background()
-		r := query.NewReader(ix.DB())
+		r := service.NewReadOnly(ix, root, nil).Reader()
 		stateDir := repoCtx{Root: root, Cfg: config.Default()}.AbsStateDir()
 		rep, err := doctor.Run(ctx, r, doctor.ThresholdsFromConfig(config.Default()), root, stateDir)
 		if err != nil {

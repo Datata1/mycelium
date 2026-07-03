@@ -9,7 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/datata1/mycelium/internal/ipc"
-	"github.com/datata1/mycelium/internal/query"
+	"github.com/datata1/mycelium/internal/service"
 	"github.com/datata1/mycelium/internal/telemetry"
 )
 
@@ -27,23 +27,12 @@ func newStatsCmd() *cobra.Command {
 			if showTelemetry {
 				return runStatsTelemetry(rc)
 			}
-			ix, err := openIndex(rc)
+			s, err := callRead(ctx, rc, ipc.MethodStats, (any)(nil),
+				func(svc *service.Service, ctx context.Context, _ any) (ipc.Stats, error) {
+					return svc.Stats(ctx)
+				})
 			if err != nil {
 				return err
-			}
-			defer ix.Close()
-
-			var s query.Stats
-			if c, ok := daemonClient(rc); ok {
-				if err := c.Call(ipc.MethodStats, nil, &s); err != nil {
-					return err
-				}
-			} else {
-				r := query.NewReader(ix.DB())
-				s, err = r.Stats(ctx)
-				if err != nil {
-					return err
-				}
 			}
 			fmt.Printf("files=%d symbols=%d refs=%d resolved=%d self_loops=%d unresolved_ratio=%.1f%% last_scan=%s\n",
 				s.Files, s.Symbols, s.Refs, s.Resolved, s.SelfLoopCount, s.UnresolvedRatio()*100,
