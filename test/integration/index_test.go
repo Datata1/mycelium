@@ -250,9 +250,8 @@ func TestIntegration_IndexAndQuery(t *testing.T) {
 	})
 
 	t.Run("read_focused_no_focus_truncates_above_cap", func(t *testing.T) {
-		origCap := query.ReadFocusedPreviewLines
-		query.ReadFocusedPreviewLines = 10
-		defer func() { query.ReadFocusedPreviewLines = origCap }()
+		reader.SetReadPreviewLines(10)
+		defer reader.SetReadPreviewLines(query.DefaultReadPreviewLines)
 
 		fr, err := reader.ReadFocused(ctx, dst, "main.go", "")
 		if err != nil {

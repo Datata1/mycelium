@@ -20,6 +20,20 @@ const (
 	DirBoth Direction = "both"
 )
 
+// ParseDirection validates a wire-level direction string. Empty means
+// DirBoth; anything else outside out|in|both is an error so typos fail
+// loudly instead of silently traversing nothing.
+func ParseDirection(s string) (Direction, error) {
+	switch d := Direction(strings.ToLower(s)); d {
+	case "":
+		return DirBoth, nil
+	case DirOut, DirIn, DirBoth:
+		return d, nil
+	default:
+		return "", fmt.Errorf("invalid direction %q (out | in | both)", s)
+	}
+}
+
 // NeighborEdge is one edge in the returned graph.
 //
 // `SrcProject` (v3.1.2+) is the workspace project of the source-file

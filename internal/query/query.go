@@ -17,11 +17,25 @@ import (
 // queries against the index.
 type Reader struct {
 	db *sql.DB
+	// readPreviewLines caps the verbatim line count ReadFocused returns
+	// on the no-focus preview path. Tunable via SetReadPreviewLines so
+	// tests can shrink it without a multi-hundred-line fixture.
+	readPreviewLines int
 }
+
+// DefaultReadPreviewLines is the v4-calibrated no-focus preview cap: it
+// drops the no-focus byte count of a ~280-line file from heavier-than-Read
+// (14 KiB) to genuinely lighter (~5 KiB).
+const DefaultReadPreviewLines = 50
 
 // NewReader returns a Reader backed by an already-open database handle.
 // The caller retains ownership of db and is responsible for closing it.
-func NewReader(db *sql.DB) *Reader { return &Reader{db: db} }
+func NewReader(db *sql.DB) *Reader {
+	return &Reader{db: db, readPreviewLines: DefaultReadPreviewLines}
+}
+
+// SetReadPreviewLines overrides the no-focus preview cap of ReadFocused.
+func (r *Reader) SetReadPreviewLines(n int) { r.readPreviewLines = n }
 
 // SymbolHit is the canonical shape returned by symbol-producing queries.
 //

@@ -16,7 +16,7 @@ import (
 // assert on the returned slice rather than the raw fsnotify/watchman
 // stream, so every backend's behavior is compared through the same
 // shared wrapper (debounce + coalesce + filters).
-func runBackend(t *testing.T, backend string) []Event {
+func runBackend(t *testing.T, backend Backend) []Event {
 	t.Helper()
 	dir := t.TempDir()
 	// Seed a file so the initial registration has a real tree to crawl.

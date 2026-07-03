@@ -23,7 +23,7 @@ func TestMyceliumDefaultCorpus_Wellformed(t *testing.T) {
 		t.Fatal("corpus Cases empty")
 	}
 
-	knownMethods := map[string]bool{
+	knownMethods := map[ipc.Method]bool{
 		ipc.MethodFindSymbol:      true,
 		ipc.MethodGetReferences:   true,
 		ipc.MethodReadFocused:     true,

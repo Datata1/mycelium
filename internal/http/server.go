@@ -128,7 +128,7 @@ func (s *Server) handlePath(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, ipc.Response{OK: false, Error: "read body: " + err.Error()})
 		return
 	}
-	req := ipc.Request{Method: method, Params: buf.Bytes()}
+	req := ipc.Request{Method: ipc.Method(method), Params: buf.Bytes()}
 	if len(req.Params) == 0 {
 		req.Params = json.RawMessage("{}")
 	}

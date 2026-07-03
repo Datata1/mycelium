@@ -13,27 +13,31 @@ import "encoding/json"
 //   {"ok": true, "result": {...}}\n          -- on success
 //   {"ok": false, "error": "..."}\n          -- on failure
 
+// Method identifies one RPC exposed over the socket. Read-surface method
+// names are identical to the MCP tool names in pkg/mcpschema.
+type Method string
+
 // Methods exposed over the socket.
 const (
-	MethodFindSymbol      = "find_symbol"
-	MethodGetReferences   = "get_references"
-	MethodListFiles       = "list_files"
-	MethodGetFileOutline  = "get_file_outline"
-	MethodGetFileSummary  = "get_file_summary"
-	MethodGetNeighborhood = "get_neighborhood"
-	MethodSearchLexical   = "search_lexical"
-	MethodStats           = "stats"
-	MethodReindex         = "reindex"
-	MethodImpactAnalysis  = "impact_analysis"
-	MethodCriticalPath    = "critical_path"
-	MethodReadFocused     = "read_focused"
-	MethodFindDocumentKey = "find_document_key"
-	MethodPing            = "ping"
+	MethodFindSymbol      Method = "find_symbol"
+	MethodGetReferences   Method = "get_references"
+	MethodListFiles       Method = "list_files"
+	MethodGetFileOutline  Method = "get_file_outline"
+	MethodGetFileSummary  Method = "get_file_summary"
+	MethodGetNeighborhood Method = "get_neighborhood"
+	MethodSearchLexical   Method = "search_lexical"
+	MethodStats           Method = "stats"
+	MethodReindex         Method = "reindex"
+	MethodImpactAnalysis  Method = "impact_analysis"
+	MethodCriticalPath    Method = "critical_path"
+	MethodReadFocused     Method = "read_focused"
+	MethodFindDocumentKey Method = "find_document_key"
+	MethodPing            Method = "ping"
 )
 
 // Request is the wire shape for a client call.
 type Request struct {
-	Method string          `json:"method"`
+	Method Method          `json:"method"`
 	Params json.RawMessage `json:"params,omitempty"`
 }
 

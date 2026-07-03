@@ -28,7 +28,7 @@ func testDaemon(t *testing.T) *Daemon {
 // callPipe drives handleConn over an in-memory pipe: one request in, one
 // response out — the wire protocol without a real socket (which sandboxed
 // environments may forbid binding).
-func callPipe(t *testing.T, d *Daemon, method string, params any) ipc.Response {
+func callPipe(t *testing.T, d *Daemon, method ipc.Method, params any) ipc.Response {
 	t.Helper()
 	client, server := net.Pipe()
 	done := make(chan struct{})
@@ -69,7 +69,7 @@ func TestDispatchErrorCodes(t *testing.T) {
 
 	cases := []struct {
 		name     string
-		method   string
+		method   ipc.Method
 		params   any
 		wantCode string
 	}{

@@ -36,7 +36,7 @@ import (
 // FallbackFile is sized via os.Stat (mirrors `wc -c`).
 type Case struct {
 	Tool         string
-	Method       string
+	Method       ipc.Method
 	Params       any
 	FallbackCmd  string
 	FallbackFile string

@@ -155,7 +155,7 @@ func (d *Daemon) dispatch(ctx context.Context, req ipc.Request) (any, error) {
 		}
 		_ = d.Telemetry.Record(telemetry.Record{
 			Timestamp:   start,
-			Tool:        req.Method,
+			Tool:        string(req.Method),
 			InputBytes:  len(req.Params),
 			OutputBytes: outBytes,
 			DurationMS:  time.Since(start).Milliseconds(),
@@ -239,9 +239,9 @@ func (d *Daemon) dispatchInner(ctx context.Context, req ipc.Request) (any, error
 		if err := unmarshal(req.Params, &p); err != nil {
 			return nil, err
 		}
-		dir := query.Direction(p.Direction)
-		if dir == "" {
-			dir = query.DirBoth
+		dir, err := query.ParseDirection(p.Direction)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ipc.ErrBadParams, err)
 		}
 		return d.Reader.GetNeighborhood(ctx, p.Target, p.Project, p.Depth, dir, p.Focus)
 

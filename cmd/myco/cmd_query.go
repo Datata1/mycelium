@@ -455,7 +455,11 @@ func runQueryNeighborhood(ctx context.Context, target, project string, depth int
 		}
 		defer ix.Close()
 		r := query.NewReader(ix.DB())
-		nb, err = r.GetNeighborhood(ctx, target, project, depth, query.Direction(direction), focus)
+		dir, err := query.ParseDirection(direction)
+		if err != nil {
+			return err
+		}
+		nb, err = r.GetNeighborhood(ctx, target, project, depth, dir, focus)
 		if err != nil {
 			return err
 		}

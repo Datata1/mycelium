@@ -33,15 +33,6 @@ type FocusedRead struct {
 	Expanded []FocusedSymbol `json:"expanded,omitempty"`
 }
 
-// ReadFocusedPreviewLines caps the verbatim line count returned in the
-// no-focus preview path. Lifted to a package var (not a const) so the
-// integration test can shrink it without needing a multi-hundred-line
-// fixture file. v4 default is 50 — the bench against
-// internal/telemetry/aggregate.go (12 KiB, ~280 lines) shows this drops
-// the no-focus byte count from 14 KiB (heavier than Read) to ~5 KiB
-// (genuinely lighter), closing the v3.4 A3 G2 net-negative case.
-var ReadFocusedPreviewLines = 50
-
 // FocusedReadStats summarises the collapse outcome.
 type FocusedReadStats struct {
 	TotalSymbols    int `json:"total_symbols"`
@@ -352,8 +343,8 @@ func oneLineSignature(signature, qualified, kind string) string {
 	return sig
 }
 
-// previewRead builds the no-focus preview: outline (Expanded) + first
-// ReadFocusedPreviewLines lines verbatim + a Hint pointing at focus= and
+// previewRead builds the no-focus preview: outline (Expanded) + the first
+// readPreviewLines lines verbatim + a Hint pointing at focus= and
 // get_file_outline. When the file is shorter than the cap, Content is
 // the full file and Hint is empty (no point claiming "preview" when
 // nothing was elided). Either way Expanded is populated so the agent
@@ -370,7 +361,7 @@ func (r *Reader) previewRead(out FocusedRead, raw []byte, syms []flatSymbol) Foc
 	out.Stats.ExpandedSymbols = len(syms)
 
 	lines := splitLinesPreserve(string(raw))
-	cut := ReadFocusedPreviewLines
+	cut := r.readPreviewLines
 	if cut <= 0 || len(lines) <= cut {
 		out.Content = string(raw)
 		out.Stats.ReturnedBytes = len(out.Content)

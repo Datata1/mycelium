@@ -18,10 +18,10 @@ import (
 // land on fsnotify).
 func New(opts Options) (Watcher, error) {
 	switch opts.Backend {
-	case "", "fsnotify":
+	case "", BackendFsnotify:
 		fmt.Fprintln(os.Stderr, "[watch] backend=fsnotify")
 		return newFSNotifyWatcher(opts)
-	case "watchman":
+	case BackendWatchman:
 		w, err := newWatchmanWatcher(opts)
 		if err != nil {
 			fmt.Fprintf(os.Stderr,

@@ -126,7 +126,7 @@ func (s *Server) handleToolCall(ctx context.Context, enc *json.Encoder, req json
 
 // mapToolToIPC translates an MCP tool call into the matching daemon RPC.
 // The param shapes are identical by design, so this is mostly a name map.
-func mapToolToIPC(tool string, rawArgs json.RawMessage) (string, any, error) {
+func mapToolToIPC(tool string, rawArgs json.RawMessage) (ipc.Method, any, error) {
 	switch tool {
 	case "find_symbol":
 		var p ipc.FindSymbolParams

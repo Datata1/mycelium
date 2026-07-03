@@ -108,9 +108,9 @@ func runDaemon(ctx context.Context, backendOverride string) error {
 			"scanned", rep.FilesScanned, "changed", rep.FilesChanged, "duration", rep.Duration)
 	}
 
-	backend := rc.Cfg.Watcher.Backend
+	backend := watch.Backend(rc.Cfg.Watcher.Backend)
 	if backendOverride != "" {
-		backend = backendOverride
+		backend = watch.Backend(backendOverride)
 	}
 	wat, err := watch.New(watch.Options{
 		Root:          rc.Root,

@@ -22,7 +22,7 @@ func NewClient(socket string) *Client {
 
 // Call sends the request and decodes the result into out (which may be nil
 // if the caller does not need the payload).
-func (c *Client) Call(method string, params, out any) error {
+func (c *Client) Call(method Method, params, out any) error {
 	conn, err := net.DialTimeout("unix", c.Socket, c.Timeout)
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", c.Socket, err)

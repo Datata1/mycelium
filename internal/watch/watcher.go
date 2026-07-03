@@ -30,6 +30,14 @@ type Watcher interface {
 	Close() error
 }
 
+// Backend selects the filesystem-event source.
+type Backend string
+
+const (
+	BackendFsnotify Backend = "fsnotify" // default; pure Go, zero-install
+	BackendWatchman Backend = "watchman" // opt-in; needs a running watchman
+)
+
 // Options carries the knobs every backend accepts. Moved from New()'s
 // positional-arg list in v1.7 so adding another knob (like `Backend`)
 // doesn't keep shifting positional call-sites around.
@@ -40,7 +48,7 @@ type Options struct {
 	MaxFileSizeKB int      // drop events on files larger than this (0 = no limit)
 	DebounceMS    int      // per-file quiet window before the event is emitted
 	CoalesceMS    int      // cross-file batch window after debounce (0 = no batching)
-	Backend       string   // "fsnotify" (default) | "watchman"
+	Backend       Backend  // BackendFsnotify (default) | BackendWatchman
 }
 
 // rawSource is the minimal internal surface each backend implements.
