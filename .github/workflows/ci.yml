@@ -20,7 +20,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version-file: go.mod
           cache: true
 
       - name: go vet
@@ -37,3 +37,21 @@ jobs:
         env:
           CGO_ENABLED: "1"
         run: go test -tags sqlite_fts5 -race -count=1 ./...
+
+  # Lint runs on Linux only; the build tags are set in .golangci.yml, and
+  # cgo packages still need a C toolchain for type checking.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: golangci/golangci-lint-action@v8
+        env:
+          CGO_ENABLED: "1"
+        with:
+          version: latest

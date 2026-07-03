@@ -1,0 +1,61 @@
+version: "2"
+
+run:
+  build-tags:
+    - sqlite_fts5
+
+linters:
+  default: none
+  enable:
+    # correctness
+    - govet
+    - staticcheck
+    - errcheck
+    - errorlint
+    - sqlclosecheck
+    - noctx
+    - copyloopvar
+    # hygiene
+    - unused
+    - ineffassign
+    - unconvert
+    - unparam
+    - misspell
+    - nolintlint
+    - thelper
+    # style (kept minimal; no gofumpt to avoid a repo-wide reformat)
+    - revive
+  settings:
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: error-return
+        - name: error-strings
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+    errcheck:
+      exclude-functions:
+        - (net.Conn).Close
+        - (*database/sql.DB).Close
+        - (*database/sql.Rows).Close
+        - (net.Listener).Close
+        - os.Remove
+  exclusions:
+    rules:
+      # CLI user-facing output; fmt.Print* return values are never useful
+      - path: cmd/
+        linters: [errcheck]
+        text: "fmt\\.(Print|Println|Printf|Fprintf|Fprintln)"
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

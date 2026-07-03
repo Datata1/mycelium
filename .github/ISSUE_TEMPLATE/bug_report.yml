@@ -1,0 +1,41 @@
+name: Bug report
+description: Something doesn't work as documented
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead?
+      placeholder: |
+        1. myco init
+        2. myco query find Foo
+        3. expected ..., got ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: myco version
+      description: Output of `myco --version`
+      placeholder: v5.0.1
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS / architecture
+      placeholder: macOS 15.5 arm64
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: myco doctor output
+      description: Run `myco doctor` in the affected repo and paste the output.
+      render: text
+  - type: textarea
+    id: config
+    attributes:
+      label: .mycelium.yml (if relevant)
+      render: yaml

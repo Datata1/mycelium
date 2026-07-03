@@ -30,11 +30,11 @@ See [CHANGELOG.md](./CHANGELOG.md) for version history and [docs/limitations.md]
 
 ```bash
 # Linux amd64
-curl -sSL https://github.com/jdwiederstein/mycelium/releases/latest/download/myco-linux-amd64.tar.gz \
+curl -sSL https://github.com/datata1/mycelium/releases/latest/download/myco-linux-amd64.tar.gz \
   | tar -xz -C /opt && sudo ln -sf /opt/myco-linux-amd64/myco /usr/local/bin/myco
 
 # macOS arm64 (Apple Silicon)
-curl -sSL https://github.com/jdwiederstein/mycelium/releases/latest/download/myco-darwin-arm64.tar.gz \
+curl -sSL https://github.com/datata1/mycelium/releases/latest/download/myco-darwin-arm64.tar.gz \
   | tar -xz -C /opt && sudo ln -sf /opt/myco-darwin-arm64/myco /usr/local/bin/myco
 ```
 
@@ -45,7 +45,7 @@ Supported platforms: `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64
 Requires Go 1.25+ and a C toolchain (tree-sitter uses cgo).
 
 ```bash
-git clone https://github.com/jdwiederstein/mycelium
+git clone https://github.com/datata1/mycelium
 cd mycelium
 task build       # → ~/.local/bin/myco
 task install     # → overwrites whichever myco is on PATH
@@ -223,4 +223,4 @@ myco query grep <regex> [--path P] [--k N] [--project P] [--since REF]
 
 ## License
 
-TBD. The repository is currently unlicensed; a license will be chosen before the first tagged release.
+Apache License 2.0 — see [LICENSE](./LICENSE).

@@ -4,6 +4,29 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project adheres
 to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### OSS hygiene (refactoring workstream 01, see `plans/refac/`)
+
+#### Added
+
+- **Apache-2.0 LICENSE** (+ NOTICE). The repo was previously unlicensed.
+- CONTRIBUTING.md (build prerequisites, architecture invariants, test
+  expectations), CODE_OF_CONDUCT.md (Contributor Covenant 2.1), SECURITY.md,
+  GitHub issue templates and PR template.
+- `.golangci.yml` (golangci-lint v2 config with `build-tags: [sqlite_fts5]`)
+  and a `lint` job in CI. `.editorconfig`.
+
+#### Fixed
+
+- **Module path corrected** from `github.com/jdwiederstein/mycelium` to
+  `github.com/datata1/mycelium` — go.mod, all Go imports, and README now
+  match the actual repository location.
+- CI and release workflows now take the Go version from `go.mod`
+  (`go-version-file`) instead of a stale hardcoded `1.22` that conflicted
+  with the `go 1.25.0` directive.
+- `gofmt` applied repo-wide (28 files were not gofmt-clean).
+
 ## [v4.0.0] — 2026-05-18
 
 ### v4.0 — Adoption fixed-point + bug triage

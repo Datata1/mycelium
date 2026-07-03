@@ -1,0 +1,26 @@
+name: Feature request
+description: Suggest an improvement or new capability
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please skim [docs/limitations.md](https://github.com/Datata1/mycelium/blob/main/docs/limitations.md)
+        first — it lists known gaps and explicit non-goals (hosted service,
+        Docker, pre-commit hooks, LLM calls during indexing, ...).
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do that mycelium doesn't support today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How would you like it to work? CLI flag, MCP tool, config key?
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
