@@ -60,6 +60,14 @@ to [Semantic Versioning](https://semver.org/).
   golden diffs like code.
 - Daemon dispatch error-code tests (pipe-based plus a real-socket round
   trip, added in workstream 02).
+- **Query reader unit tests** over a temp SQLite index (workstream 07-B):
+  FindSymbol ranking/kind-filter/miss-hints, GetReferences, Stats, and the
+  ReadFocused preview cap. The FindSymbol hint wording and preview cut are
+  now pure, table-tested functions (`buildFindHints`, `cutPreview`).
+- **Dual-path equivalence suite** (workstream 04): every query returns
+  identical JSON whether served over the daemon (in-memory pipe through the
+  real dispatch chain) or via the direct Service fallback the CLI uses when
+  the daemon is down.
 
 ### Error/logging foundations (refactoring workstream 02)
 

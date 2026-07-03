@@ -8,20 +8,29 @@ Sizes: **S** < 1 day, **M** 1–3 days, **L** 3–5+ days.
 
 ## Status (2026-07-03)
 
-Implemented: 01, 02, 06, 07-A, 03 (DTO move + render decoupling), 04, 05.
-Open follow-ups:
+Implemented: 01, 02, 03, 04, 05, 06, 07-A, 07-B, plus the WS04 dual-path
+equivalence suite.
 
-- **03**: the query-internal store extraction (SQL into an unexported
-  `store`, pure ranking/hint/preview functions) — the DTO move landed;
-  the god-file split is trailing work, unblocked and incremental.
-- **04**: the dual-path equivalence suite (every query subcommand with
-  daemon up vs. down) needs unix-socket binding, which the local sandbox
-  forbids — implement alongside 07-C with the skip-on-EPERM pattern used
-  in `internal/daemon/daemon_test.go`.
-- **07 B/C**: query store tests (after the 03 extraction), httptest for
-  the HTTP transport.
-- **01**: first CI lint run may surface findings golangci-lint could not
-  be executed locally (sandbox network); fix-forward.
+- **03**: DTO move + render decoupling landed. Pure logic (`buildFindHints`,
+  `cutPreview`) extracted and unit-tested. A full mechanical relocation of
+  every SQL string into a dedicated `store` type was **not** done — the
+  value it served (a testable reader) is delivered directly by the
+  DB-backed Reader tests, and churning all 55 SQL sites carried
+  regression risk without matching payoff. The package-level "query is the
+  only reader" invariant is unchanged.
+- **04**: dual-path equivalence suite landed as
+  `internal/daemon/equivalence_test.go` — daemon-up (over an in-memory
+  pipe through `handleConn`) vs. daemon-down (direct Service call),
+  asserting identical JSON. Runs everywhere (no socket bind needed).
+- **07-B**: `internal/query` Reader tests over a temp SQLite index
+  (FindSymbol, GetReferences, Stats, ReadFocused) landed.
+
+Remaining optional work:
+
+- **07-C**: `httptest` coverage for `internal/http` (the daemon dispatch
+  and CLI dual path are now covered; the HTTP wrapper is thin).
+- **01**: the first CI lint run may surface findings golangci-lint could
+  not be executed locally (sandbox network); fix-forward.
 
 ## Dependency graph
 
