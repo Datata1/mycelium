@@ -21,7 +21,7 @@ import (
 // visited call with its own ResolverVersion so SQL-level fallbacks know to
 // skip them.
 type Resolver interface {
-	ResolveFile(absPath string, pr *parser.ParseResult) (resolved, total int)
+	ResolveFile(ctx context.Context, absPath string, pr *parser.ParseResult) (resolved, total int)
 	Ready() bool
 }
 
@@ -401,7 +401,7 @@ func (p *Pipeline) writeParsed(ctx context.Context, f repo.File, prs parser.Pars
 	// ResolverVersion before refs hit the DB. No-op when no resolver is
 	// registered for this language or when the resolver isn't ready.
 	if res := p.resolverFor(prs.Language()); res != nil && res.Ready() {
-		res.ResolveFile(f.AbsPath, &result)
+		res.ResolveFile(ctx, f.AbsPath, &result)
 		// v2.1: resolvers that implement InheritanceEmitter additionally
 		// emit RefInherit edges (concrete -> interface) so the query
 		// layer can fan out through interfaces (Chinthareddy 2026 §6.4).

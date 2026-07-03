@@ -28,7 +28,7 @@ func newQueryCmd() *cobra.Command {
 			project, _ := cmd.Flags().GetString("project")
 			since, _ := cmd.Flags().GetString("since")
 			focus, _ := cmd.Flags().GetString("focus")
-			return runQueryFind(args[0], kind, project, since, focus, limit)
+			return runQueryFind(cmd.Context(), args[0], kind, project, since, focus, limit)
 		},
 	}
 	findCmd.Flags().String("kind", "", "filter by kind: function | method | type | interface | var | const")
@@ -45,7 +45,7 @@ func newQueryCmd() *cobra.Command {
 			limit, _ := cmd.Flags().GetInt("limit")
 			project, _ := cmd.Flags().GetString("project")
 			since, _ := cmd.Flags().GetString("since")
-			return runQueryRefs(args[0], project, since, limit)
+			return runQueryRefs(cmd.Context(), args[0], project, since, limit)
 		},
 	}
 	refsCmd.Flags().Int("limit", 100, "max results")
@@ -65,7 +65,7 @@ func newQueryCmd() *cobra.Command {
 			if len(args) == 1 {
 				name = args[0]
 			}
-			return runQueryFiles(name, lang, project, since, limit)
+			return runQueryFiles(cmd.Context(), name, lang, project, since, limit)
 		},
 	}
 	filesCmd.Flags().String("language", "", "filter by language (go, typescript, python)")
@@ -79,7 +79,7 @@ func newQueryCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			focus, _ := cmd.Flags().GetString("focus")
-			return runQueryOutline(args[0], focus)
+			return runQueryOutline(cmd.Context(), args[0], focus)
 		},
 	}
 	outlineCmd.Flags().String("focus", "", "v2.4 lexical focus filter — keep top-level items whose subtree matches")
@@ -93,7 +93,7 @@ func newQueryCmd() *cobra.Command {
 			path, _ := cmd.Flags().GetString("path")
 			project, _ := cmd.Flags().GetString("project")
 			since, _ := cmd.Flags().GetString("since")
-			return runQueryLexical(args[0], path, project, since, k)
+			return runQueryLexical(cmd.Context(), args[0], path, project, since, k)
 		},
 	}
 	grepCmd.Flags().Int("k", 50, "max results")
@@ -106,7 +106,7 @@ func newQueryCmd() *cobra.Command {
 		Short: "Structural summary of a single file",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runQuerySummary(args[0])
+			return runQuerySummary(cmd.Context(), args[0])
 		},
 	}
 
@@ -119,7 +119,7 @@ func newQueryCmd() *cobra.Command {
 			dir, _ := cmd.Flags().GetString("direction")
 			project, _ := cmd.Flags().GetString("project")
 			focus, _ := cmd.Flags().GetString("focus")
-			return runQueryNeighborhood(args[0], project, depth, dir, focus)
+			return runQueryNeighborhood(cmd.Context(), args[0], project, depth, dir, focus)
 		},
 	}
 	neighborCmd.Flags().Int("depth", 2, "traversal depth (max 5)")
@@ -136,7 +136,7 @@ func newQueryCmd() *cobra.Command {
 			depth, _ := cmd.Flags().GetInt("depth")
 			project, _ := cmd.Flags().GetString("project")
 			since, _ := cmd.Flags().GetString("since")
-			return runQueryImpact(args[0], kind, project, since, depth)
+			return runQueryImpact(cmd.Context(), args[0], kind, project, since, depth)
 		},
 	}
 	impactCmd.Flags().String("kind", "", "filter callers by kind (e.g. 'method', 'function')")
@@ -152,7 +152,7 @@ func newQueryCmd() *cobra.Command {
 			depth, _ := cmd.Flags().GetInt("depth")
 			k, _ := cmd.Flags().GetInt("k")
 			project, _ := cmd.Flags().GetString("project")
-			return runQueryCriticalPath(args[0], args[1], project, depth, k)
+			return runQueryCriticalPath(cmd.Context(), args[0], args[1], project, depth, k)
 		},
 	}
 	pathCmd.Flags().Int("depth", 8, "max path length (max 8)")
@@ -208,7 +208,7 @@ func newTopLevelFindCmd() *cobra.Command {
 			project, _ := cmd.Flags().GetString("project")
 			since, _ := cmd.Flags().GetString("since")
 			focus, _ := cmd.Flags().GetString("focus")
-			return runQueryFind(args[0], kind, project, since, focus, limit)
+			return runQueryFind(cmd.Context(), args[0], kind, project, since, focus, limit)
 		},
 	}
 	cmd.Flags().String("kind", "", "filter by kind: function | method | type | interface | var | const")
@@ -232,7 +232,7 @@ func newTopLevelSearchCmd() *cobra.Command {
 			path, _ := cmd.Flags().GetString("path")
 			project, _ := cmd.Flags().GetString("project")
 			since, _ := cmd.Flags().GetString("since")
-			return runQueryLexical(args[0], path, project, since, k)
+			return runQueryLexical(cmd.Context(), args[0], path, project, since, k)
 		},
 	}
 	cmd.Flags().Int("k", 50, "max results")
@@ -242,8 +242,7 @@ func newTopLevelSearchCmd() *cobra.Command {
 	return cmd
 }
 
-func runQueryFind(name, kind, project, since, focus string, limit int) error {
-	ctx := context.Background()
+func runQueryFind(ctx context.Context, name, kind, project, since, focus string, limit int) error {
 	rc, err := loadRepoCtx()
 	if err != nil {
 		return err
@@ -286,8 +285,7 @@ func runQueryFind(name, kind, project, since, focus string, limit int) error {
 	return nil
 }
 
-func runQueryRefs(target, project, since string, limit int) error {
-	ctx := context.Background()
+func runQueryRefs(ctx context.Context, target, project, since string, limit int) error {
 	rc, err := loadRepoCtx()
 	if err != nil {
 		return err
@@ -331,8 +329,7 @@ func runQueryRefs(target, project, since string, limit int) error {
 	return nil
 }
 
-func runQueryFiles(nameContains, language, project, since string, limit int) error {
-	ctx := context.Background()
+func runQueryFiles(ctx context.Context, nameContains, language, project, since string, limit int) error {
 	rc, err := loadRepoCtx()
 	if err != nil {
 		return err
@@ -364,8 +361,7 @@ func runQueryFiles(nameContains, language, project, since string, limit int) err
 	return nil
 }
 
-func runQueryLexical(pattern, pathContains, project, since string, k int) error {
-	ctx := context.Background()
+func runQueryLexical(ctx context.Context, pattern, pathContains, project, since string, k int) error {
 	rc, err := loadRepoCtx()
 	if err != nil {
 		return err
@@ -397,8 +393,7 @@ func runQueryLexical(pattern, pathContains, project, since string, k int) error 
 	return nil
 }
 
-func runQuerySummary(path string) error {
-	ctx := context.Background()
+func runQuerySummary(ctx context.Context, path string) error {
 	rc, err := loadRepoCtx()
 	if err != nil {
 		return err
@@ -443,8 +438,7 @@ func runQuerySummary(path string) error {
 	return nil
 }
 
-func runQueryNeighborhood(target, project string, depth int, direction, focus string) error {
-	ctx := context.Background()
+func runQueryNeighborhood(ctx context.Context, target, project string, depth int, direction, focus string) error {
 	rc, err := loadRepoCtx()
 	if err != nil {
 		return err
@@ -480,8 +474,7 @@ func runQueryNeighborhood(target, project string, depth int, direction, focus st
 	return nil
 }
 
-func runQueryImpact(target, kind, project, since string, depth int) error {
-	ctx := context.Background()
+func runQueryImpact(ctx context.Context, target, kind, project, since string, depth int) error {
 	rc, err := loadRepoCtx()
 	if err != nil {
 		return err
@@ -521,8 +514,7 @@ func runQueryImpact(target, kind, project, since string, depth int) error {
 	return nil
 }
 
-func runQueryCriticalPath(from, to, project string, depth, k int) error {
-	ctx := context.Background()
+func runQueryCriticalPath(ctx context.Context, from, to, project string, depth, k int) error {
 	rc, err := loadRepoCtx()
 	if err != nil {
 		return err
@@ -573,8 +565,7 @@ func plural(n int) string {
 	return "s"
 }
 
-func runQueryOutline(path, focus string) error {
-	ctx := context.Background()
+func runQueryOutline(ctx context.Context, path, focus string) error {
 	rc, err := loadRepoCtx()
 	if err != nil {
 		return err

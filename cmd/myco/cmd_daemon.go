@@ -30,7 +30,7 @@ func newDaemonCmd() *cobra.Command {
 		Use:   "daemon",
 		Short: "Run the long-lived indexer + query server for this repo",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
 			return runDaemon(ctx, backendOverride)
 		},

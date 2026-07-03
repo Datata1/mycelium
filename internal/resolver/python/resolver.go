@@ -34,7 +34,7 @@ func (r *Resolver) init() { r.lang = python.GetLanguage() }
 
 // ResolveFile walks the file a second time, builds scope + import tables,
 // and rewrites call DstNames where it can.
-func (r *Resolver) ResolveFile(absPath string, pr *parser.ParseResult) (resolved, total int) {
+func (r *Resolver) ResolveFile(ctx context.Context, absPath string, pr *parser.ParseResult) (resolved, total int) {
 	r.once.Do(r.init)
 
 	// Re-parse to get a tree-sitter AST we can walk. The parser did this
@@ -48,7 +48,7 @@ func (r *Resolver) ResolveFile(absPath string, pr *parser.ParseResult) (resolved
 	if err != nil {
 		return 0, 0
 	}
-	tree, err := p.ParseCtx(context.Background(), nil, content)
+	tree, err := p.ParseCtx(ctx, nil, content)
 	if err != nil {
 		return 0, 0
 	}

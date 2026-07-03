@@ -36,7 +36,7 @@ func (r *Resolver) init() {
 
 // ResolveFile does an independent tree-sitter parse so it stays decoupled
 // from the parser package. Cost: ~1ms/file for tree-sitter on average TS.
-func (r *Resolver) ResolveFile(absPath string, pr *parser.ParseResult) (resolved, total int) {
+func (r *Resolver) ResolveFile(ctx context.Context, absPath string, pr *parser.ParseResult) (resolved, total int) {
 	r.once.Do(r.init)
 
 	p := sitter.NewParser()
@@ -50,7 +50,7 @@ func (r *Resolver) ResolveFile(absPath string, pr *parser.ParseResult) (resolved
 	if err != nil {
 		return 0, 0
 	}
-	tree, err := p.ParseCtx(context.Background(), nil, content)
+	tree, err := p.ParseCtx(ctx, nil, content)
 	if err != nil {
 		return 0, 0
 	}

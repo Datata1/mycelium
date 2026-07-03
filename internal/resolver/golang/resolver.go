@@ -1,6 +1,7 @@
 package golang
 
 import (
+	"context"
 	"fmt"
 	"go/ast"
 	"go/token"
@@ -375,7 +376,7 @@ func (r *Resolver) FileCount() int {
 //
 // Safe to call from multiple goroutines as long as each goroutine passes a
 // different ParseResult.
-func (r *Resolver) ResolveFile(absPath string, pr *parser.ParseResult) (resolved, total int) {
+func (r *Resolver) ResolveFile(ctx context.Context, absPath string, pr *parser.ParseResult) (resolved, total int) {
 	r.mu.RLock()
 	ready := r.ready
 	pkg := r.fileToPkg[absPath]

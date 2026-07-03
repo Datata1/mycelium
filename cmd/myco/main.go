@@ -4,11 +4,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -84,7 +87,12 @@ func main() {
 		newTopLevelSearchCmd(),
 	)
 
-	if err := root.Execute(); err != nil {
+	// One signal-rooted context for every command; subcommands reach it
+	// via cmd.Context() so Ctrl-C cancels in-flight work.
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	if err := root.ExecuteContext(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}

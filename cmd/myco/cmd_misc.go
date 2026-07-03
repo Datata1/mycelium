@@ -29,7 +29,7 @@ func newHookCmd() *cobra.Command {
 		Use:   "post-commit",
 		Short: "Reconcile the index after a commit (invoked by .git/hooks/post-commit)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
 			rc, err := loadRepoCtx()
 			if err != nil {
@@ -46,7 +46,7 @@ func newMCPCmd() *cobra.Command {
 		Use:   "mcp",
 		Short: "Serve the MCP protocol over stdio (spawned by Claude Code, Cursor, etc.)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
 			rc, err := loadRepoCtx()
 			if err != nil {
