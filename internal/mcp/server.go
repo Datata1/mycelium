@@ -8,7 +8,7 @@ import (
 	"io"
 
 	"github.com/datata1/mycelium/internal/ipc"
-	"github.com/datata1/mycelium/internal/mcp/render"
+	"github.com/datata1/mycelium/internal/registry"
 	"github.com/datata1/mycelium/pkg/mcpschema"
 )
 
@@ -99,13 +99,16 @@ func (s *Server) handleToolCall(ctx context.Context, enc *json.Encoder, req json
 		writeError(enc, req.ID, -32602, fmt.Sprintf("invalid params: %v", err))
 		return
 	}
-	method, ipcParams, err := mapToolToIPC(params.Name, params.Arguments)
-	if err != nil {
-		writeError(enc, req.ID, -32602, err.Error())
+	// The registry gates which methods are callable as tools (never ping
+	// or reindex); the daemon-side unmarshal is the real param validation,
+	// so arguments pass through raw.
+	method := ipc.Method(params.Name)
+	if _, ok := registry.Lookup(method); !ok {
+		writeError(enc, req.ID, -32602, fmt.Sprintf("unknown tool: %s", params.Name))
 		return
 	}
 	var result json.RawMessage
-	if err := s.Client.Call(method, ipcParams, &result); err != nil {
+	if err := s.Client.Call(method, params.Arguments, &result); err != nil {
 		// MCP convention: tool errors are returned as a successful response
 		// with isError=true, so the model can reason about the failure.
 		writeResult(enc, req.ID, map[string]any{
@@ -118,94 +121,10 @@ func (s *Server) handleToolCall(ctx context.Context, enc *json.Encoder, req json
 	}
 	writeResult(enc, req.ID, map[string]any{
 		"content": []map[string]any{
-			{"type": "text", "text": render.Render(params.Name, result)},
+			{"type": "text", "text": registry.Render(method, result)},
 		},
 	})
 	_ = ctx
-}
-
-// mapToolToIPC translates an MCP tool call into the matching daemon RPC.
-// The param shapes are identical by design, so this is mostly a name map.
-func mapToolToIPC(tool string, rawArgs json.RawMessage) (ipc.Method, any, error) {
-	switch tool {
-	case "find_symbol":
-		var p ipc.FindSymbolParams
-		if err := unmarshalArgs(rawArgs, &p); err != nil {
-			return "", nil, err
-		}
-		return ipc.MethodFindSymbol, p, nil
-	case "get_references":
-		var p ipc.GetReferencesParams
-		if err := unmarshalArgs(rawArgs, &p); err != nil {
-			return "", nil, err
-		}
-		return ipc.MethodGetReferences, p, nil
-	case "list_files":
-		var p ipc.ListFilesParams
-		if err := unmarshalArgs(rawArgs, &p); err != nil {
-			return "", nil, err
-		}
-		return ipc.MethodListFiles, p, nil
-	case "get_file_outline":
-		var p ipc.GetFileOutlineParams
-		if err := unmarshalArgs(rawArgs, &p); err != nil {
-			return "", nil, err
-		}
-		return ipc.MethodGetFileOutline, p, nil
-	case "stats":
-		return ipc.MethodStats, nil, nil
-	case "search_lexical":
-		var p ipc.SearchLexicalParams
-		if err := unmarshalArgs(rawArgs, &p); err != nil {
-			return "", nil, err
-		}
-		return ipc.MethodSearchLexical, p, nil
-	case "get_file_summary":
-		var p ipc.GetFileSummaryParams
-		if err := unmarshalArgs(rawArgs, &p); err != nil {
-			return "", nil, err
-		}
-		return ipc.MethodGetFileSummary, p, nil
-	case "get_neighborhood":
-		var p ipc.GetNeighborhoodParams
-		if err := unmarshalArgs(rawArgs, &p); err != nil {
-			return "", nil, err
-		}
-		return ipc.MethodGetNeighborhood, p, nil
-	case "impact_analysis":
-		var p ipc.ImpactAnalysisParams
-		if err := unmarshalArgs(rawArgs, &p); err != nil {
-			return "", nil, err
-		}
-		return ipc.MethodImpactAnalysis, p, nil
-	case "critical_path":
-		var p ipc.CriticalPathParams
-		if err := unmarshalArgs(rawArgs, &p); err != nil {
-			return "", nil, err
-		}
-		return ipc.MethodCriticalPath, p, nil
-	case "read_focused":
-		var p ipc.ReadFocusedParams
-		if err := unmarshalArgs(rawArgs, &p); err != nil {
-			return "", nil, err
-		}
-		return ipc.MethodReadFocused, p, nil
-	case "find_document_key":
-		var p ipc.FindDocumentKeyParams
-		if err := unmarshalArgs(rawArgs, &p); err != nil {
-			return "", nil, err
-		}
-		return ipc.MethodFindDocumentKey, p, nil
-	default:
-		return "", nil, fmt.Errorf("unknown tool: %s", tool)
-	}
-}
-
-func unmarshalArgs(raw json.RawMessage, out any) error {
-	if len(raw) == 0 {
-		return nil
-	}
-	return json.Unmarshal(raw, out)
 }
 
 // --- JSON-RPC 2.0 envelope --------------------------------------------------

@@ -14,6 +14,7 @@ import (
 
 	"github.com/datata1/mycelium/internal/ipc"
 	"github.com/datata1/mycelium/internal/pipeline"
+	"github.com/datata1/mycelium/internal/registry"
 	"github.com/datata1/mycelium/internal/service"
 	"github.com/datata1/mycelium/internal/telemetry"
 	"github.com/datata1/mycelium/internal/watch"
@@ -168,104 +169,16 @@ func (d *Daemon) dispatchInner(ctx context.Context, req ipc.Request) (any, error
 	case ipc.MethodPing:
 		return map[string]string{"status": "ok"}, nil
 
-	// Reindex is the one write-path method; it stays explicit here so
-	// the Service can remain read-only by construction.
+	// Reindex is the one write-path method; it stays outside the read
+	// registry so the Service can remain read-only by construction.
 	case ipc.MethodReindex:
 		return d.Pipeline.RunOnce(ctx)
-
-	case ipc.MethodFindSymbol:
-		var p ipc.FindSymbolParams
-		if err := unmarshal(req.Params, &p); err != nil {
-			return nil, err
-		}
-		return d.Service.FindSymbol(ctx, p)
-
-	case ipc.MethodGetReferences:
-		var p ipc.GetReferencesParams
-		if err := unmarshal(req.Params, &p); err != nil {
-			return nil, err
-		}
-		return d.Service.GetReferences(ctx, p)
-
-	case ipc.MethodListFiles:
-		var p ipc.ListFilesParams
-		if err := unmarshal(req.Params, &p); err != nil {
-			return nil, err
-		}
-		return d.Service.ListFiles(ctx, p)
-
-	case ipc.MethodGetFileOutline:
-		var p ipc.GetFileOutlineParams
-		if err := unmarshal(req.Params, &p); err != nil {
-			return nil, err
-		}
-		return d.Service.GetFileOutline(ctx, p)
-
-	case ipc.MethodStats:
-		return d.Service.Stats(ctx)
-
-	case ipc.MethodSearchLexical:
-		var p ipc.SearchLexicalParams
-		if err := unmarshal(req.Params, &p); err != nil {
-			return nil, err
-		}
-		return d.Service.SearchLexical(ctx, p)
-
-	case ipc.MethodGetFileSummary:
-		var p ipc.GetFileSummaryParams
-		if err := unmarshal(req.Params, &p); err != nil {
-			return nil, err
-		}
-		return d.Service.GetFileSummary(ctx, p)
-
-	case ipc.MethodGetNeighborhood:
-		var p ipc.GetNeighborhoodParams
-		if err := unmarshal(req.Params, &p); err != nil {
-			return nil, err
-		}
-		return d.Service.GetNeighborhood(ctx, p)
-
-	case ipc.MethodImpactAnalysis:
-		var p ipc.ImpactAnalysisParams
-		if err := unmarshal(req.Params, &p); err != nil {
-			return nil, err
-		}
-		return d.Service.ImpactAnalysis(ctx, p)
-
-	case ipc.MethodCriticalPath:
-		var p ipc.CriticalPathParams
-		if err := unmarshal(req.Params, &p); err != nil {
-			return nil, err
-		}
-		return d.Service.CriticalPath(ctx, p)
-
-	case ipc.MethodReadFocused:
-		var p ipc.ReadFocusedParams
-		if err := unmarshal(req.Params, &p); err != nil {
-			return nil, err
-		}
-		return d.Service.ReadFocused(ctx, p)
-
-	case ipc.MethodFindDocumentKey:
-		var p ipc.FindDocumentKeyParams
-		if err := unmarshal(req.Params, &p); err != nil {
-			return nil, err
-		}
-		return d.Service.FindDocumentKey(ctx, p)
-
-	default:
+	}
+	tool, ok := registry.Lookup(req.Method)
+	if !ok {
 		return nil, fmt.Errorf("%w %q", ipc.ErrUnknownMethod, req.Method)
 	}
-}
-
-func unmarshal(raw json.RawMessage, out any) error {
-	if len(raw) == 0 {
-		return nil
-	}
-	if err := json.Unmarshal(raw, out); err != nil {
-		return fmt.Errorf("%w: %v", ipc.ErrBadParams, err)
-	}
-	return nil
+	return tool.Handle(ctx, d.Service, req.Params)
 }
 
 func (d *Daemon) writeOK(conn net.Conn, result any) {

@@ -8,10 +8,10 @@ import (
 	"github.com/datata1/mycelium/internal/ipc"
 )
 
-func renderFindSymbol(raw json.RawMessage) string {
+func FindSymbol(raw json.RawMessage) string {
 	var r ipc.FindSymbolResult
 	if err := json.Unmarshal(raw, &r); err != nil {
-		return fallback(raw)
+		return RawJSON(raw)
 	}
 	if len(r.Matches) == 0 {
 		if len(r.Hints) > 0 {
@@ -39,10 +39,10 @@ func renderFindSymbol(raw json.RawMessage) string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-func renderFileOutline(raw json.RawMessage) string {
+func FileOutline(raw json.RawMessage) string {
 	var items []ipc.FileOutlineItem
 	if err := json.Unmarshal(raw, &items); err != nil {
-		return fallback(raw)
+		return RawJSON(raw)
 	}
 	if len(items) == 0 {
 		return "no symbols"
@@ -62,10 +62,10 @@ func writeOutlineItems(sb *strings.Builder, items []ipc.FileOutlineItem, depth i
 	}
 }
 
-func renderFileSummary(raw json.RawMessage) string {
+func FileSummary(raw json.RawMessage) string {
 	var s ipc.FileSummary
 	if err := json.Unmarshal(raw, &s); err != nil {
-		return fallback(raw)
+		return RawJSON(raw)
 	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "%s  %s  %d loc  %d symbols\n", s.Path, s.Language, s.LOC, s.SymbolCount)

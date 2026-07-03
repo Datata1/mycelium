@@ -141,7 +141,7 @@ The key metric is `fallback_exploratory` — how many grep/Read calls the agent
 made instead of using myco. Low ratio = myco is covering the use case.
 
 Available MCP tools (all active):
-`find_symbol`, `get_references`, `get_definition`, `get_neighborhood`,
+`find_symbol`, `get_references`, `get_neighborhood`,
 `search_lexical`, `get_file_outline`, `get_file_summary`, `read_focused`,
 `impact_analysis`, `critical_path`, `stats`, `list_files`, `find_document_key`.
 

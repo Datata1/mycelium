@@ -1,4 +1,4 @@
-package render
+package registry
 
 import (
 	"encoding/json"
@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/datata1/mycelium/internal/ipc"
 	"github.com/datata1/mycelium/internal/query"
 )
 
@@ -365,7 +366,7 @@ func TestRenderGolden(t *testing.T) {
 			if err != nil {
 				t.Fatalf("marshal fixture: %v", err)
 			}
-			got := Render(tc.method, raw)
+			got := Render(ipc.Method(tc.method), raw)
 
 			path := filepath.Join("testdata", "golden", tc.name+".txt")
 			if *update {

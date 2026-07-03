@@ -8,10 +8,10 @@ import (
 	"github.com/datata1/mycelium/internal/ipc"
 )
 
-func renderReferences(raw json.RawMessage) string {
+func References(raw json.RawMessage) string {
 	var hits []ipc.ReferenceHit
 	if err := json.Unmarshal(raw, &hits); err != nil {
-		return fallback(raw)
+		return RawJSON(raw)
 	}
 	if len(hits) == 0 {
 		return "no references"
@@ -27,10 +27,10 @@ func renderReferences(raw json.RawMessage) string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-func renderNeighborhood(raw json.RawMessage) string {
+func Neighborhood(raw json.RawMessage) string {
 	var n ipc.Neighborhood
 	if err := json.Unmarshal(raw, &n); err != nil {
-		return fallback(raw)
+		return RawJSON(raw)
 	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "seed: %-50s  %-10s  %s:%d\n",
@@ -72,10 +72,10 @@ func renderNeighborhood(raw json.RawMessage) string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-func renderImpact(raw json.RawMessage) string {
+func Impact(raw json.RawMessage) string {
 	var imp ipc.Impact
 	if err := json.Unmarshal(raw, &imp); err != nil {
-		return fallback(raw)
+		return RawJSON(raw)
 	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "seed: %-50s  %-10s  %s:%d\n",
@@ -95,10 +95,10 @@ func renderImpact(raw json.RawMessage) string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-func renderCriticalPath(raw json.RawMessage) string {
+func CriticalPath(raw json.RawMessage) string {
 	var r ipc.CriticalPathResult
 	if err := json.Unmarshal(raw, &r); err != nil {
-		return fallback(raw)
+		return RawJSON(raw)
 	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "from: %s  %s:%d\n", r.From.Qualified, r.From.Path, r.From.StartLine)

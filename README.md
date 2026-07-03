@@ -89,7 +89,6 @@ All tools return JSON; line/col positions are 1-based. Tools marked `project?` a
 | Tool | Purpose | Key inputs |
 |---|---|---|
 | `find_symbol` | Fuzzy/exact symbol lookup. | `name`, `kind?`, `limit?`, `project?`, `since?`, `focus?` |
-| `get_definition` | Source span + snippet. | `symbol_id` or `qualified_name` |
 | `get_references` | Callers / importers / type uses; resolved vs textual; fans out through interface implementations. | `target`, `limit?`, `project?`, `since?` |
 | `read_focused` | File with non-matching symbols collapsed to one-line markers. Empty `focus` returns the file in full. | `path`, `focus?` |
 | `search_lexical` | Ripgrep-style regex over indexed files. | `pattern`, `path_contains?`, `k?`, `project?`, `since?` |

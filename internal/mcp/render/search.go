@@ -8,10 +8,10 @@ import (
 	"github.com/datata1/mycelium/internal/ipc"
 )
 
-func renderLexical(raw json.RawMessage) string {
+func Lexical(raw json.RawMessage) string {
 	var hits []ipc.LexicalHit
 	if err := json.Unmarshal(raw, &hits); err != nil {
-		return fallback(raw)
+		return RawJSON(raw)
 	}
 	if len(hits) == 0 {
 		return "no matches"
@@ -24,10 +24,10 @@ func renderLexical(raw json.RawMessage) string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-func renderListFiles(raw json.RawMessage) string {
+func ListFiles(raw json.RawMessage) string {
 	var files []ipc.FileHit
 	if err := json.Unmarshal(raw, &files); err != nil {
-		return fallback(raw)
+		return RawJSON(raw)
 	}
 	if len(files) == 0 {
 		return "no files"
@@ -39,10 +39,10 @@ func renderListFiles(raw json.RawMessage) string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-func renderDocumentKey(raw json.RawMessage) string {
+func DocumentKey(raw json.RawMessage) string {
 	var hits []ipc.DocumentHit
 	if err := json.Unmarshal(raw, &hits); err != nil {
-		return fallback(raw)
+		return RawJSON(raw)
 	}
 	if len(hits) == 0 {
 		return "no matches"

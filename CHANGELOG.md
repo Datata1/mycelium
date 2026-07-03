@@ -6,6 +6,47 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Tool registry (refactoring workstream 05)
+
+#### Changed
+
+- **New `internal/registry` is the single tool table** binding each read
+  method to its Service handler and renderer with compile-checked generics.
+  It replaces the daemon dispatch switch, the MCP server's `mapToolToIPC`
+  (params now pass through raw; the daemon-side unmarshal validates), and
+  the render dispatch switch. A parity test asserts
+  {mcpschema tools} == {registry} == {`ipc.AllMethods`} — adding a tool and
+  forgetting a site fails `go test` with its name. Adding a tool is now:
+  schema entry, ipc types, Service method, one registry row, render func
+  (checklist in CONTRIBUTING.md).
+- The render golden tests moved to `internal/registry` so they exercise the
+  real dispatch path; `internal/mcp/render` keeps only pure per-tool
+  functions.
+- Fixed doc drift: CLAUDE.md and README listed a `get_definition` tool that
+  no longer exists.
+
+### Service layer & single dispatch (refactoring workstream 04)
+
+#### Changed
+
+- **New `internal/service`**: one typed method per tool (ipc params in, ipc
+  DTOs out) including `--since` resolution; read-only by construction (no
+  pipeline handle). The daemon dispatcher delegates to it.
+- **The CLI dual path is gone**: the 11 hand-written daemon-or-direct-DB
+  blocks collapsed into one generic `callRead` helper — daemon-up and
+  daemon-down now execute identical service code. `resolveCLISince` deleted.
+- No command code touches `*sql.DB` anymore; `index.Index.DB()` documents
+  its only legitimate consumers (pipeline, service).
+
+### Wire types (refactoring workstream 03)
+
+#### Changed
+
+- **The 21 result DTOs moved verbatim to `internal/ipc/results.go`** — ipc
+  now owns both halves of the transport contract. `internal/query` keeps
+  type aliases, so its Reader API is unchanged; `mcp/render` imports only
+  ipc. Render golden tests prove the wire output stayed byte-identical.
+
 ### Test suite buildout, phase A (refactoring workstream 07)
 
 #### Added

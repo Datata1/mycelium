@@ -6,6 +6,23 @@ external contributors.
 
 Sizes: **S** < 1 day, **M** 1–3 days, **L** 3–5+ days.
 
+## Status (2026-07-03)
+
+Implemented: 01, 02, 06, 07-A, 03 (DTO move + render decoupling), 04, 05.
+Open follow-ups:
+
+- **03**: the query-internal store extraction (SQL into an unexported
+  `store`, pure ranking/hint/preview functions) — the DTO move landed;
+  the god-file split is trailing work, unblocked and incremental.
+- **04**: the dual-path equivalence suite (every query subcommand with
+  daemon up vs. down) needs unix-socket binding, which the local sandbox
+  forbids — implement alongside 07-C with the skip-on-EPERM pattern used
+  in `internal/daemon/daemon_test.go`.
+- **07 B/C**: query store tests (after the 03 extraction), httptest for
+  the HTTP transport.
+- **01**: first CI lint run may surface findings golangci-lint could not
+  be executed locally (sandbox network); fix-forward.
+
 ## Dependency graph
 
 ```

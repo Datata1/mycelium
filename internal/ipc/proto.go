@@ -35,6 +35,26 @@ const (
 	MethodPing            Method = "ping"
 )
 
+// AllMethods enumerates the read-surface methods — exactly the tools
+// published in pkg/mcpschema. Ping and Reindex are deliberately absent:
+// they are protocol/write-path methods, not query tools. The registry
+// parity test asserts this list, the registry table, and the mcpschema
+// tool names stay in lockstep.
+var AllMethods = []Method{
+	MethodFindSymbol,
+	MethodGetReferences,
+	MethodListFiles,
+	MethodGetFileOutline,
+	MethodGetFileSummary,
+	MethodGetNeighborhood,
+	MethodSearchLexical,
+	MethodStats,
+	MethodImpactAnalysis,
+	MethodCriticalPath,
+	MethodReadFocused,
+	MethodFindDocumentKey,
+}
+
 // Request is the wire shape for a client call.
 type Request struct {
 	Method Method          `json:"method"`

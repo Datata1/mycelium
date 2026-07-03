@@ -49,6 +49,19 @@ Start with [README.md](./README.md), then [docs/limitations.md](./docs/limitatio
 (read this before proposing features), and
 [docs/adding-a-language.md](./docs/adding-a-language.md) for language support.
 
+### Adding a query tool
+
+One entry per layer — the parity test in `internal/registry` fails with the
+name of anything you forget:
+
+1. Schema + agent-facing description: `pkg/mcpschema/tools.go`
+2. Wire types + method const (+ `AllMethods`): `internal/ipc`
+3. Typed execution method: `internal/service`
+4. One table row: `internal/registry/registry.go`
+5. Renderer + golden test case: `internal/mcp/render` +
+   `internal/registry/golden_test.go` (regenerate with `-update`)
+6. CLI subcommand (flags → params → `callRead`): `cmd/myco/cmd_query.go`
+
 ### Invariants — enforced in review, non-negotiable
 
 1. **The daemon is the only SQLite writer.** MCP, HTTP, CLI, and git hooks are
