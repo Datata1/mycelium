@@ -323,24 +323,32 @@ func (r *Reader) previewRead(out FocusedRead, raw []byte, syms []flatSymbol) Foc
 	}
 	out.Stats.ExpandedSymbols = len(syms)
 
-	lines := splitLinesPreserve(string(raw))
-	cut := r.readPreviewLines
+	content, totalLines, truncated := cutPreview(string(raw), r.readPreviewLines)
+	out.Content = content
+	out.Stats.ReturnedBytes = len(out.Content)
+	if truncated {
+		out.Hint = fmt.Sprintf(
+			"Preview only — first %d of %d lines shown. Pass `focus=<query>`%s to filter symbols and see the matching ones in full; or call `get_file_outline` for the symbol-only listing.",
+			r.readPreviewLines, totalLines, exampleFocusHint(syms),
+		)
+	}
+	return out
+}
+
+// cutPreview returns the first `cut` lines of raw (verbatim, newlines
+// preserved) and reports the file's total line count and whether the cut
+// elided anything. cut <= 0 or a file at/under the cap returns the whole
+// file untruncated.
+func cutPreview(raw string, cut int) (content string, totalLines int, truncated bool) {
+	lines := splitLinesPreserve(raw)
 	if cut <= 0 || len(lines) <= cut {
-		out.Content = string(raw)
-		out.Stats.ReturnedBytes = len(out.Content)
-		return out
+		return raw, len(lines), false
 	}
 	var b strings.Builder
 	for i := 0; i < cut; i++ {
 		b.WriteString(lines[i])
 	}
-	out.Content = b.String()
-	out.Stats.ReturnedBytes = len(out.Content)
-	out.Hint = fmt.Sprintf(
-		"Preview only — first %d of %d lines shown. Pass `focus=<query>`%s to filter symbols and see the matching ones in full; or call `get_file_outline` for the symbol-only listing.",
-		cut, len(lines), exampleFocusHint(syms),
-	)
-	return out
+	return b.String(), len(lines), true
 }
 
 // exampleFocusHint picks a concrete identifier from the file so the
