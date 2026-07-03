@@ -3,6 +3,7 @@ package query
 import (
 	"context"
 	"database/sql"
+	"errors"
 )
 
 // FileSummary is a structural summary of a single file. For v1.0 we stay
@@ -44,7 +45,7 @@ func (r *Reader) GetFileSummary(ctx context.Context, path string) (FileSummary, 
 		 WHERE f.path = ?
 		    OR (p.root IS NOT NULL AND ? = p.root || '/' || f.path)`, path, path,
 	).Scan(&fileID, &s.Language, &s.Project)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return s, nil
 	}
 	if err != nil {

@@ -3,6 +3,7 @@ package query
 import (
 	"context"
 	"database/sql"
+	"errors"
 )
 
 // projectScope resolves an optional project name to a SQL clause + args
@@ -18,7 +19,7 @@ func (r *Reader) projectScope(ctx context.Context, name string) (string, []any, 
 	var id int64
 	err := r.db.QueryRowContext(ctx, `SELECT id FROM projects WHERE name = ?`, name).Scan(&id)
 	switch {
-	case err == sql.ErrNoRows:
+	case errors.Is(err, sql.ErrNoRows):
 		// Force zero results instead of silently dropping the filter.
 		return " AND 1=0", nil, nil
 	case err != nil:

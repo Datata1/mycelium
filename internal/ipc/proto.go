@@ -37,11 +37,14 @@ type Request struct {
 	Params json.RawMessage `json:"params,omitempty"`
 }
 
-// Response is the wire shape for a server reply.
+// Response is the wire shape for a server reply. Code is a machine-readable
+// error class (see Code* consts) so clients can branch without matching on
+// the error text; it is empty for errors that fit no class.
 type Response struct {
 	OK     bool            `json:"ok"`
 	Result json.RawMessage `json:"result,omitempty"`
 	Error  string          `json:"error,omitempty"`
+	Code   string          `json:"code,omitempty"`
 }
 
 // Param shapes — one per method. Kept small and typed so changes are visible

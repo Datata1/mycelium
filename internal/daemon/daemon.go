@@ -119,15 +119,15 @@ func (d *Daemon) handleConn(ctx context.Context, conn net.Conn) {
 
 	var req ipc.Request
 	if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&req); err != nil {
-		writeErr(conn, fmt.Sprintf("decode request: %v", err))
+		d.writeErr(conn, fmt.Errorf("%w: decode request: %v", ipc.ErrBadParams, err))
 		return
 	}
 	result, err := d.dispatch(ctx, req)
 	if err != nil {
-		writeErr(conn, err.Error())
+		d.writeErr(conn, err)
 		return
 	}
-	writeOK(conn, result)
+	d.writeOK(conn, result)
 }
 
 // HandleIPC is the daemon dispatcher exposed to other transports (HTTP).
@@ -278,7 +278,7 @@ func (d *Daemon) dispatchInner(ctx context.Context, req ipc.Request) (any, error
 		return d.Reader.FindDocumentKey(ctx, p.Key, p.Kind, p.Project, p.Limit)
 
 	default:
-		return nil, fmt.Errorf("unknown method %q", req.Method)
+		return nil, fmt.Errorf("%w %q", ipc.ErrUnknownMethod, req.Method)
 	}
 }
 
@@ -296,20 +296,27 @@ func unmarshal(raw json.RawMessage, out any) error {
 	if len(raw) == 0 {
 		return nil
 	}
-	return json.Unmarshal(raw, out)
+	if err := json.Unmarshal(raw, out); err != nil {
+		return fmt.Errorf("%w: %v", ipc.ErrBadParams, err)
+	}
+	return nil
 }
 
-func writeOK(conn net.Conn, result any) {
+func (d *Daemon) writeOK(conn net.Conn, result any) {
 	payload, err := json.Marshal(result)
 	if err != nil {
-		writeErr(conn, fmt.Sprintf("marshal result: %v", err))
+		d.writeErr(conn, fmt.Errorf("marshal result: %w", err))
 		return
 	}
 	resp := ipc.Response{OK: true, Result: payload}
-	_ = json.NewEncoder(conn).Encode(&resp)
+	if err := json.NewEncoder(conn).Encode(&resp); err != nil {
+		d.Logger.Printf("write response: %v", err)
+	}
 }
 
-func writeErr(conn net.Conn, msg string) {
-	resp := ipc.Response{OK: false, Error: msg}
-	_ = json.NewEncoder(conn).Encode(&resp)
+func (d *Daemon) writeErr(conn net.Conn, callErr error) {
+	resp := ipc.Response{OK: false, Error: callErr.Error(), Code: ipc.CodeFor(callErr)}
+	if err := json.NewEncoder(conn).Encode(&resp); err != nil {
+		d.Logger.Printf("write response: %v", err)
+	}
 }

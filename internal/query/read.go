@@ -3,6 +3,7 @@ package query
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -118,8 +119,8 @@ func (r *Reader) ReadFocused(ctx context.Context, repoRoot, path, focusQ string)
 		 WHERE f.path = ?
 		    OR (p.root IS NOT NULL AND ? = p.root || '/' || f.path)`, lookup, lookup,
 	).Scan(&fileID, &language, &dbPath, &projectRoot)
-	if err == sql.ErrNoRows {
-		return out, fmt.Errorf("file not in index: %s%s",
+	if errors.Is(err, sql.ErrNoRows) {
+		return out, notFound("file not in index: %s%s",
 			path, formatPathSuggestions(suggestPaths(ctx, r.db, path, 3)))
 	}
 	if err != nil {

@@ -80,7 +80,7 @@ func (r *Reader) ImpactAnalysis(ctx context.Context, target, kind, project strin
 		return result, err
 	}
 	if seedID == 0 {
-		return result, fmt.Errorf("symbol not found: %q", target)
+		return result, notFound("symbol not found: %q", target)
 	}
 	seed, err := r.loadNode(ctx, seedID)
 	if err != nil {
@@ -200,14 +200,14 @@ func (r *Reader) CriticalPath(ctx context.Context, from, to, project string, dep
 		return result, err
 	}
 	if fromID == 0 {
-		return result, fmt.Errorf("from symbol not found: %q", from)
+		return result, notFound("from symbol not found: %q", from)
 	}
 	toID, err := r.resolveSeed(ctx, to, project)
 	if err != nil {
 		return result, err
 	}
 	if toID == 0 {
-		return result, fmt.Errorf("to symbol not found: %q", to)
+		return result, notFound("to symbol not found: %q", to)
 	}
 	fromNode, err := r.loadNode(ctx, fromID)
 	if err != nil {

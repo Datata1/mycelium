@@ -100,7 +100,7 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 	}
 	var req ipc.Request
 	if err := json.NewDecoder(bufio.NewReader(r.Body)).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ipc.Response{OK: false, Error: "decode request: " + err.Error()})
+		writeJSON(w, http.StatusBadRequest, ipc.Response{OK: false, Error: "decode request: " + err.Error(), Code: ipc.CodeBadParams})
 		return
 	}
 	s.dispatch(w, r.Context(), req)
@@ -136,7 +136,7 @@ func (s *Server) handlePath(w http.ResponseWriter, r *http.Request) {
 func (s *Server) dispatch(w http.ResponseWriter, ctx context.Context, req ipc.Request) {
 	result, err := s.Dispatcher.HandleIPC(ctx, req)
 	if err != nil {
-		writeJSON(w, http.StatusOK, ipc.Response{OK: false, Error: err.Error()})
+		writeJSON(w, http.StatusOK, ipc.Response{OK: false, Error: err.Error(), Code: ipc.CodeFor(err)})
 		return
 	}
 	payload, err := json.Marshal(result)

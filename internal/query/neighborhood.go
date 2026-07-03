@@ -100,7 +100,7 @@ func (r *Reader) GetNeighborhood(ctx context.Context, target, project string, de
 		return result, err
 	}
 	if seedID == 0 {
-		return result, fmt.Errorf("symbol not found: %q", target)
+		return result, notFound("symbol not found: %q", target)
 	}
 	seed, err := r.loadNode(ctx, seedID)
 	if err != nil {

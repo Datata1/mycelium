@@ -47,7 +47,7 @@ func (c *Client) Call(method string, params, out any) error {
 		return fmt.Errorf("read response: %w", err)
 	}
 	if !resp.OK {
-		return fmt.Errorf("daemon: %s", resp.Error)
+		return &wireError{msg: "daemon: " + resp.Error, code: resp.Code}
 	}
 	if out != nil && len(resp.Result) > 0 {
 		if err := json.Unmarshal(resp.Result, out); err != nil {
