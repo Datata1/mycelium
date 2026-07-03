@@ -1,0 +1,2 @@
+handlers.Login                            internal/http/handlers/login.go:28  call
+-                                         internal/auth/service_test.go:55  call

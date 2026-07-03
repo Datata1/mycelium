@@ -1,0 +1,5 @@
+seed: AuthService.Login                                   method      internal/auth/service.go:42
+
+callers (transitive):
+  [d=1] handlers.Login                                      function    internal/http/handlers/login.go:15
+  [d=2] router.Register                                     function    internal/http/router.go:12

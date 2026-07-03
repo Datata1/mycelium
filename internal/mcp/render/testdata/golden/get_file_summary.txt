@@ -1,0 +1,9 @@
+internal/auth/service.go  go  240 loc  4 symbols
+by_kind: method: 2
+exports:
+  struct     AuthService  :20
+  function   NewAuthService  :95
+imports:
+  context
+  errors
+  internal/session

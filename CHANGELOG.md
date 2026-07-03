@@ -6,6 +6,20 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Test suite buildout, phase A (refactoring workstream 07)
+
+#### Added
+
+- Unit tests for previously untested packages: table-driven parser tests
+  (`internal/parser/{golang,python,typescript}`), config merge/validation
+  tests (`internal/config`), wire round-trip tests (`internal/ipc`).
+- **Golden-file tests for `internal/mcp/render`** — every render method plus
+  the unknown-method fallback, under `testdata/golden/`; regenerate
+  deliberately with `go test ./internal/mcp/render -update` and review
+  golden diffs like code.
+- Daemon dispatch error-code tests (pipe-based plus a real-socket round
+  trip, added in workstream 02).
+
 ### Error/logging foundations (refactoring workstream 02)
 
 #### Added

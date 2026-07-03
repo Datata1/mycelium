@@ -1,0 +1,4 @@
+AuthService.Login                                   method      internal/auth/service.go:42-78
+  func (s *AuthService) Login(ctx context.Context, creds Credentials) (*Session, error)
+  Login authenticates a user and mints a session.
+handlers.Login                                      function    internal/http/handlers/login.go:15-40

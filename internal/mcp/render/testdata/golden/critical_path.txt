@@ -1,0 +1,9 @@
+from: handlers.Login  internal/http/handlers/login.go:15
+to:   session.Mint  internal/session/mint.go:30
+
+path 1:
+  1. handlers.Login                                      internal/http/handlers/login.go:15
+  2. AuthService.Login                                   internal/auth/service.go:42
+  3. session.Mint                                        internal/session/mint.go:30
+
+note: k clamped from 20 to 5

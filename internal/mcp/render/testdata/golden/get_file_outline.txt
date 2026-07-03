@@ -1,0 +1,4 @@
+struct     AuthService                              :20
+  method     Login                                    :42
+  method     Logout                                   :80
+function   NewAuthService                           :95

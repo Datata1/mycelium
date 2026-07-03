@@ -1,0 +1,6 @@
+files: 120  symbols: 1450  refs: 5200 (4900 resolved, 42 unresolved)
+by_language: go: 90  python: 10  typescript: 20
+last_scan: 2026-01-02T15:04:05Z  db: 4.0 MB
+projects:
+  backend                         80 files  root: services/backend
+  frontend                        40 files  root: apps/web

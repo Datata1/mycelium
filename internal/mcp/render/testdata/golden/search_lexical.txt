@@ -1,0 +1,2 @@
+internal/auth/service.go:61:	log.Printf("login failed for %s", creds.User)
+internal/http/handlers/login.go:33:	http.Error(w, "login failed", http.StatusUnauthorized)
