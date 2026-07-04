@@ -14,12 +14,13 @@ func (r *Reader) GetFileSummary(ctx context.Context, path string) (FileSummary, 
 	s := FileSummary{Path: path, ByKind: map[string]int{}}
 
 	var fileID int64
+	var canonical string
 	err := r.db.QueryRowContext(ctx,
-		`SELECT f.id, f.language, COALESCE(p.name, '')
+		`SELECT f.id, f.language, COALESCE(p.name, ''), `+displayPath+`
 		 FROM files f LEFT JOIN projects p ON p.id = f.project_id
 		 WHERE f.path = ?
 		    OR (p.root IS NOT NULL AND ? = p.root || '/' || f.path)`, path, path,
-	).Scan(&fileID, &s.Language, &s.Project)
+	).Scan(&fileID, &s.Language, &s.Project, &canonical)
 	if errors.Is(err, sql.ErrNoRows) {
 		return s, notFound("file not in index: %s%s%s",
 			path, formatPathSuggestions(suggestPaths(ctx, r.db, path, 3)),
@@ -28,6 +29,8 @@ func (r *Reader) GetFileSummary(ctx context.Context, path string) (FileSummary, 
 	if err != nil {
 		return s, err
 	}
+	// Echo the canonical repo-relative form regardless of input form.
+	s.Path = canonical
 
 	// LOC = end_line of the last symbol, or 0. A full line count would mean
 	// opening the file; the symbol-derived proxy is good enough for UX and

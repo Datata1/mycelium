@@ -79,7 +79,7 @@ func (r *Reader) FindSymbol(ctx context.Context, name, kind, project string, lim
 		args = append(args, pathArgs...)
 		args = append(args, name, name+"%", limit)
 		rows, err = r.db.QueryContext(ctx, `
-			SELECT s.id, s.name, s.qualified, s.kind, f.path, COALESCE(p.name, ''),
+			SELECT s.id, s.name, s.qualified, s.kind, `+displayPath+`, COALESCE(p.name, ''),
 			       s.start_line, s.end_line,
 			       COALESCE(s.signature, ''), COALESCE(s.docstring, '')
 			FROM symbols s JOIN files f ON f.id = s.file_id
@@ -95,7 +95,7 @@ func (r *Reader) FindSymbol(ctx context.Context, name, kind, project string, lim
 		args = append(args, pathArgs...)
 		args = append(args, limit)
 		rows, err = r.db.QueryContext(ctx, `
-			SELECT s.id, s.name, s.qualified, s.kind, f.path, COALESCE(p.name, ''),
+			SELECT s.id, s.name, s.qualified, s.kind, `+displayPath+`, COALESCE(p.name, ''),
 			       s.start_line, s.end_line,
 			       COALESCE(s.signature, ''), COALESCE(s.docstring, '')
 			FROM symbols s JOIN files f ON f.id = s.file_id
@@ -205,7 +205,7 @@ func (r *Reader) GetReferences(ctx context.Context, target, project string, limi
 		args = append(args, pathArgs...)
 		args = append(args, limit)
 		rows, err := r.db.QueryContext(ctx, `
-			SELECT r.id, f.path, COALESCE(p.name, ''), r.line, r.col,
+			SELECT r.id, `+displayPath+`, COALESCE(p.name, ''), r.line, r.col,
 			       COALESCE(r.src_symbol_id, 0), COALESCE(ss.qualified, ''),
 			       r.dst_name, COALESCE(r.dst_symbol_id, 0), r.kind, r.resolved
 			FROM refs r
@@ -213,7 +213,7 @@ func (r *Reader) GetReferences(ctx context.Context, target, project string, limi
 			LEFT JOIN projects p ON p.id = f.project_id
 			LEFT JOIN symbols ss ON ss.id = r.src_symbol_id
 			WHERE r.dst_symbol_id IN (`+placeholders+`)`+scope+pathClause+`
-			ORDER BY f.path, r.line
+			ORDER BY 2, r.line
 			LIMIT ?`, args...)
 		if err != nil {
 			return res, err
@@ -234,7 +234,7 @@ func (r *Reader) GetReferences(ctx context.Context, target, project string, limi
 		args = append(args, pathArgs...)
 		args = append(args, remaining)
 		rows, err := r.db.QueryContext(ctx, `
-			SELECT r.id, f.path, COALESCE(p.name, ''), r.line, r.col,
+			SELECT r.id, `+displayPath+`, COALESCE(p.name, ''), r.line, r.col,
 			       COALESCE(r.src_symbol_id, 0), COALESCE(ss.qualified, ''),
 			       r.dst_name, COALESCE(r.dst_symbol_id, 0), r.kind, r.resolved
 			FROM refs r
@@ -242,7 +242,7 @@ func (r *Reader) GetReferences(ctx context.Context, target, project string, limi
 			LEFT JOIN projects p ON p.id = f.project_id
 			LEFT JOIN symbols ss ON ss.id = r.src_symbol_id
 			WHERE r.resolved = 0 AND (r.dst_name = ? OR r.dst_short = ?)`+scope+pathClause+`
-			ORDER BY f.path, r.line
+			ORDER BY 2, r.line
 			LIMIT ?`, args...)
 		if err != nil {
 			return res, err
@@ -365,7 +365,7 @@ func (r *Reader) ListFiles(ctx context.Context, language, nameContains, project 
 		args = append(args, language)
 	}
 	if nameContains != "" {
-		conds = append(conds, "f.path LIKE ?")
+		conds = append(conds, "("+displayPath+") LIKE ?")
 		args = append(args, "%"+nameContains+"%")
 	}
 	where := ""
@@ -388,10 +388,10 @@ func (r *Reader) ListFiles(ctx context.Context, language, nameContains, project 
 	appendScope(pathClause, pathArgs)
 	args = append(args, limit)
 	q := fmt.Sprintf(`
-		SELECT f.path, COALESCE(p.name, ''), f.language, f.size_bytes, f.last_indexed_at,
+		SELECT `+displayPath+`, COALESCE(p.name, ''), f.language, f.size_bytes, f.last_indexed_at,
 		       (SELECT COUNT(*) FROM symbols s WHERE s.file_id = f.id)
 		FROM files f LEFT JOIN projects p ON p.id = f.project_id
-		%s ORDER BY f.path LIMIT ?`, where)
+		%s ORDER BY 1 LIMIT ?`, where)
 	rows, err := r.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err

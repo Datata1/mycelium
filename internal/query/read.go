@@ -30,11 +30,11 @@ type flatSymbol struct {
 // non-focus-matching symbols collapsed to one-line `// signature ...`
 // markers.
 //
-// `path` must match what `list_files` / `find_symbol` returned — in
-// workspace mode that's the **project-relative** path (e.g.
-// `src/ci/ui-test.ts`), not the repo-relative one. The disk read joins
-// the file's project root (looked up via `files.project_id`) with that
-// path, so callers don't have to know the project layout.
+// `path` accepts any of the three forms — repo-relative (what every
+// tool emits), stored project-relative, or absolute. The disk read
+// joins the file's project root (looked up via `files.project_id`)
+// with the stored path, so callers don't have to know the project
+// layout.
 //
 // `repoRoot` is the absolute path to the repo. focusQ may be empty —
 // in that case all symbols expand and the function effectively
@@ -81,6 +81,13 @@ func (r *Reader) ReadFocused(ctx context.Context, repoRoot, path, focusQ string)
 	if err != nil {
 		return out, err
 	}
+	// Echo the canonical repo-relative form regardless of which form the
+	// caller passed — same shape every other tool emits.
+	var rootStr string
+	if projectRoot.Valid {
+		rootStr = projectRoot.String
+	}
+	out.Path = displayPathJoin(rootStr, dbPath)
 
 	// Reassemble the absolute disk path from the database row, not the
 	// caller's input. `dbPath` is always project-relative (in workspace

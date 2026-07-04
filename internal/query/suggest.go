@@ -36,10 +36,10 @@ func suggestPaths(ctx context.Context, db *sql.DB, input string, limit int) []pa
 		return nil
 	}
 	rows, err := db.QueryContext(ctx, `
-		SELECT f.path, COALESCE(p.name, '')
+		SELECT `+displayPath+`, COALESCE(p.name, '')
 		FROM files f LEFT JOIN projects p ON p.id = f.project_id
 		WHERE f.path = ? OR f.path LIKE '%/' || ?
-		ORDER BY f.path
+		ORDER BY 1
 		LIMIT ?`, base, base, limit)
 	if err != nil {
 		return nil

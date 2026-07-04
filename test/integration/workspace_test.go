@@ -187,15 +187,17 @@ func TestIntegration_WorkspaceMode(t *testing.T) {
 		if len(hits) == 0 {
 			t.Fatalf("expected at least one APIOnlySymbol match; got 0 (likely the silent-skip path bug)")
 		}
+		// Paths are emitted repo-relative so agents can hand them
+		// straight to filesystem tools.
 		var found bool
 		for _, h := range hits {
-			if h.Path == "server.go" {
+			if h.Path == "services/api/server.go" {
 				found = true
 				break
 			}
 		}
 		if !found {
-			t.Errorf("expected hit at path 'server.go'; got %+v", hits)
+			t.Errorf("expected hit at path 'services/api/server.go'; got %+v", hits)
 		}
 	})
 
@@ -252,9 +254,9 @@ func TestIntegration_WorkspaceMode(t *testing.T) {
 			got[f.Path] = f.Project
 		}
 		want := map[string]string{
-			"server.go":  "api",
-			"src/app.ts": "web",
-			"job.py":     "worker",
+			"services/api/server.go":  "api",
+			"services/web/src/app.ts": "web",
+			"services/worker/job.py":  "worker",
 		}
 		for p, proj := range want {
 			if got[p] != proj {

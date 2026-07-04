@@ -306,7 +306,7 @@ func (r *Reader) traverseOutbound(ctx context.Context, seed int64, depth int, vi
 		    WHERE r.dst_symbol_id IS NOT NULL AND w.depth < ?
 		)
 		SELECT w.from_id, sf.qualified, w.to_id, st.qualified, w.kind,
-		       f.path, COALESCE(p.name, ''), w.line, w.depth
+		       ` + displayPath + `, COALESCE(p.name, ''), w.line, w.depth
 		FROM walk w
 		JOIN symbols sf ON sf.id = w.from_id
 		JOIN symbols st ON st.id = w.to_id
@@ -331,7 +331,7 @@ func (r *Reader) traverseInbound(ctx context.Context, seed int64, depth int, vis
 		    WHERE r.src_symbol_id IS NOT NULL AND w.depth < ?
 		)
 		SELECT w.from_id, sf.qualified, w.to_id, st.qualified, w.kind,
-		       f.path, COALESCE(p.name, ''), w.line, w.depth
+		       ` + displayPath + `, COALESCE(p.name, ''), w.line, w.depth
 		FROM walk w
 		JOIN symbols sf ON sf.id = w.from_id
 		JOIN symbols st ON st.id = w.to_id
@@ -433,7 +433,7 @@ func (r *Reader) loadNode(ctx context.Context, id int64) (NeighborNode, error) {
 	var n NeighborNode
 	n.ID = id
 	err := r.db.QueryRowContext(ctx, `
-		SELECT s.qualified, s.kind, f.path, COALESCE(p.name, ''), s.start_line
+		SELECT s.qualified, s.kind, `+displayPath+`, COALESCE(p.name, ''), s.start_line
 		FROM symbols s JOIN files f ON f.id = s.file_id
 		         LEFT JOIN projects p ON p.id = f.project_id
 		WHERE s.id = ?`, id).Scan(&n.Qualified, &n.Kind, &n.Path, &n.Project, &n.StartLine)

@@ -97,7 +97,7 @@ func (r *Reader) ImpactAnalysis(ctx context.Context, target, kind, project strin
 		    JOIN walk w ON r.dst_symbol_id = w.symbol_id
 		    WHERE r.src_symbol_id IS NOT NULL AND w.depth < ?
 		)
-		SELECT s.id, s.qualified, s.kind, f.path, COALESCE(p.name, ''),
+		SELECT s.id, s.qualified, s.kind, ` + displayPath + `, COALESCE(p.name, ''),
 		       s.start_line, MIN(w.depth) AS distance
 		FROM walk w
 		JOIN symbols s ON s.id = w.symbol_id
@@ -242,7 +242,7 @@ func (r *Reader) CriticalPath(ctx context.Context, from, to, project string, dep
 	}
 	placeholders := "?" + strings.Repeat(",?", len(idList)-1)
 	vRows, err := r.db.QueryContext(ctx, `
-		SELECT s.id, s.qualified, s.kind, f.path, COALESCE(p.name, ''), s.start_line
+		SELECT s.id, s.qualified, s.kind, `+displayPath+`, COALESCE(p.name, ''), s.start_line
 		FROM symbols s JOIN files f ON f.id = s.file_id
 		         LEFT JOIN projects p ON p.id = f.project_id
 		WHERE s.id IN (`+placeholders+`)`, idList...)

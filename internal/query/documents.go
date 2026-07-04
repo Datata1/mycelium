@@ -35,7 +35,7 @@ func (r *Reader) FindDocumentKey(
 	prefixPattern := keyQuery + "%"
 
 	q := `
-		SELECT d.id, d.kind, f.path, COALESCE(p.name, ''),
+		SELECT d.id, d.kind, ` + displayPath + `, COALESCE(p.name, ''),
 		       d.key, d.value, d.line
 		FROM documents d
 		JOIN files f ON f.id = d.file_id
@@ -109,7 +109,8 @@ func (r *Reader) EmptyDocumentFiles(ctx context.Context, limit int) []string {
 		limit = 5
 	}
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT f.path FROM files f
+		SELECT `+displayPath+` FROM files f
+		LEFT JOIN projects p ON p.id = f.project_id
 		LEFT JOIN documents d ON d.file_id = f.id
 		WHERE f.document_kind IS NOT NULL AND d.id IS NULL
 		LIMIT ?`, limit)

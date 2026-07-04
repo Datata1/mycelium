@@ -6,6 +6,30 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Repo-relative result paths (field-test finding, 2026-07-05)
+
+Second monorepo session: 9 of 14 grep/Read fallbacks were the agent
+translating myco's project-relative paths back to disk locations
+(`Read` at the repo root → ENOENT → `find -name` → `Read`). Paths in
+results were only usable by myco's own tools, not by the agent's
+native ones.
+
+#### Changed — BREAKING wire values in workspace mode
+
+- Every path-bearing result — `find_symbol`, `get_references`,
+  `search_lexical`, `list_files`, `get_neighborhood`,
+  `impact_analysis`, `critical_path`, `find_document_key`,
+  `read_focused`, `get_file_summary`, "did you mean" suggestions —
+  now emits **repo-relative** paths (project root joined onto the
+  stored form). Single-project repos are unaffected (values were
+  already repo-relative). Inputs keep accepting all three forms
+  (stored, repo-relative, absolute).
+- `--since <ref>` path filtering now matches in workspace mode: the
+  filter compared repo-relative git-diff paths against stored
+  project-relative paths and silently matched nothing.
+- MCP tool descriptions and docs/adoption.md updated to the new
+  contract ("returned paths are repo-relative and canonical").
+
 ### Instantiation references (field-test finding, 2026-07-04)
 
 First TS-monorepo session with the adoption telemetry showed

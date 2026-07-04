@@ -76,7 +76,7 @@ func (r *Reader) SearchLexical(ctx context.Context, pattern, pathContains, proje
 			defer wg.Done()
 			for j := range jobs {
 				abs := filepath.Join(repoRoot, j.projectRoot, j.rel)
-				if err := scanFile(ctx, abs, j.rel, j.projectName, re, hitsCh); err != nil {
+				if err := scanFile(ctx, abs, displayPathJoin(j.projectRoot, j.rel), j.projectName, re, hitsCh); err != nil {
 					// ENOENT means the index is stale or the path
 					// reconstruction is wrong — both are things the
 					// caller should know about, not silently empty

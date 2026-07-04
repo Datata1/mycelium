@@ -167,7 +167,7 @@ func toolDefs() []Tool {
 				"properties": map[string]any{
 					"path": map[string]any{
 						"type":        "string",
-						"description": "Path to the file. Accepts the `path` returned by `find_symbol` / `list_files` / `get_references` verbatim, a repo-relative path, or an absolute path. In workspace mode the indexed form is project-relative; pass it through unchanged — do not prepend the project root.",
+						"description": "Path to the file. Accepts the `path` returned by `find_symbol` / `list_files` / `get_references` verbatim (repo-relative), or an absolute path. Pass returned paths through unchanged.",
 					},
 					"focus": map[string]any{
 						"type":        "string",
@@ -189,7 +189,7 @@ func toolDefs() []Tool {
 					},
 					"path_contains": map[string]any{
 						"type":        "string",
-						"description": "Restrict to files whose path contains this substring. Matches both project-relative (`src/utils/`) and repo-relative (`packages/web/src/`) forms in workspace mode.",
+						"description": "Restrict to files whose path contains this substring, matched against the repo-relative path (e.g. `packages/web/src/`).",
 					},
 					"k": map[string]any{
 						"type":        "integer",
@@ -215,7 +215,7 @@ func toolDefs() []Tool {
 				"properties": map[string]any{
 					"path": map[string]any{
 						"type":        "string",
-						"description": "Path to the file. Accepts the `path` returned by `find_symbol` / `list_files` / `get_references` verbatim, a repo-relative path, or an absolute path. In workspace mode the indexed form is project-relative; pass it through unchanged.",
+						"description": "Path to the file. Accepts the `path` returned by `find_symbol` / `list_files` / `get_references` verbatim (repo-relative), or an absolute path. Pass returned paths through unchanged.",
 					},
 				},
 				"required": []string{"path"},
@@ -319,7 +319,7 @@ func toolDefs() []Tool {
 				"properties": map[string]any{
 					"path": map[string]any{
 						"type":        "string",
-						"description": "Path to the file. Accepts the `path` returned by `find_symbol` / `list_files` / `get_references` verbatim, a repo-relative path, or an absolute path. In workspace mode the indexed form is project-relative; pass it through unchanged — do not prepend the project root yourself.",
+						"description": "Path to the file. Accepts the `path` returned by `find_symbol` / `list_files` / `get_references` verbatim (repo-relative), or an absolute path. Pass returned paths through unchanged.",
 					},
 					"focus": map[string]any{
 						"type":        "string",

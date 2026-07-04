@@ -227,22 +227,28 @@ the wild. The failure shape is always the same:
    The agent loses faith in `read_focused` and falls back to `Read`
    for the rest of the session.
 
-The fix shipped in v3.1.2 has two halves:
+The fix shipped in three stages:
 
-- The daemon now accepts any of `{project-relative, repo-relative,
+- v3.1.2: the daemon accepts any of `{project-relative, repo-relative,
   absolute}` paths and resolves them all to the right on-disk file.
-- Every result type — `SymbolHit`, `LexicalHit`, `FileHit`,
-  `NeighborNode`, …  — now carries a `project` field (or
-  `src_project` for edges) so agents can disambiguate when the same
-  path exists in multiple packages.
+- v3.1.2: every result type — `SymbolHit`, `LexicalHit`, `FileHit`,
+  `NeighborNode`, …  — carries a `project` field (or `src_project`
+  for edges) so agents can disambiguate when the same path exists in
+  multiple packages.
+- v5.x: every result **emits repo-relative paths** (project root
+  joined onto the stored path). Field testing showed the inverse trap:
+  an agent that got `src/ts/services/landscape.ts` back tried its
+  native `Read` tool at the repo root, hit ENOENT, and spent the rest
+  of the session locating files with `find`. A returned path is now
+  directly usable by any filesystem tool, not just myco's.
 
 What this means in practice for the agent:
 
-> The `path` field returned by any myco tool is canonical. Pass it
-> verbatim to `read_focused` / `get_file_outline` / `get_file_summary`
-> — never construct a new path by prepending package directories. The
-> `project` field on the same hit identifies which workspace project
-> the path belongs to.
+> The `path` field returned by any myco tool is repo-relative and
+> canonical. Pass it verbatim to `read_focused` / `get_file_outline` /
+> `get_file_summary` — never construct a new path by prepending or
+> stripping directories. The `project` field on the same hit
+> identifies which workspace project the path belongs to.
 
 That sentence is what the CLAUDE.md priming snippet (added by
 `myco init`) installs into the agent's instructions. If you set
