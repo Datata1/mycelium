@@ -9,11 +9,15 @@ import (
 )
 
 func References(raw json.RawMessage) string {
-	var hits []ipc.ReferenceHit
-	if err := json.Unmarshal(raw, &hits); err != nil {
+	var r ipc.GetReferencesResult
+	if err := json.Unmarshal(raw, &r); err != nil {
 		return RawJSON(raw)
 	}
+	hits := r.Matches
 	if len(hits) == 0 {
+		if len(r.Hints) > 0 {
+			return "no references\nhints:\n  " + strings.Join(r.Hints, "\n  ")
+		}
 		return "no references"
 	}
 	var sb strings.Builder
@@ -22,8 +26,20 @@ func References(raw json.RawMessage) string {
 		if caller == "" {
 			caller = "-"
 		}
-		fmt.Fprintf(&sb, "%-40s  %s:%d  %s\n", caller, h.SrcPath, h.SrcLine, h.Kind)
+		// resolved = graph-linked; textual = name-match only. The tool
+		// description promises this flag — keep the MCP surface honest.
+		tag := "textual"
+		if h.Resolved {
+			tag = "resolved"
+		}
+		fmt.Fprintf(&sb, "%-40s  %s:%d  [%s/%s] -> %s\n",
+			caller, h.SrcPath, h.SrcLine, h.Kind, tag, h.DstName)
 	}
+	h := hits[0]
+	sb.WriteString(nextLine(
+		fmt.Sprintf("read a call site: read_focused(%q, focus=%q)", h.SrcPath, h.DstName),
+		fmt.Sprintf("transitive callers: impact_analysis(%q)", h.DstName),
+	))
 	return strings.TrimRight(sb.String(), "\n")
 }
 
@@ -81,7 +97,7 @@ func Impact(raw json.RawMessage) string {
 	fmt.Fprintf(&sb, "seed: %-50s  %-10s  %s:%d\n",
 		imp.Seed.Qualified, imp.Seed.Kind, imp.Seed.Path, imp.Seed.StartLine)
 	if len(imp.Hits) == 0 {
-		sb.WriteString("no callers found")
+		sb.WriteString("no callers found — if unexpected, stats shows this repo's unresolved-refs ratio")
 	} else {
 		sb.WriteString("\ncallers (transitive):\n")
 		for _, h := range imp.Hits {
@@ -104,7 +120,7 @@ func CriticalPath(raw json.RawMessage) string {
 	fmt.Fprintf(&sb, "from: %s  %s:%d\n", r.From.Qualified, r.From.Path, r.From.StartLine)
 	fmt.Fprintf(&sb, "to:   %s  %s:%d\n", r.To.Qualified, r.To.Path, r.To.StartLine)
 	if len(r.Paths) == 0 {
-		sb.WriteString("no path found")
+		sb.WriteString("no path found — paths follow *outbound* call edges from 'from'; try swapping from/to, or get_neighborhood on either end")
 	} else {
 		for i, path := range r.Paths {
 			fmt.Fprintf(&sb, "\npath %d:\n", i+1)

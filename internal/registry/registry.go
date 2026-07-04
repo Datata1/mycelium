@@ -56,7 +56,7 @@ var tools = []Tool{
 	{ipc.MethodStats, bind(statsHandler), render.Stats},
 	{ipc.MethodImpactAnalysis, bind((*service.Service).ImpactAnalysis), render.Impact},
 	{ipc.MethodCriticalPath, bind((*service.Service).CriticalPath), render.CriticalPath},
-	{ipc.MethodReadFocused, bind((*service.Service).ReadFocused), render.RawJSON},
+	{ipc.MethodReadFocused, bind((*service.Service).ReadFocused), render.FocusedRead},
 	{ipc.MethodFindDocumentKey, bind((*service.Service).FindDocumentKey), render.DocumentKey},
 }
 

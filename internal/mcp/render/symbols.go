@@ -36,6 +36,12 @@ func FindSymbol(raw json.RawMessage) string {
 		sb.WriteString(strings.Join(r.Hints, "\n  "))
 		sb.WriteByte('\n')
 	}
+	m := r.Matches[0]
+	sb.WriteString(nextLine(
+		fmt.Sprintf("callers: get_references(%q)", m.Qualified),
+		fmt.Sprintf("graph: get_neighborhood(%q)", m.Qualified),
+		fmt.Sprintf("read: read_focused(%q, focus=%q)", m.Path, m.Name),
+	))
 	return strings.TrimRight(sb.String(), "\n")
 }
 
