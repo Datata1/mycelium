@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -89,8 +90,10 @@ func (ix *Index) UpsertFile(ctx context.Context, tx *sql.Tx, path, language stri
 	}
 	if bytesEqual(existingHash, contentHash) {
 		// Even unchanged content can change project membership if the
-		// user restructured their workspace. Keep project_id current.
-		if _, err := tx.ExecContext(ctx, `UPDATE files SET project_id = ? WHERE id = ?`, proj, id); err != nil {
+		// user restructured their workspace. Keep project_id current —
+		// and mtime_ns, so a content-free touch doesn't read as "modified
+		// since indexing" in the doctor freshness check forever.
+		if _, err := tx.ExecContext(ctx, `UPDATE files SET project_id = ?, mtime_ns = ? WHERE id = ?`, proj, mtimeNS, id); err != nil {
 			return UpsertFileResult{}, fmt.Errorf("update file project: %w", err)
 		}
 		return UpsertFileResult{FileID: id, Changed: false, WasPresent: true}, nil
@@ -104,6 +107,72 @@ func (ix *Index) UpsertFile(ctx context.Context, tx *sql.Tx, path, language stri
 		return UpsertFileResult{}, fmt.Errorf("update file: %w", err)
 	}
 	return UpsertFileResult{FileID: id, Changed: true, WasPresent: true}, nil
+}
+
+// PruneFilesExcept deletes every files row whose path is not in keep and
+// returns how many rows were removed. FK cascades drop the file's symbols,
+// refs, and document entries. keep must be the complete union of every
+// path the current configuration walks — callers skip the prune entirely
+// when any walk failed, so a partial walk never masquerades as a mass
+// deletion.
+func (ix *Index) PruneFilesExcept(ctx context.Context, keep map[string]struct{}) (int, error) {
+	tx, err := ix.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin prune tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	rows, err := tx.QueryContext(ctx, `SELECT id, path FROM files`)
+	if err != nil {
+		return 0, fmt.Errorf("list files for prune: %w", err)
+	}
+	var stale []int64
+	for rows.Next() {
+		var id int64
+		var path string
+		if err := rows.Scan(&id, &path); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("scan file for prune: %w", err)
+		}
+		if _, ok := keep[path]; !ok {
+			stale = append(stale, id)
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	if len(stale) == 0 {
+		return 0, tx.Commit()
+	}
+
+	const chunk = 500
+	for start := 0; start < len(stale); start += chunk {
+		end := start + chunk
+		if end > len(stale) {
+			end = len(stale)
+		}
+		batch := stale[start:end]
+		placeholders := strings.Repeat("?,", len(batch)-1) + "?"
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM files WHERE id IN (`+placeholders+`)`, args...); err != nil {
+			return 0, fmt.Errorf("prune files: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return len(stale), nil
+}
+
+// SetMeta upserts one index_meta key/value pair.
+func (ix *Index) SetMeta(ctx context.Context, key, value string) error {
+	_, err := ix.db.ExecContext(ctx, `
+		INSERT INTO index_meta(key, value) VALUES(?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value)
+	return err
 }
 
 // ReplaceFileSymbols deletes all existing symbols for a file and inserts the
@@ -191,8 +260,8 @@ func (ix *Index) UpsertDocumentFile(ctx context.Context, tx *sql.Tx, path, kind 
 	}
 	if bytesEqual(existingHash, contentHash) {
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE files SET project_id = ?, document_kind = ? WHERE id = ?`,
-			proj, kind, id); err != nil {
+			`UPDATE files SET project_id = ?, document_kind = ?, mtime_ns = ? WHERE id = ?`,
+			proj, kind, mtimeNS, id); err != nil {
 			return UpsertFileResult{}, fmt.Errorf("update document file membership: %w", err)
 		}
 		return UpsertFileResult{FileID: id, Changed: false, WasPresent: true}, nil

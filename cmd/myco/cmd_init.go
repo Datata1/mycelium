@@ -141,14 +141,19 @@ func runWizard(yes, doctorAfter, gitExclude bool) error {
 	// ── Step 4: .gitignore ───────────────────────────────────────────
 	handleGitignore(root, yes, gitExclude)
 
-	// ── Step 5: git hook ─────────────────────────────────────────────
-	installed, err := hook.InstallPostCommit(root)
+	// ── Step 5: git hooks ────────────────────────────────────────────
+	installed, err := hook.InstallAll(root)
 	if err != nil {
 		wizard.Warn("git hook install failed: " + err.Error())
-	} else if installed {
-		wizard.Done("installed .git/hooks/post-commit")
+	} else if len(installed) > 0 {
+		wizard.Done("installed git hooks: " + strings.Join(installed, ", "))
+		if custom := gitHooksPathOverride(root); custom != "" {
+			wizard.Warn(fmt.Sprintf(
+				"git config core.hooksPath=%s — git will ignore .git/hooks, so these hooks won't fire; the daemon's catch-up scan still reconciles on restart",
+				custom))
+		}
 	} else {
-		wizard.Skip("git hook (not a git repo)")
+		wizard.Skip("git hooks (not a git repo)")
 	}
 
 	// ── Step 6: MCP client registration ──────────────────────────────
@@ -499,4 +504,17 @@ func tildeHome(p string) string {
 		return "~/" + p[len(home)+1:]
 	}
 	return p
+}
+
+// gitHooksPathOverride returns the value of git config core.hooksPath when
+// set (husky and friends redirect hooks there, making .git/hooks inert), or
+// "" when unset or git is unavailable.
+func gitHooksPathOverride(root string) string {
+	cmd := exec.Command("git", "config", "core.hooksPath")
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }

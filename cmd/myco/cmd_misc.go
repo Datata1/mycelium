@@ -24,19 +24,25 @@ func newHookCmd() *cobra.Command {
 		Use:   "hook",
 		Short: "Git hook integrations",
 	}
-	cmd.AddCommand(&cobra.Command{
-		Use:   "post-commit",
-		Short: "Reconcile the index after a commit (invoked by .git/hooks/post-commit)",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-			defer cancel()
-			rc, err := loadRepoCtx()
-			if err != nil {
-				return err
-			}
-			return hook.RunPostCommit(ctx, rc.AbsSocketPath())
-		},
-	})
+	for _, name := range hook.ManagedHooks {
+		cmd.AddCommand(&cobra.Command{
+			Use:   name,
+			Short: fmt.Sprintf("Reconcile the index (invoked by .git/hooks/%s)", name),
+			// Git passes hook-specific args (post-checkout: <old> <new>
+			// <flag>); every hook maps to the same full reconcile, so
+			// they are accepted and ignored.
+			Args: cobra.ArbitraryArgs,
+			RunE: func(cmd *cobra.Command, args []string) error {
+				ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+				defer cancel()
+				rc, err := loadRepoCtx()
+				if err != nil {
+					return err
+				}
+				return hook.Run(ctx, rc.AbsSocketPath())
+			},
+		})
+	}
 	return cmd
 }
 
@@ -183,27 +189,33 @@ func runUninstall(yes, dryRun, keepBinary, purge bool) error {
 		}
 	}
 
-	// ── Step 2: git post-commit hook ─────────────────────────────────
+	// ── Step 2: git hooks ────────────────────────────────────────────
 	if inRepo {
-		wizard.Step("Git post-commit hook…")
-		hookPath := filepath.Join(root, ".git", "hooks", "post-commit")
-		if _, err := os.Stat(hookPath); err == nil {
-			if wizard.YN("  Remove .git/hooks/post-commit (or restore .mycelium-backup)?", true, yes) {
+		wizard.Step("Git hooks…")
+		anyPresent := false
+		for _, name := range hook.ManagedHooks {
+			if _, err := os.Stat(filepath.Join(root, ".git", "hooks", name)); err == nil {
+				anyPresent = true
+				break
+			}
+		}
+		if anyPresent {
+			if wizard.YN("  Remove mycelium git hooks (or restore .mycelium-backup)?", true, yes) {
 				if dryRun {
-					wizard.Skip("(dry-run) would uninstall mycelium hook")
+					wizard.Skip("(dry-run) would uninstall mycelium hooks")
 				} else {
-					removed, err := hook.UninstallPostCommit(root)
+					removed, err := hook.UninstallAll(root)
 					if err != nil {
-						wizard.Warn("hook: " + err.Error())
-					} else if removed {
-						wizard.Done("removed (or restored backup of) post-commit hook")
+						wizard.Warn("hooks: " + err.Error())
+					} else if len(removed) > 0 {
+						wizard.Done("removed (or restored backup of) hooks: " + strings.Join(removed, ", "))
 					} else {
-						wizard.Skip("post-commit hook is not managed by mycelium — left untouched")
+						wizard.Skip("no hooks managed by mycelium — left untouched")
 					}
 				}
 			}
 		} else {
-			wizard.Skip("no .git/hooks/post-commit found")
+			wizard.Skip("no mycelium-managed git hooks found")
 		}
 	}
 

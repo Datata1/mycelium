@@ -44,8 +44,8 @@ func newIndexCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("scanned=%d changed=%d skipped=%d symbols=%d refs=%d duration=%s\n",
-				rep.FilesScanned, rep.FilesChanged, rep.FilesSkipped, rep.Symbols, rep.Refs, rep.Duration)
+			fmt.Printf("scanned=%d changed=%d skipped=%d pruned=%d symbols=%d refs=%d duration=%s\n",
+				rep.FilesScanned, rep.FilesChanged, rep.FilesSkipped, rep.FilesPruned, rep.Symbols, rep.Refs, rep.Duration)
 			if len(rep.Errors) > 0 {
 				fmt.Fprintf(os.Stderr, "errors (%d):\n", len(rep.Errors))
 				for _, e := range rep.Errors {

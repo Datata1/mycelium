@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strconv"
 	"sync"
 	"time"
 
@@ -65,6 +66,12 @@ type Pipeline struct {
 	// FileProjectFor maps an absolute path to its project_id. Populated at
 	// construction for the v1.5 workspace path; nil for single-project use.
 	FileProjectFor func(absPath string) int64
+
+	// runMu serializes RunOnce: reindex triggers (daemon catch-up, git
+	// hooks, watcher rescans) can fire concurrently — e.g. git pull runs
+	// post-checkout and post-merge back to back — and the prune pass must
+	// never interleave with another reconcile's walk.
+	runMu sync.Mutex
 }
 
 // Report summarizes a pipeline run.
@@ -78,17 +85,27 @@ type Report struct {
 	// changed entries (i18n JSON, package.json deps, go.mod requires).
 	// Stays 0 when Pipeline.Documents is nil.
 	Documents int
-	Duration  time.Duration
-	Errors    []error
+	// FilesPruned counts index rows deleted because their file no longer
+	// exists under any walked root — deletes and renames that happened
+	// while the daemon was down or whose watcher events were lost.
+	FilesPruned int
+	Duration    time.Duration
+	Errors      []error
 }
 
-// RunOnce walks, parses, and indexes every file the walker yields.
+// RunOnce walks, parses, and indexes every file the walker yields, then
+// prunes index rows for files no longer present under any walked root —
+// a full reconcile, so every trigger (daemon catch-up, git hooks, manual
+// `myco index`) self-heals both stale content and ghost rows.
 // Errors per file are collected but do not abort the run.
 //
 // Parsing is CPU-bound (tree-sitter in particular), so we fan it across a
 // worker pool. SQLite writes serialize through a single writer goroutine;
 // one transaction per file keeps error isolation on partial failures.
 func (p *Pipeline) RunOnce(ctx context.Context) (Report, error) {
+	p.runMu.Lock()
+	defer p.runMu.Unlock()
+
 	start := time.Now()
 	var rep Report
 
@@ -220,15 +237,44 @@ func (p *Pipeline) RunOnce(ctx context.Context) (Report, error) {
 	// specific include set (the symbol-side Include is language-scoped
 	// and doesn't usually let .json / go.mod through). The same
 	// excludes apply, so node_modules / dist / .git stay skipped.
+	walksComplete := true
+	keep := make(map[string]struct{}, len(files))
+	for _, f := range files {
+		keep[f.RelPath] = struct{}{}
+	}
 	if p.Documents != nil {
-		docs, docErrs := p.runDocuments(ctx)
+		docs, docFiles, docWalksOK, docErrs := p.runDocuments(ctx)
 		rep.Documents = docs
 		rep.Errors = append(rep.Errors, docErrs...)
+		walksComplete = docWalksOK
+		for _, f := range docFiles {
+			keep[f.RelPath] = struct{}{}
+		}
+	}
+
+	// Prune only when keep is the complete walked union: a failed walk or
+	// a cancelled run must never read as "everything was deleted". A file
+	// created between walk and prune can be deleted here; its watcher
+	// event re-adds it within the coalesce window.
+	if walksComplete && ctx.Err() == nil {
+		pruned, err := p.Index.PruneFilesExcept(ctx, keep)
+		if err != nil {
+			rep.Errors = append(rep.Errors, fmt.Errorf("prune: %w", err))
+		} else {
+			rep.FilesPruned = pruned
+			if err := p.Index.SetMeta(ctx, MetaLastFullScanAt, strconv.FormatInt(time.Now().Unix(), 10)); err != nil {
+				rep.Errors = append(rep.Errors, fmt.Errorf("record scan time: %w", err))
+			}
+		}
 	}
 
 	rep.Duration = time.Since(start)
 	return rep, nil
 }
+
+// MetaLastFullScanAt is the index_meta key holding the unix time of the
+// last completed reconcile (walk + upsert + prune).
+const MetaLastFullScanAt = "last_full_scan_at"
 
 // documentWalkIncludes are the glob patterns the v3.3 document pass
 // uses. Kept here (not in each parser's Supports) because we need
@@ -243,10 +289,13 @@ var documentWalkIncludes = []string{
 // then dispatches each matched file to the document registry. Files
 // also claimed by a symbol parser are skipped (symbol parsers own
 // the files row's language column).
-func (p *Pipeline) runDocuments(ctx context.Context) (int, []error) {
-	var count int
-	var errs []error
+//
+// The walked file list and walksOK feed RunOnce's prune pass: walked
+// paths must be kept, and a failed walk (walksOK=false) disables the
+// prune because the union would be incomplete.
+func (p *Pipeline) runDocuments(ctx context.Context) (count int, walked []repo.File, walksOK bool, errs []error) {
 	var documents []repo.File
+	walksOK = true
 
 	switch {
 	case len(p.Workspaces) > 0:
@@ -255,6 +304,7 @@ func (p *Pipeline) runDocuments(ctx context.Context) (int, []error) {
 			batch, err := dw.Walk()
 			if err != nil {
 				errs = append(errs, fmt.Errorf("walk documents project=%d: %w", ws.ProjectID, err))
+				walksOK = false
 				continue
 			}
 			for i := range batch {
@@ -266,7 +316,7 @@ func (p *Pipeline) runDocuments(ctx context.Context) (int, []error) {
 		dw := repo.NewWalker(p.Walker.Root, documentWalkIncludes, p.Walker.Exclude, p.Walker.MaxFileSizeKB)
 		batch, err := dw.Walk()
 		if err != nil {
-			return 0, []error{fmt.Errorf("walk documents: %w", err)}
+			return 0, nil, false, []error{fmt.Errorf("walk documents: %w", err)}
 		}
 		documents = batch
 	}
@@ -288,7 +338,7 @@ func (p *Pipeline) runDocuments(ctx context.Context) (int, []error) {
 			count++
 		}
 	}
-	return count, errs
+	return count, documents, walksOK, errs
 }
 
 // processDocumentFile reads + parses one document file and writes
@@ -333,6 +383,57 @@ func (p *Pipeline) processDocumentFile(ctx context.Context, dp parser.DocumentPa
 // errSkipped is an internal signal that a file had no parser; it never
 // leaves the RunOnce goroutine tree.
 var errSkipped = fmt.Errorf("skipped (no parser)")
+
+// WalkedPaths returns the rel-paths the current configuration would
+// index: symbol-walked files a registered parser claims, plus (when
+// Documents is set) document-walked files the document registry claims —
+// mirroring exactly which walked files RunOnce writes rows for. This is
+// the ground truth for doctor --deep's index diff. Read-only: no
+// parsing, no DB writes.
+func (p *Pipeline) WalkedPaths() (map[string]struct{}, error) {
+	out := map[string]struct{}{}
+	var roots []*repo.Walker
+	switch {
+	case len(p.Workspaces) > 0:
+		for _, ws := range p.Workspaces {
+			roots = append(roots, ws.Walker)
+		}
+	case p.Walker != nil:
+		roots = append(roots, p.Walker)
+	default:
+		return nil, fmt.Errorf("pipeline: neither Workspaces nor Walker configured")
+	}
+	for _, w := range roots {
+		batch, err := w.Walk()
+		if err != nil {
+			return nil, fmt.Errorf("walk: %w", err)
+		}
+		for _, f := range batch {
+			if p.Registry != nil && p.Registry.ForPath(f.RelPath) == nil {
+				continue
+			}
+			out[f.RelPath] = struct{}{}
+		}
+		if p.Documents == nil {
+			continue
+		}
+		dw := repo.NewWalker(w.Root, documentWalkIncludes, w.Exclude, w.MaxFileSizeKB)
+		docs, err := dw.Walk()
+		if err != nil {
+			return nil, fmt.Errorf("walk documents: %w", err)
+		}
+		for _, f := range docs {
+			if p.Registry != nil && p.Registry.ForPath(f.RelPath) != nil {
+				continue // symbol parsers own the row; counted above
+			}
+			if p.Documents.ForPath(f.RelPath) == nil {
+				continue
+			}
+			out[f.RelPath] = struct{}{}
+		}
+	}
+	return out, nil
+}
 
 // HandleChange processes a single file change from the watcher. The relative
 // path is looked up against the registered parsers; if none supports it, the
