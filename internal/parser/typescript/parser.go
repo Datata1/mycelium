@@ -320,8 +320,7 @@ func (ex *extractor) extractCalls(srcQualified string, scope *sitter.Node) {
 		// extraction via the top-level walk (for methods on the class).
 		// But do descend into arrow functions inside the enclosing scope so
 		// their calls are attributed to the outer symbol.
-		if n.Type() == "call_expression" {
-			fn := n.ChildByFieldName("function")
+		if fn := callTarget(n); fn != nil {
 			name := callName(ex.content, fn)
 			if name != "" {
 				sl, sc, _, _ := tsutil.Position(n)
@@ -336,6 +335,20 @@ func (ex *extractor) extractCalls(srcQualified string, scope *sitter.Node) {
 		}
 		return true
 	})
+}
+
+// callTarget returns the node naming what a call-like expression invokes:
+// the function of a call_expression, or the class of a new_expression
+// (`new Foo(...)` — constructor calls are references too, and in
+// class-heavy codebases often the only inbound edge a class has).
+func callTarget(n *sitter.Node) *sitter.Node {
+	switch n.Type() {
+	case "call_expression":
+		return n.ChildByFieldName("function")
+	case "new_expression":
+		return n.ChildByFieldName("constructor")
+	}
+	return nil
 }
 
 func callName(content []byte, fn *sitter.Node) string {

@@ -72,8 +72,8 @@ func (ix *Index) UpsertFile(ctx context.Context, tx *sql.Tx, path, language stri
 		proj = projectID
 	}
 	var id int64
-	var existingHash []byte
-	err := tx.QueryRowContext(ctx, `SELECT id, content_hash FROM files WHERE path = ?`, path).Scan(&id, &existingHash)
+	var existingHash, existingParseHash []byte
+	err := tx.QueryRowContext(ctx, `SELECT id, content_hash, parse_hash FROM files WHERE path = ?`, path).Scan(&id, &existingHash, &existingParseHash)
 	switch {
 	case err == sql.ErrNoRows:
 		res, insErr := tx.ExecContext(ctx, `
@@ -88,7 +88,10 @@ func (ix *Index) UpsertFile(ctx context.Context, tx *sql.Tx, path, language stri
 	case err != nil:
 		return UpsertFileResult{}, fmt.Errorf("select file: %w", err)
 	}
-	if bytesEqual(existingHash, contentHash) {
+	// parse_hash participates in the freshness check so a parser upgrade
+	// (new ref kinds, changed extraction) rewrites rows on the next full
+	// scan even though file contents are unchanged.
+	if bytesEqual(existingHash, contentHash) && bytesEqual(existingParseHash, parseHash) {
 		// Even unchanged content can change project membership if the
 		// user restructured their workspace. Keep project_id current —
 		// and mtime_ns, so a content-free touch doesn't read as "modified

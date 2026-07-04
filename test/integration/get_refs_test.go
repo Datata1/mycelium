@@ -115,4 +115,34 @@ func TestIntegration_GetReferences_ClassStaticMethods(t *testing.T) {
 			t.Errorf("expected a hit for CsEnv.empty() call; hits: %+v", hits)
 		}
 	})
+
+	// `new Templater(...)` in spec.ts is the only inbound edge the class has
+	// (no static factories, no method calls from elsewhere). Field-test
+	// regression: constructor calls were invisible because the parser only
+	// walked call_expression nodes, so get_references on a class that is
+	// merely instantiated returned nothing.
+	t.Run("constructor_call_via_new", func(t *testing.T) {
+		res, err := reader.GetReferences(ctx, "Templater", "", 20, nil)
+		if err != nil {
+			t.Fatalf("GetReferences: %v", err)
+		}
+		var hit *ipcHitCheck
+		for i := range res.Matches {
+			if strings.Contains(res.Matches[i].SrcPath, "spec.ts") {
+				hit = &ipcHitCheck{resolved: res.Matches[i].Resolved, dst: res.Matches[i].DstName}
+				break
+			}
+		}
+		if hit == nil {
+			t.Fatalf("expected a spec.ts reference for `new Templater(...)`; got %+v", res.Matches)
+		}
+		if !hit.resolved {
+			t.Errorf("expected the constructor ref to be resolved to env.Templater; got dst=%q resolved=false", hit.dst)
+		}
+	})
+}
+
+type ipcHitCheck struct {
+	resolved bool
+	dst      string
 }

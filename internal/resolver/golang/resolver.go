@@ -404,24 +404,44 @@ func (r *Resolver) ResolveFile(ctx context.Context, absPath string, pr *parser.P
 	type refKey struct {
 		line, col int
 		short     string
+		kind      parser.RefKind
 	}
 	callRefs := map[refKey]int{}
 	for i, ref := range pr.References {
-		if ref.Kind == parser.RefCall {
-			callRefs[refKey{ref.Line, ref.Col, lastSegment(ref.DstName)}] = i
+		if ref.Kind == parser.RefCall || ref.Kind == parser.RefTypeRef {
+			callRefs[refKey{ref.Line, ref.Col, lastSegment(ref.DstName), ref.Kind}] = i
 			total++
 		}
 	}
 
 	var rewrote, visited, missedPos int
 	ast.Inspect(file, func(n ast.Node) bool {
+		// Composite literals (Foo{} — parser kind type_ref) resolve through
+		// the same visit path as calls: stamp ResolverVersion, qualify the
+		// type via Uses so the SQL join lands on the struct symbol.
+		if cl, ok := n.(*ast.CompositeLit); ok {
+			pos := pkg.Fset.Position(cl.Pos())
+			key := refKey{pos.Line, pos.Column, lastSegment(parserCallName(cl.Type)), parser.RefTypeRef}
+			idx, ok := callRefs[key]
+			if !ok {
+				return true
+			}
+			pr.References[idx].ResolverVersion = ResolverVersion
+			visited++
+			resolved++
+			if qualified := qualifyTypeExpr(cl.Type, pkg.TypesInfo); qualified != "" {
+				pr.References[idx].DstName = qualified
+				rewrote++
+			}
+			return true
+		}
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
 		}
 		pos := pkg.Fset.Position(call.Pos())
 		parserName := parserCallName(call.Fun)
-		key := refKey{pos.Line, pos.Column, lastSegment(parserName)}
+		key := refKey{pos.Line, pos.Column, lastSegment(parserName), parser.RefCall}
 		idx, ok := callRefs[key]
 		if !ok {
 			missedPos++
@@ -513,6 +533,19 @@ func qualifyCall(call *ast.CallExpr, info *types.Info) string {
 		// Package-qualified call like `fmt.Println` — Selections is nil
 		// because it's not a *Selection; the Sel identifier is in Uses.
 		return qualifyObject(info.Uses[fn.Sel])
+	}
+	return ""
+}
+
+// qualifyTypeExpr resolves the type expression of a composite literal
+// (Foo{} or pkg.Foo{}) to its "pkg.Type" qualified form. Non-named forms
+// (array/map/elided literals) return "".
+func qualifyTypeExpr(t ast.Expr, info *types.Info) string {
+	switch tt := t.(type) {
+	case *ast.Ident:
+		return qualifyObject(info.Uses[tt])
+	case *ast.SelectorExpr:
+		return qualifyObject(info.Uses[tt.Sel])
 	}
 	return ""
 }

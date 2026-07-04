@@ -119,6 +119,18 @@ def helper():
 				{src: "conf.build", dst: "os.getenv", kind: parser.RefCall},
 			},
 		},
+		{
+			name: "class instantiation is a call",
+			src: `class Widget:
+    pass
+
+def make():
+    return Widget()
+`,
+			wantRefs: []refWant{
+				{src: "conf.make", dst: "Widget", kind: parser.RefCall},
+			},
+		},
 	}
 
 	p := New()

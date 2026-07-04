@@ -133,6 +133,26 @@ func local() {}
 				{src: "sample.report", dst: "local", kind: parser.RefCall},
 			},
 		},
+		{
+			name: "composite literal instantiations",
+			src: `package sample
+
+import "net/http"
+
+type widget struct{ n int }
+
+func build() *widget {
+	_ = http.Client{}
+	w := &widget{n: 1}
+	_ = []widget{{n: 2}}
+	return w
+}
+`,
+			wantRefs: []refWant{
+				{src: "sample.build", dst: "widget", kind: parser.RefTypeRef},
+				{src: "sample.build", dst: "http.Client", kind: parser.RefTypeRef},
+			},
+		},
 	}
 
 	p := New()

@@ -188,22 +188,39 @@ func extractCalls(fset *token.FileSet, srcQualified string, body *ast.BlockStmt)
 	}
 	var refs []parser.Reference
 	ast.Inspect(body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
+		switch x := n.(type) {
+		case *ast.CallExpr:
+			name := callTargetName(x.Fun)
+			if name == "" {
+				return true
+			}
+			pos := fset.Position(x.Pos())
+			refs = append(refs, parser.Reference{
+				SrcSymbolQualified: srcQualified,
+				DstName:            name,
+				Kind:               parser.RefCall,
+				Line:               pos.Line,
+				Col:                pos.Column,
+			})
+		case *ast.CompositeLit:
+			// Foo{...} / pkg.Foo{...} instantiations reference the type —
+			// often the only inbound edge a struct has. Elided element
+			// types ([]Foo{{...}}) have a nil Type and are skipped;
+			// generic instantiations (Foo[int]{}) yield "" from
+			// callTargetName and are skipped too.
+			name := callTargetName(x.Type)
+			if name == "" {
+				return true
+			}
+			pos := fset.Position(x.Pos())
+			refs = append(refs, parser.Reference{
+				SrcSymbolQualified: srcQualified,
+				DstName:            name,
+				Kind:               parser.RefTypeRef,
+				Line:               pos.Line,
+				Col:                pos.Column,
+			})
 		}
-		name := callTargetName(call.Fun)
-		if name == "" {
-			return true
-		}
-		pos := fset.Position(call.Pos())
-		refs = append(refs, parser.Reference{
-			SrcSymbolQualified: srcQualified,
-			DstName:            name,
-			Kind:               parser.RefCall,
-			Line:               pos.Line,
-			Col:                pos.Column,
-		})
 		return true
 	})
 	return refs

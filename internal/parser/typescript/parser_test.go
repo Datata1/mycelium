@@ -124,6 +124,28 @@ function helper(): void {}
 				{src: "widget.build", dst: "console.log", kind: parser.RefCall},
 			},
 		},
+		{
+			name: "constructor calls via new",
+			src: `import { Templater } from "./templater";
+import * as pkg from "./pkg";
+
+function build(): void {
+  const t = new Templater(new pkg.Options(), 3);
+  t.run();
+}
+
+class Local {}
+
+function makeLocal(): Local {
+  return new Local();
+}
+`,
+			wantRefs: []refWant{
+				{src: "widget.build", dst: "Templater", kind: parser.RefCall},
+				{src: "widget.build", dst: "pkg.Options", kind: parser.RefCall},
+				{src: "widget.makeLocal", dst: "Local", kind: parser.RefCall},
+			},
+		},
 	}
 
 	p := New()

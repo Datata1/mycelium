@@ -73,10 +73,16 @@ func (r *Resolver) ResolveFile(ctx context.Context, absPath string, pr *parser.P
 	}
 
 	tsutil.Walk(tree.RootNode(), func(n *sitter.Node) bool {
-		if n.Type() != "call_expression" {
-			return true
+		// Mirror of the parser's callTarget: call_expression resolves its
+		// function, new_expression its constructor. The (line, col, short)
+		// key below only matches when both sides visited the same node.
+		var fn *sitter.Node
+		switch n.Type() {
+		case "call_expression":
+			fn = n.ChildByFieldName("function")
+		case "new_expression":
+			fn = n.ChildByFieldName("constructor")
 		}
-		fn := n.ChildByFieldName("function")
 		if fn == nil {
 			return true
 		}

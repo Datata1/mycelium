@@ -21,3 +21,11 @@ export function getCsEnv(): string {
 export function setCsEnv(env: CsEnv): void {
     // no-op
 }
+
+export class Templater {
+    constructor(private readonly pattern: string) {}
+
+    render(): string {
+        return this.pattern;
+    }
+}

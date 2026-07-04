@@ -6,6 +6,32 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Instantiation references (field-test finding, 2026-07-04)
+
+First TS-monorepo session with the adoption telemetry showed
+`get_references` returning "no references" for a class with live
+callers — the agent lost trust and fell back to grep for the rest of
+the session. Root cause: only plain call expressions were indexed as
+references; instantiations were invisible.
+
+#### Added
+
+- TS parser + resolver: `new Foo(...)` constructor calls now emit
+  (and resolve) `call` references — in class-heavy codebases these
+  are often the only inbound edge a class has.
+- Go parser + resolver: composite literals (`Foo{...}`, `&pkg.Foo{...}`)
+  now emit `type_ref` references, type-qualified via `go/types`.
+  Elided element types (`[]Foo{{...}}`) and generic instantiations
+  are skipped. Python already covered instantiations (`Foo()` parses
+  as a call); a regression test now pins that.
+
+#### Changed
+
+- `UpsertFile` compares `parse_hash` in addition to `content_hash`,
+  so a parser upgrade rewrites symbol/ref rows for unchanged files on
+  the next full scan — no index wipe needed to pick up the new
+  reference kinds (`myco index` or any reconcile trigger suffices).
+
 ### CLI QoL & consistency (features workstream 07)
 
 #### Added
