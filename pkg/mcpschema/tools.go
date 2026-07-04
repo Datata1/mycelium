@@ -1,24 +1,74 @@
 package mcpschema
 
-// ProtocolVersion is the MCP spec version we implement. Update when bumping.
-const ProtocolVersion = "2024-11-05"
+// ProtocolVersion is the MCP spec version we prefer. 2025-03-26 added
+// tool annotations; nothing else in the delta is mandatory for a
+// tools-only stdio server. The server echoes a client's version when it
+// is in SupportedProtocolVersions, else answers with this one.
+const ProtocolVersion = "2025-03-26"
+
+// SupportedProtocolVersions are the spec revisions this server can talk.
+var SupportedProtocolVersions = []string{"2024-11-05", "2025-03-26", "2025-06-18"}
 
 // ServerName identifies the binary to MCP clients. Version is injected at
 // build time via cmd/myco/main.go and passed in by the caller — keeping it
 // here would require ldflags on this package too.
 const ServerName = "mycelium"
 
+// ToolAnnotations is the MCP 2025-03-26 annotations object. Every
+// mycelium tool is a read-only, idempotent query over the local index —
+// declaring that lets clients relax permission prompts and enables
+// auto-approval where the user allows it.
+type ToolAnnotations struct {
+	Title          string `json:"title,omitempty"`
+	ReadOnlyHint   bool   `json:"readOnlyHint"`
+	IdempotentHint bool   `json:"idempotentHint,omitempty"`
+	OpenWorldHint  *bool  `json:"openWorldHint,omitempty"`
+}
+
 // Tool is the subset of the MCP tool-definition shape we emit. MCP clients
 // (Claude Code, Cursor) use this for tool discovery + input validation.
 type Tool struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	InputSchema map[string]any `json:"inputSchema"`
+	Name        string           `json:"name"`
+	Description string           `json:"description"`
+	InputSchema map[string]any   `json:"inputSchema"`
+	Annotations *ToolAnnotations `json:"annotations,omitempty"`
+}
+
+// toolTitles are the human-readable names clients show in tool lists
+// and permission prompts. Keyed by Tool.Name; a parity test asserts
+// every tool has one.
+var toolTitles = map[string]string{
+	"find_symbol":       "Find symbol definition",
+	"get_references":    "List callers of a symbol",
+	"list_files":        "List indexed files",
+	"get_file_outline":  "Outline a file's symbols",
+	"search_lexical":    "Search file content (regex)",
+	"get_file_summary":  "Summarize a file",
+	"get_neighborhood":  "Walk the local call graph",
+	"impact_analysis":   "Find transitive callers",
+	"critical_path":     "Find call paths between symbols",
+	"read_focused":      "Read a file with focus filter",
+	"find_document_key": "Look up document keys (i18n, deps)",
+	"stats":             "Show index status",
 }
 
 // Tools returns the definitive tool list. Keep this in sync with the
 // handlers in internal/mcp.
 func Tools() []Tool {
+	ts := toolDefs()
+	no := false
+	for i := range ts {
+		ts[i].Annotations = &ToolAnnotations{
+			Title:          toolTitles[ts[i].Name],
+			ReadOnlyHint:   true, // nothing here writes
+			IdempotentHint: true, // repeat calls are safe
+			OpenWorldHint:  &no,  // local index only, no external world
+		}
+	}
+	return ts
+}
+
+func toolDefs() []Tool {
 	return []Tool{
 		{
 			Name:        "find_symbol",

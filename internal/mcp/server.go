@@ -63,7 +63,7 @@ func (s *Server) handle(ctx context.Context, enc *json.Encoder, req jsonrpcReque
 			v = "dev"
 		}
 		writeResult(enc, req.ID, map[string]any{
-			"protocolVersion": mcpschema.ProtocolVersion,
+			"protocolVersion": negotiateVersion(req.Params),
 			"capabilities": map[string]any{
 				"tools": map[string]any{},
 			},
@@ -128,6 +128,25 @@ func (s *Server) handleToolCall(ctx context.Context, enc *json.Encoder, req json
 }
 
 // --- JSON-RPC 2.0 envelope --------------------------------------------------
+
+// negotiateVersion implements MCP version negotiation: echo the
+// client's requested protocolVersion when we support it, otherwise
+// answer with our preferred version (the client disconnects if that is
+// incompatible for it). Absent/unparseable params get the preferred
+// version too.
+func negotiateVersion(params json.RawMessage) string {
+	var p struct {
+		ProtocolVersion string `json:"protocolVersion"`
+	}
+	if len(params) > 0 && json.Unmarshal(params, &p) == nil {
+		for _, v := range mcpschema.SupportedProtocolVersions {
+			if p.ProtocolVersion == v {
+				return v
+			}
+		}
+	}
+	return mcpschema.ProtocolVersion
+}
 
 type jsonrpcRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
