@@ -74,8 +74,9 @@ func (r *Reader) ReadFocused(ctx context.Context, repoRoot, path, focusQ string)
 		    OR (p.root IS NOT NULL AND ? = p.root || '/' || f.path)`, lookup, lookup,
 	).Scan(&fileID, &language, &dbPath, &projectRoot)
 	if errors.Is(err, sql.ErrNoRows) {
-		return out, notFound("file not in index: %s%s",
-			path, formatPathSuggestions(suggestPaths(ctx, r.db, path, 3)))
+		return out, notFound("file not in index: %s%s%s",
+			path, formatPathSuggestions(suggestPaths(ctx, r.db, path, 3)),
+			joinDiagnosis(r.diagnosePath(ctx, path)))
 	}
 	if err != nil {
 		return out, err

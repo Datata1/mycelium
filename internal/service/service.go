@@ -33,6 +33,12 @@ func NewReadOnly(ix *index.Index, repoRoot string, log *slog.Logger) *Service {
 	return &Service{reader: query.NewReader(ix.DB()), root: repoRoot, log: log}
 }
 
+// SetProbe attaches a filesystem probe (built from the indexing config)
+// so empty results and not-found errors explain WHY a path is missing —
+// excluded, wrong extension, oversize, or stale index. Optional; without
+// it, misses stay explanation-free.
+func (s *Service) SetProbe(p *query.FSProbe) { s.reader.SetProbe(p) }
+
 // resolveSince turns the optional git-ref string into a resolved path
 // list. Empty ref -> nil (unscoped). Git errors surface to the caller
 // rather than silently becoming an empty filter.
@@ -51,10 +57,10 @@ func (s *Service) FindSymbol(ctx context.Context, p ipc.FindSymbolParams) (ipc.F
 	return s.reader.FindSymbol(ctx, p.Name, p.Kind, p.Project, p.Limit, paths, p.Focus)
 }
 
-func (s *Service) GetReferences(ctx context.Context, p ipc.GetReferencesParams) ([]ipc.ReferenceHit, error) {
+func (s *Service) GetReferences(ctx context.Context, p ipc.GetReferencesParams) (ipc.GetReferencesResult, error) {
 	paths, err := s.resolveSince(ctx, p.Since)
 	if err != nil {
-		return nil, err
+		return ipc.GetReferencesResult{}, err
 	}
 	return s.reader.GetReferences(ctx, p.Target, p.Project, p.Limit, paths)
 }
@@ -83,10 +89,10 @@ func (s *Service) GetNeighborhood(ctx context.Context, p ipc.GetNeighborhoodPara
 	return s.reader.GetNeighborhood(ctx, p.Target, p.Project, p.Depth, dir, p.Focus)
 }
 
-func (s *Service) SearchLexical(ctx context.Context, p ipc.SearchLexicalParams) ([]ipc.LexicalHit, error) {
+func (s *Service) SearchLexical(ctx context.Context, p ipc.SearchLexicalParams) (ipc.SearchLexicalResult, error) {
 	paths, err := s.resolveSince(ctx, p.Since)
 	if err != nil {
-		return nil, err
+		return ipc.SearchLexicalResult{}, err
 	}
 	return s.reader.SearchLexical(ctx, p.Pattern, p.PathContains, p.Project, p.K, s.root, paths)
 }

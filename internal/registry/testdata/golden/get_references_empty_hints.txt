@@ -1,0 +1,3 @@
+no references
+hints:
+  no symbol or reference named "Logn" in the index — find_symbol("Logn") does substring matching and catches qualified forms; check spelling/qualification

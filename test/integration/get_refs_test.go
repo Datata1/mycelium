@@ -53,10 +53,11 @@ func TestIntegration_GetReferences_ClassStaticMethods(t *testing.T) {
 
 	// getCsEnv() is a plain function call — should always work.
 	t.Run("direct_function_call", func(t *testing.T) {
-		hits, err := reader.GetReferences(ctx, "getCsEnv", "", 20, nil)
+		res, err := reader.GetReferences(ctx, "getCsEnv", "", 20, nil)
 		if err != nil {
 			t.Fatalf("GetReferences: %v", err)
 		}
+		hits := res.Matches
 		if len(hits) == 0 {
 			t.Fatal("expected at least one reference to getCsEnv; got 0")
 		}
@@ -74,10 +75,11 @@ func TestIntegration_GetReferences_ClassStaticMethods(t *testing.T) {
 
 	// setCsEnv() is a plain function call — should always work.
 	t.Run("direct_function_call_setCsEnv", func(t *testing.T) {
-		hits, err := reader.GetReferences(ctx, "setCsEnv", "", 20, nil)
+		res, err := reader.GetReferences(ctx, "setCsEnv", "", 20, nil)
 		if err != nil {
 			t.Fatalf("GetReferences: %v", err)
 		}
+		hits := res.Matches
 		if len(hits) == 0 {
 			t.Fatal("expected at least one reference to setCsEnv; got 0")
 		}
@@ -88,10 +90,11 @@ func TestIntegration_GetReferences_ClassStaticMethods(t *testing.T) {
 	// not to the class symbol ("env.CsEnv"). get_references("CsEnv") must
 	// therefore also include child-symbol IDs so it finds these calls.
 	t.Run("class_static_method_calls_visible_via_class_name", func(t *testing.T) {
-		hits, err := reader.GetReferences(ctx, "CsEnv", "", 20, nil)
+		res, err := reader.GetReferences(ctx, "CsEnv", "", 20, nil)
 		if err != nil {
 			t.Fatalf("GetReferences: %v", err)
 		}
+		hits := res.Matches
 		if len(hits) == 0 {
 			t.Fatal("expected references to CsEnv (via CsEnv.from/CsEnv.empty calls); got 0 — " +
 				"symbolsByTarget must include child method symbols when parent class is the target")

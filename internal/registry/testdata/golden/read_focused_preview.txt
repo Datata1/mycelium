@@ -1,0 +1,9 @@
+internal/auth/service.go  (no focus)  expanded 9/9 symbols  0.5KB/6.1KB
+package auth
+
+import (
+	"context"
+)
+---
+expanded: AuthService :20-90
+hint: Preview only — first 50 of 240 lines shown. Pass focus=<query> (e.g. focus="Login") to filter to what you need.

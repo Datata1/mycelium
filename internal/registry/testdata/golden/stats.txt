@@ -1,6 +1,9 @@
 files: 120  symbols: 1450  refs: 5200 (4900 resolved, 42 unresolved)
+unresolved_ratio: 0.9% (42/4600 non-import refs; 358 known-external, 4200 type-resolved)
 by_language: go: 90  python: 10  typescript: 20
-last_scan: 2026-01-02T15:04:05Z  db: 4.0 MB
+documents: go.mod: 1  json: 40
+interface_edges: 12 (from 7 concrete types)
+last_scan: 2026-01-02T15:04:05Z  last_reconcile: 2026-01-02T15:10:00Z  db: 4.0 MB
 projects:
   backend                         80 files  root: services/backend
   frontend                        40 files  root: apps/web

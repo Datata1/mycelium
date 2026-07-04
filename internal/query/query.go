@@ -21,6 +21,10 @@ type Reader struct {
 	// on the no-focus preview path. Tunable via SetReadPreviewLines so
 	// tests can shrink it without a multi-hundred-line fixture.
 	readPreviewLines int
+	// probe, when set via SetProbe, lets empty results explain why a
+	// path is absent (excluded / wrong extension / stale index). Nil
+	// disables path diagnosis.
+	probe *FSProbe
 }
 
 // DefaultReadPreviewLines is the v4-calibrated no-focus preview cap: it
@@ -164,22 +168,28 @@ func applyFocusToHits(tokens []string, hits []SymbolHit) []SymbolHit {
 // by qualified name (preferred) or short name. project filters to a single
 // workspace project when non-empty. pathsIn (v1.6) scopes the src file
 // path via the --since filter.
-func (r *Reader) GetReferences(ctx context.Context, target, project string, limit int, pathsIn []string) ([]ReferenceHit, error) {
+//
+// Empty Matches carry Hints distinguishing "unknown symbol" from
+// "symbol exists but nothing references it" — without them, "no
+// references" reads as "nobody calls this", the most misleading empty
+// in the product.
+func (r *Reader) GetReferences(ctx context.Context, target, project string, limit int, pathsIn []string) (GetReferencesResult, error) {
+	res := GetReferencesResult{Matches: []ReferenceHit{}}
 	if limit <= 0 {
 		limit = 100
 	}
 	scope, scopeArgs, err := r.projectScope(ctx, project)
 	if err != nil {
-		return nil, err
+		return res, err
 	}
 	pathClause, pathArgs, err := pathsInClause(pathsIn)
 	if err != nil {
-		return nil, err
+		return res, err
 	}
 	// Resolve target -> symbol ids (may be >1 for ambiguous short names).
 	ids, err := r.symbolsByTarget(ctx, target)
 	if err != nil {
-		return nil, err
+		return res, err
 	}
 	var hits []ReferenceHit
 
@@ -206,11 +216,11 @@ func (r *Reader) GetReferences(ctx context.Context, target, project string, limi
 			ORDER BY f.path, r.line
 			LIMIT ?`, args...)
 		if err != nil {
-			return nil, err
+			return res, err
 		}
 		hits, err = scanReferenceHits(rows, hits)
 		if err != nil {
-			return nil, err
+			return res, err
 		}
 	}
 
@@ -235,15 +245,24 @@ func (r *Reader) GetReferences(ctx context.Context, target, project string, limi
 			ORDER BY f.path, r.line
 			LIMIT ?`, args...)
 		if err != nil {
-			return nil, err
+			return res, err
 		}
 		hits, err = scanReferenceHits(rows, hits)
 		if err != nil {
-			return nil, err
+			return res, err
 		}
 	}
 
-	return hits, nil
+	if hits != nil {
+		res.Matches = hits
+	}
+	if len(res.Matches) == 0 && project == "" && pathsIn == nil {
+		// Explain the miss only when no filter could be the cause —
+		// filtered empties are usually the filter, not the symbol.
+		_, hasScan, _ := r.LastFullScanAt(ctx)
+		res.Hints = buildRefsHints(target, len(ids), !hasScan)
+	}
+	return res, nil
 }
 
 // symbolsByTarget resolves a target name to symbol IDs for use in the
@@ -426,6 +445,23 @@ func (r *Reader) GetFileOutline(ctx context.Context, path, focusQ string) ([]Fil
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+
+	// Zero symbols: distinguish "file not indexed" (error with
+	// suggestions + probe diagnosis) from "file indexed but symbol-free"
+	// (legitimate empty) — the bare empty was indistinguishable and read
+	// as tool failure.
+	if len(order) == 0 {
+		var n int
+		if err := r.db.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM files f LEFT JOIN projects p ON p.id = f.project_id
+			WHERE f.path = ? OR (p.root IS NOT NULL AND ? = p.root || '/' || f.path)`,
+			path, path).Scan(&n); err == nil && n == 0 {
+			return nil, notFound("file not in index: %s%s%s",
+				path, formatPathSuggestions(suggestPaths(ctx, r.db, path, 3)),
+				joinDiagnosis(r.diagnosePath(ctx, path)))
+		}
+		return nil, nil
 	}
 
 	var out []FileOutlineItem
@@ -663,6 +699,9 @@ func (r *Reader) Stats(ctx context.Context) (Stats, error) {
 	var ts sql.NullInt64
 	if err := r.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(last_indexed_at), 0) FROM files`).Scan(&ts); err == nil && ts.Valid && ts.Int64 > 0 {
 		s.LastScan = time.Unix(ts.Int64, 0)
+	}
+	if t, ok, err := r.LastFullScanAt(ctx); err == nil && ok {
+		s.LastFullScan = t
 	}
 	return s, nil
 }

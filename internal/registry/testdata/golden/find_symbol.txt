@@ -2,3 +2,4 @@ AuthService.Login                                   method      internal/auth/se
   func (s *AuthService) Login(ctx context.Context, creds Credentials) (*Session, error)
   Login authenticates a user and mints a session.
 handlers.Login                                      function    internal/http/handlers/login.go:15-40
+next: callers: get_references("AuthService.Login") · graph: get_neighborhood("AuthService.Login") · read: read_focused("internal/auth/service.go", focus="Login")

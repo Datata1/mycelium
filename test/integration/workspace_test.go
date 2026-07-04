@@ -179,10 +179,11 @@ func TestIntegration_WorkspaceMode(t *testing.T) {
 	})
 
 	t.Run("search_lexical_reads_workspace_files", func(t *testing.T) {
-		hits, err := reader.SearchLexical(ctx, "APIOnlySymbol", "", "", 10, dst, nil)
+		res, err := reader.SearchLexical(ctx, "APIOnlySymbol", "", "", 10, dst, nil)
 		if err != nil {
 			t.Fatalf("SearchLexical: %v", err)
 		}
+		hits := res.Matches
 		if len(hits) == 0 {
 			t.Fatalf("expected at least one APIOnlySymbol match; got 0 (likely the silent-skip path bug)")
 		}
@@ -203,20 +204,22 @@ func TestIntegration_WorkspaceMode(t *testing.T) {
 	// (filter against f.path only), so an agent narrowing a search to
 	// "services/api" got zero hits even though server.go was indexed.
 	t.Run("search_lexical_path_contains_accepts_repo_relative", func(t *testing.T) {
-		hits, err := reader.SearchLexical(ctx, "APIOnlySymbol", "services/api", "", 10, dst, nil)
+		res, err := reader.SearchLexical(ctx, "APIOnlySymbol", "services/api", "", 10, dst, nil)
 		if err != nil {
 			t.Fatalf("SearchLexical with repo-relative path_contains: %v", err)
 		}
+		hits := res.Matches
 		if len(hits) == 0 {
 			t.Errorf("expected hits when filtering by repo-relative substring; got 0")
 		}
 	})
 
 	t.Run("search_lexical_path_contains_accepts_project_relative", func(t *testing.T) {
-		hits, err := reader.SearchLexical(ctx, "APIOnlySymbol", "server.go", "", 10, dst, nil)
+		res, err := reader.SearchLexical(ctx, "APIOnlySymbol", "server.go", "", 10, dst, nil)
 		if err != nil {
 			t.Fatalf("SearchLexical with project-relative path_contains: %v", err)
 		}
+		hits := res.Matches
 		if len(hits) == 0 {
 			t.Errorf("expected hits when filtering by project-relative substring; got 0")
 		}
@@ -271,10 +274,11 @@ func TestIntegration_WorkspaceMode(t *testing.T) {
 	})
 
 	t.Run("lexical_hit_carries_project", func(t *testing.T) {
-		hits, err := reader.SearchLexical(ctx, "APIOnlySymbol", "", "", 10, dst, nil)
+		res, err := reader.SearchLexical(ctx, "APIOnlySymbol", "", "", 10, dst, nil)
 		if err != nil {
 			t.Fatalf("SearchLexical: %v", err)
 		}
+		hits := res.Matches
 		if len(hits) == 0 {
 			t.Fatalf("expected at least one hit")
 		}

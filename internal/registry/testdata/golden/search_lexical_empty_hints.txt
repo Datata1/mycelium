@@ -1,0 +1,4 @@
+no matches
+hints:
+  if "AuthServcie" is a symbol name, find_symbol("AuthServcie") searches the code graph and catches qualified forms/renames — search_lexical only sees literal text
+  2 indexed file(s) missing on disk — the index is stale; is the daemon running? `myco index` reconciles

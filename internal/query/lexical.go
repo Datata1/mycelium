@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // SearchLexical does a ripgrep-style scan of every indexed file. Pattern is
@@ -24,7 +25,13 @@ import (
 //
 // pathsIn (v1.6) is the `--since` path filter. nil = unscoped; empty =
 // zero hits (no candidate files).
-func (r *Reader) SearchLexical(ctx context.Context, pattern, pathContains, project string, k int, repoRoot string, pathsIn []string) ([]LexicalHit, error) {
+//
+// Empty Matches carry Hints when the reader can explain or redirect:
+// identifier-shaped patterns get a find_symbol pointer, and candidate
+// files missing on disk surface as a staleness warning instead of the
+// previous stderr-only log.
+func (r *Reader) SearchLexical(ctx context.Context, pattern, pathContains, project string, k int, repoRoot string, pathsIn []string) (SearchLexicalResult, error) {
+	res := SearchLexicalResult{Matches: []LexicalHit{}}
 	if k <= 0 {
 		k = 50
 	}
@@ -34,11 +41,11 @@ func (r *Reader) SearchLexical(ctx context.Context, pattern, pathContains, proje
 		// agents typing `WorkspacePlan|plans` should know whether the
 		// engine takes Go regexp syntax (it does — `|` is alternation,
 		// `.` is any-char, etc.) versus a literal-string surface.
-		return []LexicalHit{}, fmt.Errorf("compile pattern %q: %w (Go regexp syntax: |, ., [], (?i), etc. all supported; use regexp.QuoteMeta-style escaping for literal strings)", pattern, err)
+		return res, fmt.Errorf("compile pattern %q: %w (Go regexp syntax: |, ., [], (?i), etc. all supported; use regexp.QuoteMeta-style escaping for literal strings)", pattern, err)
 	}
 	paths, err := r.candidatePaths(ctx, pathContains, project, pathsIn)
 	if err != nil {
-		return []LexicalHit{}, err
+		return res, err
 	}
 	// When the caller's path_contains filter eliminates every indexed
 	// file, the worker pool would silently return zero hits and the
@@ -46,8 +53,12 @@ func (r *Reader) SearchLexical(ctx context.Context, pattern, pathContains, proje
 	// files." Surface it as an explicit error with basename-match
 	// suggestions so the agent can correct the filter on the next call.
 	if pathContains != "" && len(paths) == 0 {
-		return []LexicalHit{}, fmt.Errorf("no indexed files match path_contains=%q (try a different substring or omit the filter)%s",
-			pathContains, formatPathSuggestions(suggestPaths(ctx, r.db, pathContains, 3)))
+		diag := ""
+		if lines := r.diagnosePath(ctx, pathContains); len(lines) > 0 {
+			diag = "\n" + strings.Join(lines, "\n")
+		}
+		return res, fmt.Errorf("no indexed files match path_contains=%q (try a different substring or omit the filter)%s%s",
+			pathContains, formatPathSuggestions(suggestPaths(ctx, r.db, pathContains, 3)), diag)
 	}
 
 	// Bounded worker pool. Four concurrent file reads is a good balance for
@@ -57,6 +68,7 @@ func (r *Reader) SearchLexical(ctx context.Context, pattern, pathContains, proje
 	jobs := make(chan candidatePath)
 	hitsCh := make(chan LexicalHit, 64)
 	var wg sync.WaitGroup
+	var missingOnDisk atomic.Int64
 
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
@@ -66,12 +78,12 @@ func (r *Reader) SearchLexical(ctx context.Context, pattern, pathContains, proje
 				abs := filepath.Join(repoRoot, j.projectRoot, j.rel)
 				if err := scanFile(ctx, abs, j.rel, j.projectName, re, hitsCh); err != nil {
 					// ENOENT means the index is stale or the path
-					// reconstruction is wrong — both are bugs the
+					// reconstruction is wrong — both are things the
 					// caller should know about, not silently empty
-					// results. Log to stderr so daemon logs surface
-					// it; keep going so a single bad file doesn't
-					// break the whole search.
+					// results. Counted into the result hints; also
+					// logged so daemon logs keep the exact path.
 					if errors.Is(err, fs.ErrNotExist) {
+						missingOnDisk.Add(1)
 						fmt.Fprintf(os.Stderr,
 							"[search_lexical] file in index but not on disk: %s\n", abs)
 					}
@@ -106,22 +118,29 @@ func (r *Reader) SearchLexical(ctx context.Context, pattern, pathContains, proje
 			break
 		}
 	}
+	res.Matches = hits
 	if ctx.Err() != nil {
-		return hits, ctx.Err()
+		return res, ctx.Err()
 	}
 	// v4 T3: log a daemon-side hint when path_contains narrowed the
-	// candidate set but no hits surfaced — turns silent zero-results
-	// into a debuggable signal in `myco daemon` logs without changing
-	// the wire shape. The empty-slice return (instead of nil) means
-	// JSON consumers see `[]`, not `null`, so "0 hits" is
-	// distinguishable from "this tool returned nothing meaningful".
+	// candidate set but no hits surfaced. Kept alongside the wire hints
+	// so daemon logs still tell the story.
 	if pathContains != "" && len(hits) == 0 {
 		fmt.Fprintf(os.Stderr,
 			"[search_lexical] 0 hits for pattern=%q in %d files matching path_contains=%q — try widening the path filter or simplifying the pattern\n",
 			pattern, len(paths), pathContains)
 	}
-	return hits, nil
+	if len(hits) == 0 {
+		res.Hints = buildLexicalHints(pattern, identifierShaped(pattern), int(missingOnDisk.Load()))
+	}
+	return res, nil
 }
+
+// identifierShapedRE matches patterns that look like a symbol name
+// (possibly dotted/qualified) rather than a regex or literal phrase.
+var identifierShapedRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.]*$`)
+
+func identifierShaped(pattern string) bool { return identifierShapedRE.MatchString(pattern) }
 
 // candidatePath pairs the index-stored path (project-relative in
 // workspace mode) with the project root that needs to prefix it on

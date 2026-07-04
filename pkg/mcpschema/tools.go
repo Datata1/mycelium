@@ -56,7 +56,7 @@ func Tools() []Tool {
 		},
 		{
 			Name:        "get_references",
-			Description: "List the call-sites, imports, and other uses of a symbol. Reach for this when answering 'who calls X?' or 'where is X used?' — it's faster and more accurate than string-searching the symbol's name because it knows about resolved vs. textual refs and won't false-match on string literals or comments. Each hit is flagged resolved (graph-linked) or textual (name-match only). Pass a qualified name (e.g. `pkg.Type.Method`) when you have one — it disambiguates better than the short name. Each hit's `src_path` + `src_project` can be passed verbatim to `read_focused` / `get_file_outline` to read the caller's file.",
+			Description: "List the call-sites, imports, and other uses of a symbol. Reach for this when answering 'who calls X?' or 'where is X used?' — it's faster and more accurate than string-searching the symbol's name because it knows about resolved vs. textual refs and won't false-match on string literals or comments. Each hit is flagged resolved (graph-linked) or textual (name-match only). Pass a qualified name (e.g. `pkg.Type.Method`) when you have one — it disambiguates better than the short name. Each hit's `src_path` + `src_project` can be passed verbatim to `read_focused` / `get_file_outline` to read the caller's file. Empty `matches` may include `hints` distinguishing an unknown symbol from a symbol that simply has no indexed references.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -129,7 +129,7 @@ func Tools() []Tool {
 		},
 		{
 			Name:        "search_lexical",
-			Description: "Ripgrep-style regex/substring search over indexed file content. Use this **only** for literal strings or regex patterns — log messages, error formats, magic constants, route literals. For symbol navigation prefer `find_symbol`; for 'who calls X' prefer `get_references`. Treating this as a general-purpose code search is a known anti-pattern: it returns text matches with no graph awareness, so refactors and renames mislead it. Each hit carries `path` + `project` for `read_focused` follow-ups.",
+			Description: "Ripgrep-style regex/substring search over indexed file content. Use this **only** for literal strings or regex patterns — log messages, error formats, magic constants, route literals. For symbol navigation prefer `find_symbol`; for 'who calls X' prefer `get_references`. Treating this as a general-purpose code search is a known anti-pattern: it returns text matches with no graph awareness, so refactors and renames mislead it. Each hit carries `path` + `project` for `read_focused` follow-ups. Empty `matches` may include `hints` (e.g. identifier-shaped pattern → use find_symbol; indexed files missing on disk → stale index).",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

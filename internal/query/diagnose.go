@@ -42,7 +42,14 @@ func (r *Reader) diagnoseEmptyFind(ctx context.Context, name, kind, project stri
 		}
 	}
 
-	return buildFindHints(in)
+	hints := buildFindHints(in)
+	// A miss on an index that never completed a reconcile is more
+	// likely staleness than a missing symbol — say so rather than let
+	// the agent conclude "not in this repo" and fall back to grep.
+	if _, ok, err := r.LastFullScanAt(ctx); err == nil && !ok {
+		hints = append(hints, "index has never completed a full reconcile — run `myco index` or start `myco daemon`")
+	}
+	return hints
 }
 
 func (r *Reader) projectExists(ctx context.Context, name string) (bool, error) {

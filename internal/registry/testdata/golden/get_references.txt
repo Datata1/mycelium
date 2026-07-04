@@ -1,2 +1,3 @@
-handlers.Login                            internal/http/handlers/login.go:28  call
--                                         internal/auth/service_test.go:55  call
+handlers.Login                            internal/http/handlers/login.go:28  [call/resolved] -> Login
+-                                         internal/auth/service_test.go:55  [call/textual] -> Login
+next: read a call site: read_focused("internal/http/handlers/login.go", focus="Login") · transitive callers: impact_analysis("Login")

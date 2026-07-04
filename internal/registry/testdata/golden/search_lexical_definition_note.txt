@@ -1,0 +1,2 @@
+internal/auth/service.go:42:	func (s *AuthService) Login(ctx context.Context, creds Credentials) (*Session, error) {
+note: "Login" looks like a symbol definition — find_symbol("Login") gives the definition; get_references("Login") lists callers.

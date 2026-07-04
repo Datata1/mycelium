@@ -170,10 +170,11 @@ func TestIntegration_IndexAndQuery(t *testing.T) {
 	})
 
 	t.Run("get_references_go", func(t *testing.T) {
-		hits, err := reader.GetReferences(ctx, "NewGreeter", "", 20, nil)
+		res, err := reader.GetReferences(ctx, "NewGreeter", "", 20, nil)
 		if err != nil {
 			t.Fatalf("get_references: %v", err)
 		}
+		hits := res.Matches
 		if len(hits) == 0 {
 			t.Fatalf("expected at least one reference to NewGreeter")
 		}
@@ -308,10 +309,11 @@ func TestIntegration_IndexAndQuery(t *testing.T) {
 	})
 
 	t.Run("search_lexical", func(t *testing.T) {
-		hits, err := reader.SearchLexical(ctx, `Hola`, "", "", 10, dst, nil)
+		res, err := reader.SearchLexical(ctx, `Hola`, "", "", 10, dst, nil)
 		if err != nil {
 			t.Fatalf("lexical: %v", err)
 		}
+		hits := res.Matches
 		if len(hits) == 0 {
 			t.Fatalf("expected hit for 'Hola'")
 		}
@@ -321,10 +323,11 @@ func TestIntegration_IndexAndQuery(t *testing.T) {
 	})
 
 	t.Run("v1.3_ts_this_method_resolution", func(t *testing.T) {
-		hits, err := reader.GetReferences(ctx, "auth.AuthService.fingerprint", "", 10, nil)
+		res, err := reader.GetReferences(ctx, "auth.AuthService.fingerprint", "", 10, nil)
 		if err != nil {
 			t.Fatalf("refs: %v", err)
 		}
+		hits := res.Matches
 		found := false
 		for _, h := range hits {
 			if h.Resolved && strings.Contains(h.SrcPath, "auth.ts") {
@@ -338,10 +341,11 @@ func TestIntegration_IndexAndQuery(t *testing.T) {
 	})
 
 	t.Run("v1.3_python_self_method_resolution", func(t *testing.T) {
-		hits, err := reader.GetReferences(ctx, "worker.JobQueue.dequeue", "", 10, nil)
+		res, err := reader.GetReferences(ctx, "worker.JobQueue.dequeue", "", 10, nil)
 		if err != nil {
 			t.Fatalf("refs: %v", err)
 		}
+		hits := res.Matches
 		found := false
 		for _, h := range hits {
 			if h.Resolved && strings.Contains(h.SrcPath, "worker.py") {

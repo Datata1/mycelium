@@ -1,0 +1,1 @@
+index is empty — run `myco index` or start `myco daemon`

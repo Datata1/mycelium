@@ -6,8 +6,10 @@ import (
 	"errors"
 )
 
-// GetFileSummary returns the summary for one file. If the file is not in the
-// index, returns a FileSummary with Path set and other fields zero.
+// GetFileSummary returns the summary for one file. An unindexed path is
+// an error carrying "did you mean" suggestions and (when a probe is
+// attached) the reason the file is absent — previously it returned a
+// zero-value summary, indistinguishable from an empty file.
 func (r *Reader) GetFileSummary(ctx context.Context, path string) (FileSummary, error) {
 	s := FileSummary{Path: path, ByKind: map[string]int{}}
 
@@ -19,7 +21,9 @@ func (r *Reader) GetFileSummary(ctx context.Context, path string) (FileSummary, 
 		    OR (p.root IS NOT NULL AND ? = p.root || '/' || f.path)`, path, path,
 	).Scan(&fileID, &s.Language, &s.Project)
 	if errors.Is(err, sql.ErrNoRows) {
-		return s, nil
+		return s, notFound("file not in index: %s%s%s",
+			path, formatPathSuggestions(suggestPaths(ctx, r.db, path, 3)),
+			joinDiagnosis(r.diagnosePath(ctx, path)))
 	}
 	if err != nil {
 		return s, err

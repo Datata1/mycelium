@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/datata1/mycelium/internal/ipc"
+	"github.com/datata1/mycelium/internal/query"
 	"github.com/datata1/mycelium/internal/service"
 )
 
@@ -200,7 +201,20 @@ func callRead[P, R any](ctx context.Context, rc repoCtx, method ipc.Method, para
 		return out, err
 	}
 	defer ix.Close()
-	return local(service.NewReadOnly(ix, rc.Root, nil), ctx, params)
+	svc := service.NewReadOnly(ix, rc.Root, nil)
+	svc.SetProbe(probeFromConfig(rc))
+	return local(svc, ctx, params)
+}
+
+// probeFromConfig builds the FSProbe that lets empty results explain why
+// a path is missing (excluded / wrong extension / oversize / stale).
+func probeFromConfig(rc repoCtx) *query.FSProbe {
+	return &query.FSProbe{
+		Root:          rc.Root,
+		Include:       rc.Cfg.Include,
+		Exclude:       rc.Cfg.Exclude,
+		MaxFileSizeKB: rc.Cfg.Index.MaxFileSizeKB,
+	}
 }
 
 // newTopLevelFindCmd is a v4 T6 ergonomics alias: `myco find` delegates
@@ -284,17 +298,20 @@ func runQueryRefs(ctx context.Context, target, project, since string, limit int)
 	if err != nil {
 		return err
 	}
-	hits, err := callRead(ctx, rc, ipc.MethodGetReferences,
+	res, err := callRead(ctx, rc, ipc.MethodGetReferences,
 		ipc.GetReferencesParams{Target: target, Project: project, Since: since, Limit: limit},
 		(*service.Service).GetReferences)
 	if err != nil {
 		return err
 	}
-	if len(hits) == 0 {
+	if len(res.Matches) == 0 {
 		fmt.Fprintln(os.Stderr, "no references")
+		for _, h := range res.Hints {
+			fmt.Fprintln(os.Stderr, "hint:", h)
+		}
 		return nil
 	}
-	for _, h := range hits {
+	for _, h := range res.Matches {
 		tag := "resolved"
 		if !h.Resolved {
 			tag = "textual"
@@ -330,14 +347,17 @@ func runQueryLexical(ctx context.Context, pattern, pathContains, project, since 
 	if err != nil {
 		return err
 	}
-	hits, err := callRead(ctx, rc, ipc.MethodSearchLexical,
+	res, err := callRead(ctx, rc, ipc.MethodSearchLexical,
 		ipc.SearchLexicalParams{Pattern: pattern, PathContains: pathContains, Project: project, Since: since, K: k},
 		(*service.Service).SearchLexical)
 	if err != nil {
 		return err
 	}
-	for _, h := range hits {
+	for _, h := range res.Matches {
 		fmt.Printf("%s:%d  %s\n", h.Path, h.Line, truncate(h.Snippet, 160))
+	}
+	for _, h := range res.Hints {
+		fmt.Fprintln(os.Stderr, "hint:", h)
 	}
 	return nil
 }

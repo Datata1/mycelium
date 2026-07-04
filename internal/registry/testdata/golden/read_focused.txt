@@ -1,0 +1,7 @@
+internal/auth/service.go  (focus: "Login")  expanded 2/9 symbols  1.2KB/6.1KB
+package auth
+
+func (s *AuthService) Login(...) { ... }
+// [collapsed (lines 80-90): AuthService.Logout]
+---
+expanded: AuthService.Login :42-78 · AuthService.refresh :92-101

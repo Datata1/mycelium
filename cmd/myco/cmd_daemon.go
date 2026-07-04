@@ -91,7 +91,8 @@ func runDaemon(ctx context.Context, backendOverride string) error {
 		return fmt.Errorf("catch-up scan: %w", err)
 	} else {
 		dlog.Info("catch-up done",
-			"scanned", rep.FilesScanned, "changed", rep.FilesChanged, "duration", rep.Duration)
+			"scanned", rep.FilesScanned, "changed", rep.FilesChanged,
+			"pruned", rep.FilesPruned, "duration", rep.Duration)
 	}
 
 	backend := watch.Backend(rc.Cfg.Watcher.Backend)
@@ -99,16 +100,36 @@ func runDaemon(ctx context.Context, backendOverride string) error {
 		backend = watch.Backend(backendOverride)
 	}
 	wat, err := watch.New(watch.Options{
-		Root:          rc.Root,
-		Include:       rc.Cfg.Include,
-		Exclude:       rc.Cfg.Exclude,
-		MaxFileSizeKB: rc.Cfg.Index.MaxFileSizeKB,
-		DebounceMS:    rc.Cfg.Watcher.DebounceMS,
-		CoalesceMS:    rc.Cfg.Watcher.CoalesceMS,
-		Backend:       backend,
+		Root:            rc.Root,
+		Include:         rc.Cfg.Include,
+		Exclude:         rc.Cfg.Exclude,
+		MaxFileSizeKB:   rc.Cfg.Index.MaxFileSizeKB,
+		DebounceMS:      rc.Cfg.Watcher.DebounceMS,
+		CoalesceMS:      rc.Cfg.Watcher.CoalesceMS,
+		RescanThreshold: rc.Cfg.Watcher.RescanThreshold,
+		Backend:         backend,
+		Log:             log.With("component", "watch"),
 	})
 	if err != nil {
 		return err
+	}
+
+	// Checkout detection independent of git hooks: a rewrite of .git/HEAD
+	// triggers a full reconcile. Non-fatal when the layout is unusual.
+	var extraRescan chan string
+	if ticks, err := watch.StartHEADWatch(ctx, rc.Root, log.With("component", "watch")); err != nil {
+		dlog.Warn("git HEAD watch unavailable", "err", err)
+	} else {
+		extraRescan = make(chan string, 1)
+		go func() {
+			defer close(extraRescan)
+			for range ticks {
+				select {
+				case extraRescan <- "git HEAD changed":
+				default:
+				}
+			}
+		}()
 	}
 
 	// v2.2: opt-in telemetry. Open failures fall back to Disabled rather
@@ -132,13 +153,16 @@ func runDaemon(ctx context.Context, backendOverride string) error {
 		}
 	}
 
+	svc := service.NewReadOnly(ix, rc.Root, dlog)
+	svc.SetProbe(probeFromConfig(rc))
 	d := &daemon.Daemon{
-		Pipeline:  p,
-		Service:   service.NewReadOnly(ix, rc.Root, dlog),
-		Watcher:   wat,
-		Socket:    rc.AbsSocketPath(),
-		Telemetry: rec,
-		Log:       dlog,
+		Pipeline:    p,
+		Service:     svc,
+		Watcher:     wat,
+		Socket:      rc.AbsSocketPath(),
+		Telemetry:   rec,
+		Log:         dlog,
+		ExtraRescan: extraRescan,
 	}
 
 	// Start the HTTP transport alongside the unix socket. Disabled when

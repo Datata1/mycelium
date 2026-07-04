@@ -147,27 +147,39 @@ func goldenCases() []struct {
 		{
 			name:   "get_references",
 			method: "get_references",
-			result: []query.ReferenceHit{
-				{
-					ID:            100,
-					SrcPath:       "internal/http/handlers/login.go",
-					SrcLine:       28,
-					SrcCol:        9,
-					SrcSymbolID:   2,
-					SrcSymbolName: "handlers.Login",
-					DstName:       "Login",
-					DstSymbolID:   1,
-					Kind:          "call",
-					Resolved:      true,
+			result: query.GetReferencesResult{
+				Matches: []query.ReferenceHit{
+					{
+						ID:            100,
+						SrcPath:       "internal/http/handlers/login.go",
+						SrcLine:       28,
+						SrcCol:        9,
+						SrcSymbolID:   2,
+						SrcSymbolName: "handlers.Login",
+						DstName:       "Login",
+						DstSymbolID:   1,
+						Kind:          "call",
+						Resolved:      true,
+					},
+					{
+						ID:       101,
+						SrcPath:  "internal/auth/service_test.go",
+						SrcLine:  55,
+						SrcCol:   12,
+						DstName:  "Login",
+						Kind:     "call",
+						Resolved: false,
+					},
 				},
-				{
-					ID:       101,
-					SrcPath:  "internal/auth/service_test.go",
-					SrcLine:  55,
-					SrcCol:   12,
-					DstName:  "Login",
-					Kind:     "call",
-					Resolved: false,
+			},
+		},
+		{
+			name:   "get_references_empty_hints",
+			method: "get_references",
+			result: query.GetReferencesResult{
+				Matches: []query.ReferenceHit{},
+				Hints: []string{
+					`no symbol or reference named "Logn" in the index — find_symbol("Logn") does substring matching and catches qualified forms; check spelling/qualification`,
 				},
 			},
 		},
@@ -278,16 +290,29 @@ func goldenCases() []struct {
 		{
 			name:   "search_lexical",
 			method: "search_lexical",
-			result: []query.LexicalHit{
-				{
-					Path:    "internal/auth/service.go",
-					Line:    61,
-					Snippet: `    log.Printf("login failed for %s", creds.User)`,
+			result: query.SearchLexicalResult{
+				Matches: []query.LexicalHit{
+					{
+						Path:    "internal/auth/service.go",
+						Line:    61,
+						Snippet: `    log.Printf("login failed for %s", creds.User)`,
+					},
+					{
+						Path:    "internal/http/handlers/login.go",
+						Line:    33,
+						Snippet: `        http.Error(w, "login failed", http.StatusUnauthorized)`,
+					},
 				},
-				{
-					Path:    "internal/http/handlers/login.go",
-					Line:    33,
-					Snippet: `        http.Error(w, "login failed", http.StatusUnauthorized)`,
+			},
+		},
+		{
+			name:   "search_lexical_empty_hints",
+			method: "search_lexical",
+			result: query.SearchLexicalResult{
+				Matches: []query.LexicalHit{},
+				Hints: []string{
+					`if "AuthServcie" is a symbol name, find_symbol("AuthServcie") searches the code graph and catches qualified forms/renames — search_lexical only sees literal text`,
+					`2 indexed file(s) missing on disk — the index is stale; is the daemon running? ` + "`myco index`" + ` reconciles`,
 				},
 			},
 		},
@@ -334,22 +359,100 @@ func goldenCases() []struct {
 			},
 		},
 		{
+			name:   "search_lexical_definition_note",
+			method: "search_lexical",
+			result: query.SearchLexicalResult{
+				Matches: []query.LexicalHit{
+					{
+						Path:    "internal/auth/service.go",
+						Line:    42,
+						Snippet: `func (s *AuthService) Login(ctx context.Context, creds Credentials) (*Session, error) {`,
+					},
+				},
+			},
+		},
+		{
+			name:   "read_focused",
+			method: "read_focused",
+			result: query.FocusedRead{
+				Path:    "internal/auth/service.go",
+				Focus:   "Login",
+				Content: "package auth\n\nfunc (s *AuthService) Login(...) { ... }\n// [collapsed (lines 80-90): AuthService.Logout]\n",
+				Stats: query.FocusedReadStats{
+					TotalSymbols:    9,
+					ExpandedSymbols: 2,
+					OriginalBytes:   6242,
+					ReturnedBytes:   1229,
+				},
+				Expanded: []query.FocusedSymbol{
+					{Qualified: "AuthService.Login", Kind: "method", StartLine: 42, EndLine: 78},
+					{Qualified: "AuthService.refresh", Kind: "method", StartLine: 92, EndLine: 101},
+				},
+			},
+		},
+		{
+			name:   "read_focused_preview",
+			method: "read_focused",
+			result: query.FocusedRead{
+				Path:    "internal/auth/service.go",
+				Focus:   "",
+				Content: "package auth\n\nimport (\n\t\"context\"\n)\n",
+				Stats: query.FocusedReadStats{
+					TotalSymbols:    9,
+					ExpandedSymbols: 9,
+					OriginalBytes:   6242,
+					ReturnedBytes:   512,
+				},
+				Hint: `Preview only — first 50 of 240 lines shown. Pass focus=<query> (e.g. focus="Login") to filter to what you need.`,
+				Expanded: []query.FocusedSymbol{
+					{Qualified: "AuthService", Kind: "struct", StartLine: 20, EndLine: 90},
+				},
+			},
+		},
+		{
+			name:   "read_focused_zero_expanded",
+			method: "read_focused",
+			result: query.FocusedRead{
+				Path:    "internal/auth/service.go",
+				Focus:   "NoSuchThing",
+				Content: "// [collapsed (lines 1-240): entire file]\n",
+				Stats: query.FocusedReadStats{
+					TotalSymbols:    9,
+					ExpandedSymbols: 0,
+					OriginalBytes:   6242,
+					ReturnedBytes:   40,
+				},
+			},
+		},
+		{
 			name:   "stats",
 			method: "stats",
 			result: query.Stats{
-				Files:               120,
-				Symbols:             1450,
-				Refs:                5200,
-				Resolved:            4900,
-				RefsTrulyUnresolved: 42,
-				ByLang:              map[string]int{"go": 90, "python": 10, "typescript": 20},
-				DBSizeBytes:         4 * 1024 * 1024,
+				Files:                   120,
+				Symbols:                 1450,
+				Refs:                    5200,
+				Resolved:                4900,
+				NonImportRefs:           4600,
+				RefsTypeResolved:        4200,
+				RefsExternalKnown:       358,
+				RefsTrulyUnresolved:     42,
+				ByLang:                  map[string]int{"go": 90, "python": 10, "typescript": 20},
+				DocumentsByKind:         map[string]int{"go.mod": 1, "json": 40},
+				InterfaceImplementsRefs: 12,
+				InterfaceConcreteTypes:  7,
+				DBSizeBytes:             4 * 1024 * 1024,
 				ConfiguredProjects: []query.ProjectStats{
 					{Name: "backend", Root: "services/backend", FileCount: 80},
 					{Name: "frontend", Root: "apps/web", FileCount: 40},
 				},
-				LastScan: time.Date(2026, 1, 2, 15, 4, 5, 0, time.UTC),
+				LastScan:     time.Date(2026, 1, 2, 15, 4, 5, 0, time.UTC),
+				LastFullScan: time.Date(2026, 1, 2, 15, 10, 0, 0, time.UTC),
 			},
+		},
+		{
+			name:   "stats_empty",
+			method: "stats",
+			result: query.Stats{},
 		},
 		{
 			name:   "unknown_method",

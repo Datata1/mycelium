@@ -114,10 +114,11 @@ func TestReaderGetReferences(t *testing.T) {
 		"auth/service.go": fxService,
 		"app/run.go":      fxCaller,
 	})
-	hits, err := r.GetReferences(context.Background(), "Login", "", 100, nil)
+	res, err := r.GetReferences(context.Background(), "Login", "", 100, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	hits := res.Matches
 	if len(hits) == 0 {
 		t.Fatal("expected at least one reference to Login")
 	}
