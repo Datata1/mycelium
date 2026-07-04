@@ -34,6 +34,10 @@ type Daemon struct {
 	// Log defaults to a text handler on stderr; set it to share a root
 	// logger (or silence the daemon in tests).
 	Log *slog.Logger
+	// ExtraRescan is an optional second reconcile trigger beside watcher
+	// Overflow events — the .git/HEAD watch feeds checkout signals here.
+	// Each string is a reason for the log line.
+	ExtraRescan <-chan string
 }
 
 // log is the nil-safe accessor so handleConn works on a bare Daemon.
@@ -80,16 +84,38 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	var wg sync.WaitGroup
 
+	// Rescan trigger: watcher Overflow events and ExtraRescan signals
+	// collapse into this cap-1 channel; one goroutine drains it and runs
+	// a full reconcile per trigger, so storms cost one RunOnce.
+	rescanCh := make(chan string, 1)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		d.rescanLoop(ctx, rescanCh)
+	}()
+	if d.ExtraRescan != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case reason, ok := <-d.ExtraRescan:
+					if !ok {
+						return
+					}
+					requestRescan(rescanCh, reason)
+				}
+			}
+		}()
+	}
+
 	// Watcher event pump: forward each change into the pipeline.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for ev := range d.Watcher.Events() {
-			d.Log.Info("file change", "path", ev.RelPath, "removed", ev.Removed)
-			if _, err := d.Pipeline.HandleChange(ctx, ev.RelPath, ev.AbsPath, ev.Removed); err != nil {
-				d.Log.Error("handle change", "path", ev.RelPath, "err", err)
-			}
-		}
+		d.pumpEvents(ctx, rescanCh)
 	}()
 
 	d.Log.Info("listening", "socket", d.Socket)
@@ -110,6 +136,54 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 	wg.Wait()
 	return nil
+}
+
+// pumpEvents drains the watcher: per-file changes go to HandleChange,
+// Overflow events request a full rescan. Returns when the watcher's
+// event channel closes.
+func (d *Daemon) pumpEvents(ctx context.Context, rescanCh chan<- string) {
+	for ev := range d.Watcher.Events() {
+		if ev.Overflow {
+			d.log().Warn("watcher overflow — requesting full rescan", "reason", ev.Reason)
+			requestRescan(rescanCh, ev.Reason)
+			continue
+		}
+		d.log().Info("file change", "path", ev.RelPath, "removed", ev.Removed)
+		if _, err := d.Pipeline.HandleChange(ctx, ev.RelPath, ev.AbsPath, ev.Removed); err != nil {
+			d.log().Error("handle change", "path", ev.RelPath, "err", err)
+		}
+	}
+}
+
+// requestRescan is a non-blocking send: with a rescan already pending,
+// further triggers collapse into it (RunOnce reconciles everything
+// anyway, so one pending rescan subsumes any number of triggers).
+func requestRescan(rescanCh chan<- string, reason string) {
+	select {
+	case rescanCh <- reason:
+	default:
+	}
+}
+
+// rescanLoop serializes full reconciles requested via rescanCh. Exits
+// on ctx cancellation.
+func (d *Daemon) rescanLoop(ctx context.Context, rescanCh <-chan string) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case reason := <-rescanCh:
+			start := time.Now()
+			rep, err := d.Pipeline.RunOnce(ctx)
+			if err != nil {
+				d.log().Error("rescan", "reason", reason, "err", err)
+				continue
+			}
+			d.log().Info("rescan done", "reason", reason,
+				"scanned", rep.FilesScanned, "changed", rep.FilesChanged,
+				"pruned", rep.FilesPruned, "duration", time.Since(start))
+		}
+	}
 }
 
 func (d *Daemon) handleConn(ctx context.Context, conn net.Conn) {

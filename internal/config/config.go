@@ -16,6 +16,10 @@ const (
 	DefaultHTTPPort   = 7777
 	DefaultDebounceMS = 200
 	DefaultCoalesceMS = 2000
+	// DefaultRescanThreshold: 400 files in one coalesce window is well
+	// past any hand-edit burst but below a typical branch-switch diff
+	// on the repos where per-file churn starts to hurt.
+	DefaultRescanThreshold = 400
 )
 
 type Config struct {
@@ -55,6 +59,10 @@ type WatcherConfig struct {
 	Backend    string `yaml:"backend"` // "" / "fsnotify" (default) | "watchman" (v1.7)
 	DebounceMS int    `yaml:"debounce_ms"`
 	CoalesceMS int    `yaml:"coalesce_ms"`
+	// RescanThreshold: a coalesce window carrying at least this many
+	// file events (a branch switch, a stash pop) collapses into one
+	// full rescan instead of per-file updates. 0 disables.
+	RescanThreshold int `yaml:"rescan_threshold"`
 }
 
 type DaemonConfig struct {
@@ -115,8 +123,9 @@ func Default() Config {
 			"**/*.min.js",
 		},
 		Watcher: WatcherConfig{
-			DebounceMS: DefaultDebounceMS,
-			CoalesceMS: DefaultCoalesceMS,
+			DebounceMS:      DefaultDebounceMS,
+			CoalesceMS:      DefaultCoalesceMS,
+			RescanThreshold: DefaultRescanThreshold,
 		},
 		Daemon: DaemonConfig{
 			Socket:   DefaultSocket,
@@ -170,6 +179,9 @@ func (c Config) Validate() error {
 	}
 	if c.Watcher.DebounceMS < 0 || c.Watcher.CoalesceMS < 0 {
 		return fmt.Errorf("watcher: debounce and coalesce must be >= 0")
+	}
+	if c.Watcher.RescanThreshold < 0 {
+		return fmt.Errorf("watcher.rescan_threshold: must be >= 0 (0 disables)")
 	}
 	switch c.Watcher.Backend {
 	case "", "fsnotify", "watchman":
@@ -263,6 +275,9 @@ func ApplyUserConfig(base Config, u UserConfig) Config {
 	}
 	if u.Watcher.CoalesceMS != 0 {
 		base.Watcher.CoalesceMS = u.Watcher.CoalesceMS
+	}
+	if u.Watcher.RescanThreshold != 0 {
+		base.Watcher.RescanThreshold = u.Watcher.RescanThreshold
 	}
 	if u.Daemon.Socket != "" {
 		base.Daemon.Socket = u.Daemon.Socket

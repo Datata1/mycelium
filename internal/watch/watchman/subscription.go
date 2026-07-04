@@ -24,6 +24,7 @@ type Subscription struct {
 	name   string
 	root   string
 	out    chan []FileChange
+	fresh  chan struct{}
 	done   chan struct{}
 }
 
@@ -44,6 +45,7 @@ func Subscribe(ctx context.Context, sockname, absRoot, subName string) (*Subscri
 		client: c,
 		name:   subName,
 		out:    make(chan []FileChange, 64),
+		fresh:  make(chan struct{}, 1),
 		done:   make(chan struct{}),
 	}
 	// watch-project might return an ancestor directory — if the repo
@@ -79,6 +81,13 @@ func Subscribe(ctx context.Context, sockname, absRoot, subName string) (*Subscri
 // Updates is the batch-of-FileChange channel. Each delivery from
 // watchman is one slice. Downstream code is expected to fan out.
 func (s *Subscription) Updates() <-chan []FileChange { return s.out }
+
+// FreshInstances signals deliveries flagged is_fresh_instance: watchman
+// (re)started and dumped the whole tree, so deletions during the gap are
+// unknown. The per-file dump of such a delivery is NOT forwarded on
+// Updates — consumers should treat a fresh-instance tick as "reconcile
+// everything". Buffered(1); ticks coalesce.
+func (s *Subscription) FreshInstances() <-chan struct{} { return s.fresh }
 
 // Errors surfaces read-pump errors from the underlying client. One
 // error means the connection is gone; the caller should tear down
@@ -160,10 +169,17 @@ func (s *Subscription) pump(ctx context.Context, relativeRoot string) {
 			if env.Subscription != s.name {
 				continue
 			}
-			// Fresh-instance deliveries dump every file in the tree.
-			// We don't filter them out: the daemon's catch-up logic
-			// already hashes content before re-writing, so dupes cost
-			// nothing.
+			// Fresh-instance deliveries dump every file in the tree —
+			// but per-file events cannot express the deletions that
+			// happened while watchman was away. Signal a reconcile and
+			// skip the dump; RunOnce covers adds, changes, and deletes.
+			if env.IsFreshInstance {
+				select {
+				case s.fresh <- struct{}{}:
+				default:
+				}
+				continue
+			}
 			if len(env.Files) == 0 {
 				continue
 			}

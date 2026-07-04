@@ -2,8 +2,10 @@ package watch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -20,6 +22,7 @@ import (
 type fsnotifySource struct {
 	root string
 	fsw  *fsnotify.Watcher
+	log  *slog.Logger
 
 	out       chan rawEvent
 	done      chan struct{}
@@ -31,9 +34,14 @@ func newFSNotifySource(opts Options) (*fsnotifySource, error) {
 	if err != nil {
 		return nil, fmt.Errorf("new fsnotify watcher: %w", err)
 	}
+	log := opts.Log
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
 	return &fsnotifySource{
 		root: opts.Root,
 		fsw:  fsw,
+		log:  log,
 		out:  make(chan rawEvent, 256),
 		done: make(chan struct{}),
 	}, nil
@@ -92,12 +100,20 @@ func (s *fsnotifySource) pump(ctx context.Context) {
 				return
 			}
 			s.handle(ev)
-		case _, ok := <-s.fsw.Errors:
+		case err, ok := <-s.fsw.Errors:
 			if !ok {
 				return
 			}
-			// fsnotify errors are non-fatal; the daemon surfaces
-			// inotify-limit pressure via `myco doctor` instead.
+			s.log.Warn("fsnotify error", "err", err)
+			// A kernel queue overflow means events were lost and the
+			// tree state is unknown: escalate so the daemon reconciles
+			// instead of silently drifting stale.
+			if errors.Is(err, fsnotify.ErrEventOverflow) {
+				select {
+				case s.out <- rawEvent{Overflow: true, Reason: "fsnotify: " + err.Error()}:
+				case <-s.done:
+				}
+			}
 		}
 	}
 }

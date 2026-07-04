@@ -10,6 +10,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/datata1/mycelium/internal/doctor"
+	"github.com/datata1/mycelium/internal/languages"
+	"github.com/datata1/mycelium/internal/pipeline"
+	"github.com/datata1/mycelium/internal/repo"
 	"github.com/datata1/mycelium/internal/service"
 )
 
@@ -18,6 +21,7 @@ func newDoctorCmd() *cobra.Command {
 		jsonOutput bool
 		window     time.Duration
 		noAdoption bool
+		deep       bool
 	)
 	cmd := &cobra.Command{
 		Use:   "doctor",
@@ -45,6 +49,21 @@ func newDoctorCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if deep {
+				walked, err := deepWalkPaths(rc)
+				if err != nil {
+					return err
+				}
+				rows, err := r.AllFilePaths(ctx)
+				if err != nil {
+					return err
+				}
+				indexed := make([]string, len(rows))
+				for i, row := range rows {
+					indexed[i] = row.Path
+				}
+				rep.Add(doctor.DeepFreshness(walked, indexed, 5))
+			}
 			if noAdoption {
 				rep.Adoption = nil
 			}
@@ -71,7 +90,34 @@ func newDoctorCmd() *cobra.Command {
 		"adoption-health window (e.g. 24h, 168h). 0 uses the configured default (7d)")
 	cmd.Flags().BoolVar(&noAdoption, "no-adoption", false,
 		"suppress the adoption-health section (v4 B2)")
+	cmd.Flags().BoolVar(&deep, "deep", false,
+		"re-walk the tree and diff it against the index (exact freshness check; slower)")
 	return cmd
+}
+
+// deepWalkPaths builds the same walker set the daemon indexes with —
+// but without touching the DB (no project upserts; WalkedPaths ignores
+// project ids) — and returns the walked rel-path union.
+func deepWalkPaths(rc repoCtx) (map[string]struct{}, error) {
+	p := &pipeline.Pipeline{
+		Registry:  languages.Registry(rc.Cfg.Languages),
+		Walker:    repo.NewWalker(rc.Root, rc.Cfg.Include, rc.Cfg.Exclude, rc.Cfg.Index.MaxFileSizeKB),
+		Documents: buildDocumentRegistry(),
+	}
+	for _, pc := range rc.Cfg.Projects {
+		include := pc.Include
+		if len(include) == 0 {
+			include = rc.Cfg.Include
+		}
+		exclude := pc.Exclude
+		if len(exclude) == 0 {
+			exclude = rc.Cfg.Exclude
+		}
+		p.Workspaces = append(p.Workspaces, pipeline.Workspace{
+			Walker: repo.NewWalker(rc.Root+"/"+pc.Root, include, exclude, rc.Cfg.Index.MaxFileSizeKB),
+		})
+	}
+	return p.WalkedPaths()
 }
 
 func printDoctorReport(rep doctor.Report) {

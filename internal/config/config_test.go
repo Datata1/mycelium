@@ -223,9 +223,10 @@ func TestApplyUserConfigOverlays(t *testing.T) {
 		Languages: []string{"python"},
 		Exclude:   []string{"**/gen/**"},
 		Watcher: WatcherConfig{
-			Backend:    "watchman",
-			DebounceMS: 50,
-			CoalesceMS: 100,
+			Backend:         "watchman",
+			DebounceMS:      50,
+			CoalesceMS:      100,
+			RescanThreshold: 250,
 		},
 		Daemon: DaemonConfig{
 			Socket:   "/home/u/.myco/daemon.sock",

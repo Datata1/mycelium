@@ -101,6 +101,14 @@ type Thresholds struct {
 	EmptyProjectFail int
 	EmptyProjectWarn int
 
+	// Freshness (sampled stat of indexed files vs disk). Warn from
+	// FreshnessWarnCount stale/missing rows or FreshnessWarnRatio of
+	// the sample, fail from FreshnessFailRatio — a branch switch the
+	// daemon slept through shows up as a large ratio immediately.
+	FreshnessWarnCount int
+	FreshnessWarnRatio float64
+	FreshnessFailRatio float64
+
 	// v4 B2: adoption-health window + per-mode thresholds. Window
 	// scopes which sessions count toward the evaluation; default 7d
 	// matches the v4 ticket. The per-mode thresholds live in
@@ -124,6 +132,10 @@ func DefaultThresholds() Thresholds {
 		FDHeadroomFail:   0.90,
 		EmptyProjectFail: 1,
 		EmptyProjectWarn: 10,
+
+		FreshnessWarnCount: 2,
+		FreshnessWarnRatio: 0.01,
+		FreshnessFailRatio: 0.10,
 
 		AdoptionWindow:     7 * 24 * time.Hour,
 		AdoptionThresholds: DefaultAdoptionThresholds(),
@@ -276,6 +288,13 @@ func Run(ctx context.Context, r *query.Reader, th Thresholds, repoRoot, stateDir
 		if c := inotifyCheck(repoRoot, th); c != nil {
 			add(*c)
 		}
+	}
+
+	// Freshness: sampled stat of indexed rows against the working tree.
+	// The cheap answer to "is the index lying about what's on disk?" —
+	// `myco doctor --deep` upgrades it to an exact walk diff.
+	if c := freshnessCheck(ctx, r, th, repoRoot); c != nil {
+		add(*c)
 	}
 	{
 		// Resolve the state dir: explicit stateDir > repoRoot/.mycelium fallback.

@@ -37,6 +37,11 @@ type wrapped struct {
 	coalMu    sync.Mutex
 	coalBatch []Event
 	coalTimer *time.Timer
+	// overflowReason, when non-empty, marks that this coalesce window
+	// lost per-file accounting (backend overflow or a burst beyond
+	// RescanThreshold). The flush then emits one Overflow event and
+	// drops the batch — the consumer's reconcile covers its content.
+	overflowReason string
 }
 
 type pendingEvent struct {
@@ -111,8 +116,13 @@ func (w *wrapped) pump(ctx context.Context) {
 }
 
 // handle applies the shared policy to one raw event and (if it
-// survives) schedules it on the debounce timer.
+// survives) schedules it on the debounce timer. Overflow events bypass
+// filters and debounce entirely — they carry no path to filter on.
 func (w *wrapped) handle(ev rawEvent) {
+	if ev.Overflow {
+		w.markOverflow(ev.Reason)
+		return
+	}
 	if w.shouldSkipPath(ev.RelPath) {
 		return
 	}
@@ -169,26 +179,56 @@ func (w *wrapped) schedule(ev rawEvent) {
 }
 
 // emit runs in pump: either flushes the event immediately
-// (CoalesceMS <= 0) or buffers it for the coalesce window.
+// (CoalesceMS <= 0) or buffers it for the coalesce window. A batch
+// crossing RescanThreshold is replaced by a single Overflow marker —
+// see Event.Overflow.
 func (w *wrapped) emit(ev Event) {
 	if w.opts.CoalesceMS <= 0 {
 		w.send(ev)
 		return
 	}
 	w.coalMu.Lock()
-	w.coalBatch = append(w.coalBatch, ev)
-	if w.coalTimer == nil {
-		w.coalTimer = time.AfterFunc(
-			time.Duration(w.opts.CoalesceMS)*time.Millisecond,
-			func() {
-				select {
-				case w.flushCh <- struct{}{}:
-				case <-w.done:
-				}
-			},
-		)
+	if w.overflowReason == "" {
+		w.coalBatch = append(w.coalBatch, ev)
+		if w.opts.RescanThreshold > 0 && len(w.coalBatch) >= w.opts.RescanThreshold {
+			w.overflowReason = "burst"
+			w.coalBatch = nil
+		}
 	}
+	w.ensureCoalesceTimerLocked()
 	w.coalMu.Unlock()
+}
+
+// markOverflow records a backend-reported overflow for the current
+// coalesce window. With coalescing disabled the Overflow event is sent
+// immediately (markOverflow only runs in pump, the sole writer on out).
+func (w *wrapped) markOverflow(reason string) {
+	if w.opts.CoalesceMS <= 0 {
+		w.send(Event{Overflow: true, Reason: reason})
+		return
+	}
+	w.coalMu.Lock()
+	if w.overflowReason == "" {
+		w.overflowReason = reason
+		w.coalBatch = nil
+	}
+	w.ensureCoalesceTimerLocked()
+	w.coalMu.Unlock()
+}
+
+func (w *wrapped) ensureCoalesceTimerLocked() {
+	if w.coalTimer != nil {
+		return
+	}
+	w.coalTimer = time.AfterFunc(
+		time.Duration(w.opts.CoalesceMS)*time.Millisecond,
+		func() {
+			select {
+			case w.flushCh <- struct{}{}:
+			case <-w.done:
+			}
+		},
+	)
 }
 
 // flushCoalesceBatch runs in pump: drains the batch to `out` in
@@ -197,12 +237,18 @@ func (w *wrapped) emit(ev Event) {
 func (w *wrapped) flushCoalesceBatch() {
 	w.coalMu.Lock()
 	batch := w.coalBatch
+	reason := w.overflowReason
 	w.coalBatch = nil
+	w.overflowReason = ""
 	if w.coalTimer != nil {
 		w.coalTimer.Stop()
 		w.coalTimer = nil
 	}
 	w.coalMu.Unlock()
+	if reason != "" {
+		w.send(Event{Overflow: true, Reason: reason})
+		return
+	}
 	for _, ev := range batch {
 		w.send(ev)
 	}

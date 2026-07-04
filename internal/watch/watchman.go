@@ -90,6 +90,7 @@ func (s *watchmanSource) pump(ctx context.Context) {
 	defer close(s.out)
 	in := s.sub.Updates()
 	errs := s.sub.Errors()
+	fresh := s.sub.FreshInstances()
 	for {
 		select {
 		case <-ctx.Done():
@@ -97,6 +98,12 @@ func (s *watchmanSource) pump(ctx context.Context) {
 			return
 		case <-s.done:
 			return
+		case <-fresh:
+			select {
+			case s.out <- rawEvent{Overflow: true, Reason: "watchman fresh instance"}:
+			case <-s.done:
+				return
+			}
 		case batch, ok := <-in:
 			if !ok {
 				return
