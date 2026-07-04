@@ -29,6 +29,7 @@ func newSessionCmd() *cobra.Command {
 		newSessionTrackCmd(),
 		newSessionTranscriptCmd(),
 		newSessionHooksCmd(),
+		newSessionPrimeCmd(),
 	)
 	return cmd
 }
@@ -428,6 +429,14 @@ func installSessionHooks(repoRoot, binary string) error {
 			},
 		},
 	}
+	primeHook := map[string]any{
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": binary + " session prime",
+			},
+		},
+	}
 
 	hooks, _ := raw["hooks"].(map[string]any)
 	if hooks == nil {
@@ -436,6 +445,7 @@ func installSessionHooks(repoRoot, binary string) error {
 	hooks["UserPromptSubmit"] = mergeHookList(hooks["UserPromptSubmit"], startHook)
 	hooks["PostToolUse"] = mergeHookList(hooks["PostToolUse"], trackHook)
 	hooks["Stop"] = mergeHookList(hooks["Stop"], annotateHook)
+	hooks["SessionStart"] = mergeHookList(hooks["SessionStart"], primeHook)
 	raw["hooks"] = hooks
 
 	b, err := json.MarshalIndent(raw, "", "  ")
@@ -446,6 +456,7 @@ func installSessionHooks(repoRoot, binary string) error {
 		return err
 	}
 	fmt.Printf("wrote %s\n", settingsPath)
+	fmt.Println("  SessionStart     → myco session prime             (injects index snapshot + tool rules)")
 	fmt.Println("  UserPromptSubmit → myco session start --auto    (new session per conversation)")
 	fmt.Println("  PostToolUse      → myco session track            (records fallback grep/Read calls)")
 	fmt.Println("  Stop             → myco session annotate --stdin (captures token counts)")

@@ -43,6 +43,24 @@ type FindSymbolResult struct {
 	Hints   []string    `json:"hints,omitempty"`
 }
 
+// GetReferencesResult wraps reference hits with optional hints. Hints
+// are populated on empty Matches when the reader can explain the miss
+// (unknown symbol, symbol without indexed references) — same envelope
+// convention as FindSymbolResult (v3.1).
+type GetReferencesResult struct {
+	Matches []ReferenceHit `json:"matches"`
+	Hints   []string       `json:"hints,omitempty"`
+}
+
+// SearchLexicalResult wraps lexical hits with optional hints. Hints are
+// populated on empty Matches when the reader can explain or redirect
+// (identifier-shaped pattern → find_symbol; index entries missing on
+// disk → stale index).
+type SearchLexicalResult struct {
+	Matches []LexicalHit `json:"matches"`
+	Hints   []string     `json:"hints,omitempty"`
+}
+
 // ReferenceHit is one call/import/type-use site pointing at a symbol.
 // Resolved=true means dst_symbol_id is populated; otherwise the hit is
 // a textual-only match on dst_name.
@@ -133,6 +151,12 @@ type Stats struct {
 	// generator to tell agents which project names are valid.
 	ConfiguredProjects []ProjectStats `json:"configured_projects,omitempty"`
 	LastScan           time.Time      `json:"last_scan"`
+	// LastFullScan is when the pipeline last completed a full reconcile
+	// (walk + upsert + prune; index_meta.last_full_scan_at). Unlike
+	// LastScan — MAX(last_indexed_at), which only moves when content
+	// changes — this also advances on no-op reconciles, making it the
+	// honest freshness signal. Zero on indexes that never reconciled.
+	LastFullScan time.Time `json:"last_full_scan,omitempty"`
 }
 
 // UnresolvedRatio is the fraction of *non-import* refs that no resolver
