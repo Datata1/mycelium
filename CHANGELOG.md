@@ -6,7 +6,166 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Tool registry (refactoring workstream 05)
+### Why-empty hints (features workstream 03)
+
+#### Changed — BREAKING wire shapes
+
+- **`get_references` returns `{matches, hints}`** instead of a bare
+  array (same envelope move FindSymbol made in v3.1). Empty matches now
+  explain themselves: unknown symbol ("no symbol or reference named X —
+  find_symbol does substring matching") vs. symbol with no indexed
+  references ("possibly reflection/codegen or dead code;
+  get_neighborhood shows outbound edges") — previously "no references"
+  read as "nobody calls this", the most misleading empty in the product.
+  Hints are suppressed when a project/--since filter could be the cause.
+- **`search_lexical` returns `{matches, hints}`**. On zero hits:
+  identifier-shaped patterns get a find_symbol redirect, and candidate
+  files missing on disk (previously stderr-only) surface as a
+  stale-index warning with a count.
+
+#### Added
+
+- **`query.FSProbe`** — path diagnosis attached via
+  `Service.SetProbe` (wired from config in the daemon and the CLI
+  daemon-down path): not-found errors and empty results now say WHY a
+  file is absent — not on disk / matches an exclude pattern / extension
+  not in the include globs / over the size cap / **on disk but not
+  indexed → stale index (with mtime vs. last-reconcile times)**.
+- `read_focused`, `get_file_outline`, and `get_file_summary` errors
+  carry the probe diagnosis after the "did you mean" suggestions.
+  `get_file_outline`/`get_file_summary` on an unindexed path are now
+  errors (previously an empty outline / zero-value summary,
+  indistinguishable from an empty file).
+- `find_symbol` adds a staleness hint on zero matches when the index
+  has never completed a full reconcile.
+- Static empty-text upgrades: `list_files` suggests dropping filters,
+  `impact_analysis` points at the unresolved-refs ratio,
+  `critical_path` explains edge direction, `find_document_key` names
+  the indexed document kinds.
+
+### Renderer nudges & fixes (features workstream 04)
+
+#### Added
+
+- **Runtime follow-up nudges.** The entry-point tools' MCP results now
+  end with one deterministic "next:" line derived from the first hit:
+  `find_symbol` points at `get_references` / `get_neighborhood` /
+  `read_focused(path, focus=name)`; `get_references` points at
+  `read_focused` on the first call site and `impact_analysis`. When a
+  `search_lexical` hit lands on a definition-shaped line (regex table for
+  Go/TS/Python definition syntax), an advisory `note:` steers back to
+  `find_symbol`/`get_references` — the myco-as-grep failure mode
+  corrected at the moment it happens. Deep tools (outline, summary,
+  neighborhood, impact, critical_path) stay nudge-free so the signal
+  keeps its value.
+- **`read_focused` has a real renderer** (was `render.RawJSON` — an
+  escaped JSON blob for the most token-heavy tool): header with
+  path/focus/expanded-counts/bytes, content verbatim, footer with the
+  expanded-symbol line map and any preview hint.
+
+#### Changed
+
+- `get_references` MCP text now carries the `[kind/resolved|textual]`
+  tag and the destination name — the tool description promised the
+  resolved flag; previously only the CLI showed it.
+- `stats` MCP text adds `unresolved_ratio` (with refs breakdown),
+  `documents:` by kind, `interface_edges:`, and `last_reconcile:`
+  (WS01's `last_full_scan_at`); an empty index renders as
+  `index is empty — run myco index` instead of zero rows.
+
+### Session prime (features workstream 05)
+
+#### Added
+
+- **`myco session prime`** — the body of a Claude Code `SessionStart`
+  hook: emits `additionalContext` JSON with a compact (<250-token) live
+  priming block — index snapshot (files, languages, symbols, resolved
+  ratio, reconcile age) plus the tool-choice rules (identifier →
+  find_symbol, callers → get_references, read → read_focused,
+  search_lexical only for literals). Complements the static CLAUDE.md
+  snippet with proof the index is alive *right now*, so users stop
+  having to remind the agent that myco exists. Failure contract: any
+  problem (no repo, no index, empty index) prints nothing and exits 0 —
+  a hook must never break session startup.
+- `myco session hooks install` (and therefore the init wizard) now also
+  writes the `SessionStart → myco session prime` hook, idempotently.
+- `ipc.Stats.LastFullScan` (additive field): the WS01 reconcile
+  timestamp on the wire. `LastScan` (MAX(last_indexed_at)) only moves on
+  content changes and understates freshness after a no-op reconcile;
+  prime prefers the new field.
+
+### Watcher hardening (features workstream 02)
+
+#### Added
+
+- **Watcher overflow escalates to a full rescan.** `watch.Event` gains
+  `Overflow`/`Reason`; fsnotify errors are logged (previously swallowed)
+  and a kernel queue overflow emits an Overflow event; a coalesce window
+  carrying ≥ `watcher.rescan_threshold` file events (default 400 — a
+  branch switch, a stash pop) collapses into one Overflow instead of
+  per-file churn; a watchman fresh instance (which can't express
+  deletions) does the same. The daemon routes Overflow events into a
+  cap-1 rescan channel drained by one goroutine calling `RunOnce` — which
+  since WS01 prunes, so a rescan is a true reconcile.
+- **`.git/HEAD` watch**: the daemon watches the git dir (non-recursive,
+  worktree `gitdir:` links resolved) and triggers a reconcile on every
+  HEAD rewrite — checkout detection with zero config, covering repos
+  where `core.hooksPath` makes the WS01 hooks inert. Failure to start is
+  non-fatal.
+- **doctor `index_freshness` check**: samples ≤200 indexed files, stats
+  them on disk, and flags rows missing from disk or modified since
+  indexing; includes the `last_full_scan_at` age. New `myco doctor
+  --deep` re-walks the tree and reports the exact set-diff
+  (`on_disk_not_indexed` / `indexed_not_walked`) with example paths.
+  New readers `query.SampleFiles` / `query.AllFilePaths`; doctor's
+  package contract is now "stats a sample by default, re-walks only
+  with --deep".
+
+#### Fixed
+
+- `UpsertFile`/`UpsertDocumentFile` now refresh `mtime_ns` when content
+  is unchanged — a content-free `touch` no longer reads as "modified
+  since indexing" forever (surfaced by the new freshness check).
+
+### Git hooks for checkouts, merges, rebases (features workstream 01, part B)
+
+#### Added
+
+- **`myco init` now installs four git hooks** — post-commit, post-checkout,
+  post-merge, post-rewrite (`hook.ManagedHooks`) — so branch switches,
+  pulls, and rebases trigger a daemon reconcile, not just commits. All four
+  run the same `myco hook <name>` → `MethodReindex` ping and are no-ops
+  when the daemon is down (the catch-up scan covers that case since part A).
+  Foreign hooks are backed up to `.mycelium-backup` and restored on
+  `myco uninstall`, per hook file. Never pre-commit.
+- The init wizard warns when `git config core.hooksPath` is set (husky
+  etc.): git ignores `.git/hooks` there, so the hooks won't fire.
+
+#### Changed
+
+- `hook.InstallPostCommit`/`UninstallPostCommit`/`RunPostCommit` are
+  replaced by the table-driven `InstallAll`/`UninstallAll`/`Run`.
+
+### Reconcile (features workstream 01, part A)
+
+#### Added
+
+- **`RunOnce` now prunes**: after the symbol and document passes, index rows
+  whose file no longer exists under any walked root are deleted (FK cascades
+  drop symbols/refs/documents). Every reindex trigger — daemon catch-up scan,
+  post-commit hook, manual `myco index` — is now a full self-heal for
+  deletes and renames the watcher never saw (daemon down, git branch
+  switches). The prune is skipped when any walk failed or the run was
+  cancelled, so a partial walk can never read as a mass deletion.
+  `Report.FilesPruned` carries the count (daemon catch-up log and
+  `myco index` output include it).
+- Migration `0010_index_meta.sql`: key/value table `index_meta`. `RunOnce`
+  records `last_full_scan_at` after a completed reconcile; the new reader
+  `query.Reader.LastFullScanAt` exposes it (feeds the upcoming doctor
+  freshness check and query-time staleness hints).
+- `RunOnce` is serialized with an internal mutex — concurrent reindex
+  triggers (e.g. `git pull` firing multiple hooks) queue instead of
+  interleaving with the prune.
 
 #### Changed
 
