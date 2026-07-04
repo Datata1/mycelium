@@ -87,7 +87,16 @@ empty answers for files that exist, every adoption nudge is wasted.
   get_references/search_lexical (breaking wire change, CHANGELOG'd),
   not-found errors with probe diagnosis on read_focused/outline/summary,
   find_symbol never-reconciled hint, static empty-text upgrades.
-- 06, 07: not started.
+- **06 implemented**: ToolAnnotations (readOnly/idempotent/openWorld
+  + titles) on all 12 tools; initialize negotiates
+  {2024-11-05, 2025-03-26, 2025-06-18}, preferring 2025-03-26.
+- **07 implemented**: `myco query dockey`, top-level aliases
+  refs/outline/impact, `myco hook <typo>` exits 1, `get_definition`
+  ghost removed from doctor, stale `init --mcp claude` docs rewritten.
+  Optional extras (doctor priming-installed check, nudge-efficacy docs
+  section) remain open.
+
+All seven workstreams landed (2026-07-04).
 
 ## Decisions already made (repo owner, 2026-07-04)
 

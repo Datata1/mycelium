@@ -6,6 +6,34 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### CLI QoL & consistency (features workstream 07)
+
+#### Added
+
+- `myco query dockey <key>` — CLI parity for `find_document_key`
+  (the last of the 12 tools without a CLI command).
+- Top-level aliases `myco refs`, `myco outline`, `myco impact`
+  (v4 T6 pattern: the reflexive name must not error).
+
+#### Fixed
+
+- `myco hook <typo>` now exits 1 with the managed-hook list
+  (previously printed help and exited 0, hiding the mistake).
+- Removed the `get_definition` ghost from doctor's structural-tools
+  set (the tool no longer exists).
+- docs/adoption.md and CLAUDE.md no longer document the removed
+  `myco init --mcp claude` flag; both describe the wizard flow and
+  the `session prime` hook.
+
+### MCP annotations (features workstream 06)
+
+#### Added
+
+- Tool annotations on all 12 tools (`readOnlyHint`, `idempotentHint`,
+  `openWorldHint:false`, human `title`) and protocol version
+  negotiation (preferred 2025-03-26; echoes supported client versions
+  2024-11-05 / 2025-03-26 / 2025-06-18).
+
 ### Why-empty hints (features workstream 03)
 
 #### Changed — BREAKING wire shapes
