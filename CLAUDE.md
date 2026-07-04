@@ -120,8 +120,9 @@ One-time setup:
 
 ```bash
 task daemon &                      # build + start daemon in background
-/tmp/myco init --mcp claude        # prints the JSON snippet for ~/.claude.json
-# paste into mcpServers in ~/.claude.json, then restart Claude Code
+myco init                          # wizard: step 6 registers MCP in ~/.claude.json,
+                                   # step 7 appends the CLAUDE.md priming snippet
+# then restart Claude Code — MCP servers load at startup
 ```
 
 For session telemetry (tracking which myco tools vs. grep/Read the agent

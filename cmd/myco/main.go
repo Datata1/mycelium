@@ -81,10 +81,13 @@ func main() {
 		newReadCmd(),
 		newSessionCmd(),
 		newBenchCounterfactualCmd(),
-		// v4 T6: top-level aliases for the two queries users reach for by
-		// reflex. Both delegate to the existing query subcommand handlers.
+		// v4 T6 + WS07: top-level aliases for the queries users reach
+		// for by reflex. All delegate to the existing query handlers.
 		newTopLevelFindCmd(),
 		newTopLevelSearchCmd(),
+		newTopLevelRefsCmd(),
+		newTopLevelOutlineCmd(),
+		newTopLevelImpactCmd(),
 	)
 
 	// One signal-rooted context for every command; subcommands reach it

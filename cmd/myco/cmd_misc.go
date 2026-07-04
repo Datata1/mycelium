@@ -23,6 +23,17 @@ func newHookCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "hook",
 		Short: "Git hook integrations",
+		Args:  cobra.ArbitraryArgs,
+		// An unknown hook name must exit non-zero — a script author's
+		// typo (`myco hook pre-commit`) previously printed help and
+		// exited 0, hiding the mistake.
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return cmd.Help()
+			}
+			return fmt.Errorf("unknown hook %q — managed hooks: %s",
+				args[0], strings.Join(hook.ManagedHooks, ", "))
+		},
 	}
 	for _, name := range hook.ManagedHooks {
 		cmd.AddCommand(&cobra.Command{

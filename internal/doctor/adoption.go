@@ -143,7 +143,6 @@ func EvaluateAdoption(myco []telemetry.Summary, fallback []telemetry.ExternalSum
 		"get_neighborhood": true,
 		"impact_analysis":  true,
 		"critical_path":    true,
-		"get_definition":   true,
 	}
 	for _, s := range myco {
 		if s.Tool == "all" {

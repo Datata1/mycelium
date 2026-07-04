@@ -27,10 +27,11 @@ turn out to be MCP wiring problems.
       live process; `.mycelium/daemon.sock` exists.
 - [ ] `myco doctor` is green. Self-loop count, unresolved-ref ratio,
       and `interface_expansion_coverage` are all in the pass band.
-- [ ] The MCP server is registered with the agent. For Claude Code,
-      `myco init --mcp claude` prints the JSON snippet for
-      `~/.claude.json`. After editing the file, **restart the agent**:
-      MCP servers load at startup, not per-session.
+- [ ] The MCP server is registered with the agent. The interactive
+      `myco init` wizard offers to write the entry into `~/.claude.json`
+      (step 6) or prints the snippet to paste. After editing the file,
+      **restart the agent**: MCP servers load at startup, not
+      per-session.
 - [ ] `myco stats` returns non-zero counts for files / symbols / refs.
       A zero-state index will silently no-op every query and look
       indistinguishable from "agent didn't try."
@@ -132,9 +133,12 @@ ordered most to least frequent.
 Hours of agent activity, telemetry log is empty or only has `ping`.
 The agent isn't talking to mycelium at all.
 
-- Check MCP registration (`myco init --mcp claude` snippet present
-  in the agent's config?).
+- Check MCP registration (is the mycelium entry present in the
+  agent's config? Re-run `myco init` — step 6 writes or prints it).
 - Restart the agent — MCP servers load at startup.
+- Install the priming hooks: `myco session hooks install` wires a
+  `SessionStart → myco session prime` hook that injects live index
+  stats + tool rules into every session.
 - Try a hand-written prompt: "Use the mycelium MCP tools to find
   references to FooBar." If that produces traffic, the issue is
   prompt-priming; otherwise it's plumbing.

@@ -159,6 +159,21 @@ func newQueryCmd() *cobra.Command {
 	pathCmd.Flags().Int("k", 5, "max paths to return")
 	pathCmd.Flags().String("project", "", "restrict seed lookups to a workspace project (traversal remains global)")
 
+	dockeyCmd := &cobra.Command{
+		Use:   "dockey <key>",
+		Short: "Look up document entries (i18n JSON, package.json deps, go.mod requires) by key substring (v3.3)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			kind, _ := cmd.Flags().GetString("kind")
+			project, _ := cmd.Flags().GetString("project")
+			limit, _ := cmd.Flags().GetInt("limit")
+			return runQueryDocKey(cmd.Context(), args[0], kind, project, limit)
+		},
+	}
+	dockeyCmd.Flags().String("kind", "", "filter by document kind (e.g. i18n_json, package_json_deps, go_mod_requires)")
+	dockeyCmd.Flags().String("project", "", "restrict to a workspace project (by name)")
+	dockeyCmd.Flags().Int("limit", 50, "max results")
+
 	cmd.AddCommand(
 		findCmd,
 		refsCmd,
@@ -169,8 +184,30 @@ func newQueryCmd() *cobra.Command {
 		neighborCmd,
 		impactCmd,
 		pathCmd,
+		dockeyCmd,
 	)
 	return cmd
+}
+
+func runQueryDocKey(ctx context.Context, key, kind, project string, limit int) error {
+	rc, err := loadRepoCtx()
+	if err != nil {
+		return err
+	}
+	hits, err := callRead(ctx, rc, ipc.MethodFindDocumentKey,
+		ipc.FindDocumentKeyParams{Key: key, Kind: kind, Project: project, Limit: limit},
+		(*service.Service).FindDocumentKey)
+	if err != nil {
+		return err
+	}
+	if len(hits) == 0 {
+		fmt.Fprintln(os.Stderr, "no matches")
+		return nil
+	}
+	for _, h := range hits {
+		fmt.Printf("%-30s  %s:%d  %s\n", h.Key, h.Path, h.Line, truncate(h.Value, 120))
+	}
+	return nil
 }
 
 // daemonClient returns (client, true) if a daemon is reachable at the
@@ -262,6 +299,62 @@ func newTopLevelSearchCmd() *cobra.Command {
 	cmd.Flags().String("path", "", "filter by path substring")
 	cmd.Flags().String("project", "", "restrict to a workspace project (by name)")
 	cmd.Flags().String("since", "", "restrict to files changed between <ref>...HEAD")
+	return cmd
+}
+
+// newTopLevelRefsCmd, newTopLevelOutlineCmd, and newTopLevelImpactCmd
+// extend the v4 T6 alias set: agents (and users) type the reflexive
+// name; making it error taught them the tool "doesn't work".
+func newTopLevelRefsCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "refs <symbol>",
+		Short:   "Show references to a symbol (alias for `myco query refs`)",
+		Aliases: []string{"references"},
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			limit, _ := cmd.Flags().GetInt("limit")
+			project, _ := cmd.Flags().GetString("project")
+			since, _ := cmd.Flags().GetString("since")
+			return runQueryRefs(cmd.Context(), args[0], project, since, limit)
+		},
+	}
+	cmd.Flags().Int("limit", 100, "max results")
+	cmd.Flags().String("project", "", "restrict to a workspace project (by name)")
+	cmd.Flags().String("since", "", "restrict to files changed between <ref>...HEAD")
+	return cmd
+}
+
+func newTopLevelOutlineCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "outline <path>",
+		Short: "Print a file's symbol outline (alias for `myco query outline`)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			focus, _ := cmd.Flags().GetString("focus")
+			return runQueryOutline(cmd.Context(), args[0], focus)
+		},
+	}
+	cmd.Flags().String("focus", "", "v2.4 lexical focus filter — keep top-level items whose subtree matches")
+	return cmd
+}
+
+func newTopLevelImpactCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "impact <symbol>",
+		Short: "Transitive inbound closure around a symbol (alias for `myco query impact`)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			kind, _ := cmd.Flags().GetString("kind")
+			depth, _ := cmd.Flags().GetInt("depth")
+			project, _ := cmd.Flags().GetString("project")
+			since, _ := cmd.Flags().GetString("since")
+			return runQueryImpact(cmd.Context(), args[0], kind, project, since, depth)
+		},
+	}
+	cmd.Flags().String("kind", "", "filter callers by kind (e.g. 'method', 'function')")
+	cmd.Flags().Int("depth", 5, "max traversal depth (max 10)")
+	cmd.Flags().String("project", "", "restrict reported callers to a workspace project")
+	cmd.Flags().String("since", "", "restrict reported callers to files changed between <ref>...HEAD")
 	return cmd
 }
 
