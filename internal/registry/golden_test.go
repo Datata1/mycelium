@@ -206,6 +206,14 @@ func goldenCases() []struct {
 						StartLine: 30,
 						Depth:     1,
 					},
+					{
+						ID:        5,
+						Qualified: "crypto.Sign",
+						Kind:      "function",
+						Path:      "internal/crypto/sign.go",
+						StartLine: 9,
+						Depth:     2,
+					},
 				},
 				Edges: []query.NeighborEdge{
 					{
@@ -217,6 +225,32 @@ func goldenCases() []struct {
 						SrcPath:   "internal/auth/service.go",
 						SrcLine:   60,
 						Depth:     1,
+						Direction: "out",
+					},
+					{
+						// Second call site into the same callee: must render
+						// as one row, not a duplicate.
+						FromID:    1,
+						FromName:  "AuthService.Login",
+						ToID:      3,
+						ToName:    "session.Mint",
+						Kind:      "call",
+						SrcPath:   "internal/auth/service.go",
+						SrcLine:   71,
+						Depth:     1,
+						Direction: "out",
+					},
+					{
+						// Depth-2 hop: the row keeps the near endpoint so the
+						// topology (Mint -> Sign) survives the flat list.
+						FromID:    3,
+						FromName:  "session.Mint",
+						ToID:      5,
+						ToName:    "crypto.Sign",
+						Kind:      "call",
+						SrcPath:   "internal/session/mint.go",
+						SrcLine:   41,
+						Depth:     2,
 						Direction: "out",
 					},
 					{
@@ -319,42 +353,75 @@ func goldenCases() []struct {
 		{
 			name:   "list_files",
 			method: "list_files",
-			result: []query.FileHit{
-				{
-					Path:        "internal/auth/service.go",
-					Language:    "go",
-					SymbolCount: 4,
-					SizeBytes:   6144,
-					LastIndexed: time.Date(2026, 1, 2, 15, 4, 5, 0, time.UTC),
-				},
-				{
-					Path:        "internal/session/mint.go",
-					Language:    "go",
-					SymbolCount: 2,
-					SizeBytes:   2048,
-					LastIndexed: time.Date(2026, 1, 2, 15, 4, 5, 0, time.UTC),
+			result: query.ListFilesResult{
+				Matches: []query.FileHit{
+					{
+						Path:        "internal/auth/service.go",
+						Language:    "go",
+						SymbolCount: 4,
+						SizeBytes:   6144,
+						LastIndexed: time.Date(2026, 1, 2, 15, 4, 5, 0, time.UTC),
+					},
+					{
+						Path:        "internal/session/mint.go",
+						Language:    "go",
+						SymbolCount: 2,
+						SizeBytes:   2048,
+						LastIndexed: time.Date(2026, 1, 2, 15, 4, 5, 0, time.UTC),
+					},
 				},
 			},
 		},
 		{
 			name:   "find_document_key",
 			method: "find_document_key",
-			result: []query.DocumentHit{
-				{
-					ID:    1,
-					Kind:  "yaml",
-					Path:  ".mycelium.yml",
-					Key:   "watcher.backend",
-					Value: "watchman",
-					Line:  12,
+			result: query.FindDocumentKeyResult{
+				Matches: []query.DocumentHit{
+					{
+						ID:    1,
+						Kind:  "yaml",
+						Path:  ".mycelium.yml",
+						Key:   "watcher.backend",
+						Value: "watchman",
+						Line:  12,
+					},
+					{
+						ID:    2,
+						Kind:  "json",
+						Path:  "package.json",
+						Key:   "scripts.build",
+						Value: "tsc -p .",
+						Line:  8,
+					},
 				},
-				{
-					ID:    2,
-					Kind:  "json",
-					Path:  "package.json",
-					Key:   "scripts.build",
-					Value: "tsc -p .",
-					Line:  8,
+			},
+		},
+		{
+			// A full page plus the truncation hint: agents must be able to
+			// tell "all the references" from "the first page of them".
+			name:   "get_references_truncated",
+			method: "get_references",
+			result: query.GetReferencesResult{
+				Matches: []query.ReferenceHit{
+					{
+						ID:            1,
+						SrcPath:       "internal/http/handlers/login.go",
+						SrcLine:       28,
+						SrcSymbolName: "handlers.Login",
+						DstName:       "Login",
+						Kind:          "call",
+						Resolved:      true,
+					},
+					{
+						ID:      2,
+						SrcPath: "internal/auth/service_test.go",
+						SrcLine: 55,
+						DstName: "Login",
+						Kind:    "call",
+					},
+				},
+				Hints: []string{
+					"showing the first 2 matches — more exist; pass a larger limit to see them",
 				},
 			},
 		},

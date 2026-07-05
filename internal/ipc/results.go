@@ -33,6 +33,9 @@ type SymbolHit struct {
 // has something useful to say about why — typo'd project name,
 // kind filter that eliminated all real matches, etc. Empty Hints on an
 // empty Matches means "the index just doesn't contain that symbol."
+// On full results, Hints may carry a truncation notice when the hit
+// count reached the limit and more matches exist — without it, agents
+// can't distinguish "these are all the matches" from "the first page".
 //
 // Always returned with non-nil Matches (empty slice rather than nil) so
 // JSON serialisation produces `[]` instead of `null` — agents
@@ -55,10 +58,27 @@ type GetReferencesResult struct {
 // SearchLexicalResult wraps lexical hits with optional hints. Hints are
 // populated on empty Matches when the reader can explain or redirect
 // (identifier-shaped pattern → find_symbol; index entries missing on
-// disk → stale index).
+// disk → stale index), and on full Matches when the result hit the
+// k cap and more matches exist.
 type SearchLexicalResult struct {
 	Matches []LexicalHit `json:"matches"`
 	Hints   []string     `json:"hints,omitempty"`
+}
+
+// ListFilesResult wraps file hits with optional hints — the same
+// envelope convention as FindSymbolResult (v3.1). Introduced when
+// truncation transparency landed: a bare JSON array had nowhere to say
+// "this was capped at 500".
+type ListFilesResult struct {
+	Matches []FileHit `json:"matches"`
+	Hints   []string  `json:"hints,omitempty"`
+}
+
+// FindDocumentKeyResult wraps document-key hits with optional hints —
+// same envelope convention and rationale as ListFilesResult.
+type FindDocumentKeyResult struct {
+	Matches []DocumentHit `json:"matches"`
+	Hints   []string      `json:"hints,omitempty"`
 }
 
 // ReferenceHit is one call/import/type-use site pointing at a symbol.

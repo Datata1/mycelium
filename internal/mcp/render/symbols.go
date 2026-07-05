@@ -31,11 +31,7 @@ func FindSymbol(raw json.RawMessage) string {
 			fmt.Fprintf(&sb, "  %s\n", first)
 		}
 	}
-	if len(r.Hints) > 0 {
-		sb.WriteString("\nhints:\n  ")
-		sb.WriteString(strings.Join(r.Hints, "\n  "))
-		sb.WriteByte('\n')
-	}
+	writeHints(&sb, r.Hints)
 	m := r.Matches[0]
 	sb.WriteString(nextLine(
 		fmt.Sprintf("callers: get_references(%q)", m.Qualified),

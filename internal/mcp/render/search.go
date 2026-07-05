@@ -33,35 +33,38 @@ func Lexical(raw json.RawMessage) string {
 		sb.WriteString(note)
 		sb.WriteByte('\n')
 	}
+	writeHints(&sb, r.Hints)
 	return strings.TrimRight(sb.String(), "\n")
 }
 
 func ListFiles(raw json.RawMessage) string {
-	var files []ipc.FileHit
-	if err := json.Unmarshal(raw, &files); err != nil {
+	var r ipc.ListFilesResult
+	if err := json.Unmarshal(raw, &r); err != nil {
 		return RawJSON(raw)
 	}
-	if len(files) == 0 {
+	if len(r.Matches) == 0 {
 		return "no files match — drop the name_contains/language filters, or run stats to see what languages are indexed"
 	}
 	var sb strings.Builder
-	for _, f := range files {
+	for _, f := range r.Matches {
 		fmt.Fprintf(&sb, "%-60s  %-8s  %d symbols\n", f.Path, f.Language, f.SymbolCount)
 	}
+	writeHints(&sb, r.Hints)
 	return strings.TrimRight(sb.String(), "\n")
 }
 
 func DocumentKey(raw json.RawMessage) string {
-	var hits []ipc.DocumentHit
-	if err := json.Unmarshal(raw, &hits); err != nil {
+	var r ipc.FindDocumentKeyResult
+	if err := json.Unmarshal(raw, &r); err != nil {
 		return RawJSON(raw)
 	}
-	if len(hits) == 0 {
+	if len(r.Matches) == 0 {
 		return "no matches — keys match by substring over indexed documents (i18n JSON, package.json deps, go.mod requires); stats shows documents_by_kind"
 	}
 	var sb strings.Builder
-	for _, h := range hits {
+	for _, h := range r.Matches {
 		fmt.Fprintf(&sb, "%-30s  %s:%d  %s\n", h.Key, h.Path, h.Line, h.Value)
 	}
+	writeHints(&sb, r.Hints)
 	return strings.TrimRight(sb.String(), "\n")
 }

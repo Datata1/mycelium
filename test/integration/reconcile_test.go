@@ -163,12 +163,12 @@ func TestIntegration_ReconcilePruneRespectsWorkspaces(t *testing.T) {
 		{"web", 0},
 		{"worker", 1},
 	} {
-		files, err := reader.ListFiles(ctx, "", "", tc.project, 100, nil)
+		res, err := reader.ListFiles(ctx, "", "", tc.project, 100, nil)
 		if err != nil {
 			t.Fatalf("list_files project=%q: %v", tc.project, err)
 		}
-		if len(files) != tc.want {
-			t.Errorf("project %q: got %d files, want %d", tc.project, len(files), tc.want)
+		if len(res.Matches) != tc.want {
+			t.Errorf("project %q: got %d files, want %d", tc.project, len(res.Matches), tc.want)
 		}
 	}
 }

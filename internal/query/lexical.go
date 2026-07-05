@@ -107,16 +107,21 @@ func (r *Reader) SearchLexical(ctx context.Context, pattern, pathContains, proje
 		close(hitsCh)
 	}()
 
+	// Collect k+1 so a full page is distinguishable from a capped one.
 	hits := []LexicalHit{}
 	for h := range hitsCh {
 		hits = append(hits, h)
-		if len(hits) >= k {
+		if len(hits) > k {
 			// Signal workers to stop. We drain the remaining channel so the
 			// goroutines can finish cleanly.
 			for range hitsCh {
 			}
 			break
 		}
+	}
+	if len(hits) > k {
+		hits = hits[:k]
+		res.Hints = append(res.Hints, truncationHint(k))
 	}
 	res.Matches = hits
 	if ctx.Err() != nil {
@@ -131,7 +136,7 @@ func (r *Reader) SearchLexical(ctx context.Context, pattern, pathContains, proje
 			pattern, len(paths), pathContains)
 	}
 	if len(hits) == 0 {
-		res.Hints = buildLexicalHints(pattern, identifierShaped(pattern), int(missingOnDisk.Load()))
+		res.Hints = append(res.Hints, buildLexicalHints(pattern, identifierShaped(pattern), int(missingOnDisk.Load()))...)
 	}
 	return res, nil
 }

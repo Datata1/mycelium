@@ -194,18 +194,21 @@ func runQueryDocKey(ctx context.Context, key, kind, project string, limit int) e
 	if err != nil {
 		return err
 	}
-	hits, err := callRead(ctx, rc, ipc.MethodFindDocumentKey,
+	res, err := callRead(ctx, rc, ipc.MethodFindDocumentKey,
 		ipc.FindDocumentKeyParams{Key: key, Kind: kind, Project: project, Limit: limit},
 		(*service.Service).FindDocumentKey)
 	if err != nil {
 		return err
 	}
-	if len(hits) == 0 {
+	if len(res.Matches) == 0 {
 		fmt.Fprintln(os.Stderr, "no matches")
 		return nil
 	}
-	for _, h := range hits {
+	for _, h := range res.Matches {
 		fmt.Printf("%-30s  %s:%d  %s\n", h.Key, h.Path, h.Line, truncate(h.Value, 120))
+	}
+	for _, hint := range res.Hints {
+		fmt.Fprintln(os.Stderr, hint)
 	}
 	return nil
 }
@@ -423,14 +426,17 @@ func runQueryFiles(ctx context.Context, nameContains, language, project, since s
 	if err != nil {
 		return err
 	}
-	hits, err := callRead(ctx, rc, ipc.MethodListFiles,
+	res, err := callRead(ctx, rc, ipc.MethodListFiles,
 		ipc.ListFilesParams{Language: language, NameContains: nameContains, Project: project, Since: since, Limit: limit},
 		(*service.Service).ListFiles)
 	if err != nil {
 		return err
 	}
-	for _, h := range hits {
+	for _, h := range res.Matches {
 		fmt.Printf("%s  [%s]  %d symbols  %d bytes\n", h.Path, h.Language, h.SymbolCount, h.SizeBytes)
+	}
+	for _, hint := range res.Hints {
+		fmt.Fprintln(os.Stderr, hint)
 	}
 	return nil
 }

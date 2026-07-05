@@ -104,7 +104,8 @@ func TestIntegration_WorkspaceMode(t *testing.T) {
 			{"", 3},
 		}
 		for _, tc := range cases {
-			files, err := reader.ListFiles(ctx, "", "", tc.project, 100, nil)
+			lfRes, err := reader.ListFiles(ctx, "", "", tc.project, 100, nil)
+			files := lfRes.Matches
 			if err != nil {
 				t.Fatalf("list_files project=%q: %v", tc.project, err)
 			}
@@ -245,7 +246,8 @@ func TestIntegration_WorkspaceMode(t *testing.T) {
 	})
 
 	t.Run("file_hit_carries_project", func(t *testing.T) {
-		files, err := reader.ListFiles(ctx, "", "", "", 100, nil)
+		lfRes, err := reader.ListFiles(ctx, "", "", "", 100, nil)
+		files := lfRes.Matches
 		if err != nil {
 			t.Fatalf("list_files: %v", err)
 		}

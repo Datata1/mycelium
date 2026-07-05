@@ -3,6 +3,7 @@ package render
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/datata1/mycelium/internal/ipc"
@@ -35,6 +36,7 @@ func References(raw json.RawMessage) string {
 		fmt.Fprintf(&sb, "%-40s  %s:%d  [%s/%s] -> %s\n",
 			caller, h.SrcPath, h.SrcLine, h.Kind, tag, h.DstName)
 	}
+	writeHints(&sb, r.Hints)
 	h := hits[0]
 	sb.WriteString(nextLine(
 		fmt.Sprintf("read a call site: read_focused(%q, focus=%q)", h.SrcPath, h.DstName),
@@ -52,36 +54,65 @@ func Neighborhood(raw json.RawMessage) string {
 	fmt.Fprintf(&sb, "seed: %-50s  %-10s  %s:%d\n",
 		n.Seed.Qualified, n.Seed.Kind, n.Seed.Path, n.Seed.StartLine)
 
-	// Split edges into callers (in) and callees (out)
-	var in, out []ipc.NeighborEdge
-	for _, e := range n.Edges {
-		switch e.Direction {
-		case "in":
-			in = append(in, e)
-		default:
-			out = append(out, e)
-		}
-	}
-
 	nodeByID := make(map[int64]ipc.NeighborNode, len(n.Nodes))
 	for _, nd := range n.Nodes {
 		nodeByID[nd.ID] = nd
 	}
 
-	if len(out) > 0 {
-		sb.WriteString("\ncallees (out):\n")
-		for _, e := range out {
-			nd := nodeByID[e.ToID]
-			fmt.Fprintf(&sb, "  %-50s  %s:%d\n", nd.Qualified, nd.Path, nd.StartLine)
+	// One row per reachable node, not per edge: multiple call sites into
+	// the same node would otherwise print duplicate lines. Rows carry the
+	// node's discovery depth, and depth≥2 rows keep the near endpoint of
+	// their first-seen edge so the topology stays readable.
+	writeSection := func(title string, farCallsNear bool, far func(ipc.NeighborEdge) (int64, string)) {
+		type row struct {
+			depth int
+			label string
+			node  ipc.NeighborNode
+		}
+		var rows []row
+		seen := map[int64]bool{}
+		for _, e := range n.Edges {
+			farID, near := far(e)
+			if farID == 0 || seen[farID] {
+				continue
+			}
+			nd, ok := nodeByID[farID]
+			if !ok {
+				continue
+			}
+			seen[farID] = true
+			label := nd.Qualified
+			if nd.Depth >= 2 && near != "" {
+				// Arrow always points caller -> callee.
+				if farCallsNear {
+					label = nd.Qualified + " -> " + near
+				} else {
+					label = near + " -> " + nd.Qualified
+				}
+			}
+			rows = append(rows, row{depth: nd.Depth, node: nd, label: label})
+		}
+		if len(rows) == 0 {
+			return
+		}
+		sort.SliceStable(rows, func(i, j int) bool { return rows[i].depth < rows[j].depth })
+		fmt.Fprintf(&sb, "\n%s\n", title)
+		for _, r := range rows {
+			fmt.Fprintf(&sb, "  [d=%d] %-50s  %s:%d\n", r.depth, r.label, r.node.Path, r.node.StartLine)
 		}
 	}
-	if len(in) > 0 {
-		sb.WriteString("\ncallers (in):\n")
-		for _, e := range in {
-			nd := nodeByID[e.FromID]
-			fmt.Fprintf(&sb, "  %-50s  %s:%d\n", nd.Qualified, nd.Path, nd.StartLine)
+	writeSection("callees (out):", false, func(e ipc.NeighborEdge) (int64, string) {
+		if e.Direction == "in" {
+			return 0, ""
 		}
-	}
+		return e.ToID, e.FromName
+	})
+	writeSection("callers (in):", true, func(e ipc.NeighborEdge) (int64, string) {
+		if e.Direction != "in" {
+			return 0, ""
+		}
+		return e.FromID, e.ToName
+	})
 	for _, note := range n.Notes {
 		fmt.Fprintf(&sb, "\nnote: %s\n", note)
 	}

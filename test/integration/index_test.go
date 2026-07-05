@@ -191,12 +191,12 @@ func TestIntegration_IndexAndQuery(t *testing.T) {
 	})
 
 	t.Run("list_files", func(t *testing.T) {
-		files, err := reader.ListFiles(ctx, "", "", "", 100, nil)
+		res, err := reader.ListFiles(ctx, "", "", "", 100, nil)
 		if err != nil {
 			t.Fatalf("list_files: %v", err)
 		}
-		if len(files) != 4 {
-			t.Errorf("files: got %d, want 4", len(files))
+		if len(res.Matches) != 4 {
+			t.Errorf("files: got %d, want 4", len(res.Matches))
 		}
 	})
 

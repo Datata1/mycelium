@@ -77,7 +77,7 @@ func (r *Reader) FindSymbol(ctx context.Context, name, kind, project string, lim
 	if kind == "" {
 		args := append([]any{q, q}, scopeArgs...)
 		args = append(args, pathArgs...)
-		args = append(args, name, name+"%", limit)
+		args = append(args, name, name+"%", limit+1)
 		rows, err = r.db.QueryContext(ctx, `
 			SELECT s.id, s.name, s.qualified, s.kind, `+displayPath+`, COALESCE(p.name, ''),
 			       s.start_line, s.end_line,
@@ -93,7 +93,7 @@ func (r *Reader) FindSymbol(ctx context.Context, name, kind, project string, lim
 	} else {
 		args := append([]any{q, q, kind}, scopeArgs...)
 		args = append(args, pathArgs...)
-		args = append(args, limit)
+		args = append(args, limit+1)
 		rows, err = r.db.QueryContext(ctx, `
 			SELECT s.id, s.name, s.qualified, s.kind, `+displayPath+`, COALESCE(p.name, ''),
 			       s.start_line, s.end_line,
@@ -120,14 +120,29 @@ func (r *Reader) FindSymbol(ctx context.Context, name, kind, project string, lim
 	if err := rows.Err(); err != nil {
 		return empty, err
 	}
+	// Queried limit+1: an extra row means the limit cut the result.
+	truncated := len(hits) > limit
+	if truncated {
+		hits = hits[:limit]
+	}
 	if tokens := focus.Tokenize(focusQ); len(tokens) > 0 {
 		hits = applyFocusToHits(tokens, hits)
 	}
 	result := FindSymbolResult{Matches: hits}
+	if truncated {
+		result.Hints = append(result.Hints, truncationHint(limit))
+	}
 	if len(hits) == 0 {
-		result.Hints = r.diagnoseEmptyFind(ctx, name, kind, project)
+		result.Hints = append(result.Hints, r.diagnoseEmptyFind(ctx, name, kind, project)...)
 	}
 	return result, nil
+}
+
+// truncationHint is the uniform "result was capped" notice. Without it
+// a full page is indistinguishable from a complete result — the most
+// quietly misleading shape a list tool can return.
+func truncationHint(limit int) string {
+	return fmt.Sprintf("showing the first %d matches — more exist; pass a larger limit to see them", limit)
 }
 
 // applyFocusToHits drops hits with no focus match and reorders survivors
@@ -203,7 +218,7 @@ func (r *Reader) GetReferences(ctx context.Context, target, project string, limi
 		}
 		args = append(args, scopeArgs...)
 		args = append(args, pathArgs...)
-		args = append(args, limit)
+		args = append(args, limit+1)
 		rows, err := r.db.QueryContext(ctx, `
 			SELECT r.id, `+displayPath+`, COALESCE(p.name, ''), r.line, r.col,
 			       COALESCE(r.src_symbol_id, 0), COALESCE(ss.qualified, ''),
@@ -224,6 +239,13 @@ func (r *Reader) GetReferences(ctx context.Context, target, project string, limi
 		}
 	}
 
+	// Queried limit+1: an extra row means the cap cut the resolved set,
+	// in which case the textual fallback below is skipped entirely.
+	truncated := len(hits) > limit
+	if truncated {
+		hits = hits[:limit]
+	}
+
 	// Textual-only fallback: refs unresolved but whose dst_name or dst_short
 	// equals the target. Useful when the target isn't defined in this repo
 	// (e.g. stdlib calls) or when resolution was ambiguous.
@@ -232,7 +254,7 @@ func (r *Reader) GetReferences(ctx context.Context, target, project string, limi
 		args := []any{target, target}
 		args = append(args, scopeArgs...)
 		args = append(args, pathArgs...)
-		args = append(args, remaining)
+		args = append(args, remaining+1)
 		rows, err := r.db.QueryContext(ctx, `
 			SELECT r.id, `+displayPath+`, COALESCE(p.name, ''), r.line, r.col,
 			       COALESCE(r.src_symbol_id, 0), COALESCE(ss.qualified, ''),
@@ -253,8 +275,15 @@ func (r *Reader) GetReferences(ctx context.Context, target, project string, limi
 		}
 	}
 
+	if len(hits) > limit {
+		hits = hits[:limit]
+		truncated = true
+	}
 	if hits != nil {
 		res.Matches = hits
+	}
+	if truncated {
+		res.Hints = append(res.Hints, truncationHint(limit))
 	}
 	if len(res.Matches) == 0 && project == "" && pathsIn == nil {
 		// Explain the miss only when no filter could be the cause —
@@ -346,17 +375,21 @@ func scanReferenceHits(rows *sql.Rows, acc []ReferenceHit) ([]ReferenceHit, erro
 // ListFiles returns files matching an optional language filter and name
 // substring. Globs can be layered by the CLI if richer matching is needed.
 // pathsIn (v1.6) scopes to the --since path set.
-func (r *Reader) ListFiles(ctx context.Context, language, nameContains, project string, limit int, pathsIn []string) ([]FileHit, error) {
+//
+// Returns the FindSymbolResult-style envelope so a capped result can say
+// so via Hints instead of silently looking complete.
+func (r *Reader) ListFiles(ctx context.Context, language, nameContains, project string, limit int, pathsIn []string) (ListFilesResult, error) {
+	res := ListFilesResult{Matches: []FileHit{}}
 	if limit <= 0 {
 		limit = 500
 	}
 	scope, scopeArgs, err := r.projectScope(ctx, project)
 	if err != nil {
-		return nil, err
+		return res, err
 	}
 	pathClause, pathArgs, err := pathsInClause(pathsIn)
 	if err != nil {
-		return nil, err
+		return res, err
 	}
 	args := []interface{}{}
 	conds := []string{}
@@ -386,7 +419,7 @@ func (r *Reader) ListFiles(ctx context.Context, language, nameContains, project 
 	}
 	appendScope(scope, scopeArgs)
 	appendScope(pathClause, pathArgs)
-	args = append(args, limit)
+	args = append(args, limit+1)
 	q := fmt.Sprintf(`
 		SELECT `+displayPath+`, COALESCE(p.name, ''), f.language, f.size_bytes, f.last_indexed_at,
 		       (SELECT COUNT(*) FROM symbols s WHERE s.file_id = f.id)
@@ -394,20 +427,26 @@ func (r *Reader) ListFiles(ctx context.Context, language, nameContains, project 
 		%s ORDER BY 1 LIMIT ?`, where)
 	rows, err := r.db.QueryContext(ctx, q, args...)
 	if err != nil {
-		return nil, err
+		return res, err
 	}
 	defer rows.Close()
-	var out []FileHit
 	for rows.Next() {
 		var h FileHit
 		var ts int64
 		if err := rows.Scan(&h.Path, &h.Project, &h.Language, &h.SizeBytes, &ts, &h.SymbolCount); err != nil {
-			return nil, err
+			return res, err
 		}
 		h.LastIndexed = time.Unix(ts, 0)
-		out = append(out, h)
+		res.Matches = append(res.Matches, h)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return res, err
+	}
+	if len(res.Matches) > limit {
+		res.Matches = res.Matches[:limit]
+		res.Hints = append(res.Hints, truncationHint(limit))
+	}
+	return res, nil
 }
 
 // GetFileOutline returns the hierarchical symbol tree for a file. Parent

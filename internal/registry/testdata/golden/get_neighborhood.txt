@@ -1,9 +1,10 @@
 seed: AuthService.Login                                   method      internal/auth/service.go:42
 
 callees (out):
-  session.Mint                                        internal/session/mint.go:30
+  [d=1] session.Mint                                        internal/session/mint.go:30
+  [d=2] session.Mint -> crypto.Sign                         internal/crypto/sign.go:9
 
 callers (in):
-  handlers.Login                                      internal/http/handlers/login.go:15
+  [d=1] handlers.Login                                      internal/http/handlers/login.go:15
 
 note: depth clamped from 9 to 5 (see LIMITATIONS.md#graph-queries)

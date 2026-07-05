@@ -19,17 +19,21 @@ import (
 // `kind` filters to one document kind (`i18n_json`,
 // `package_json_deps`, `go_mod_requires`). `project` scopes by
 // workspace project name. `limit` defaults to 50.
+//
+// Returns the FindSymbolResult-style envelope so a capped result can
+// say so via Hints instead of silently looking complete.
 func (r *Reader) FindDocumentKey(
 	ctx context.Context,
 	keyQuery, kind, project string,
 	limit int,
-) ([]DocumentHit, error) {
+) (FindDocumentKeyResult, error) {
+	res := FindDocumentKeyResult{Matches: []DocumentHit{}}
 	if limit <= 0 {
 		limit = 50
 	}
 	scope, scopeArgs, err := r.projectScope(ctx, project)
 	if err != nil {
-		return nil, err
+		return res, err
 	}
 	likePattern := "%" + keyQuery + "%"
 	prefixPattern := keyQuery + "%"
@@ -58,23 +62,29 @@ func (r *Reader) FindDocumentKey(
 		  length(d.key),
 		  d.key
 		LIMIT ?`
-	args = append(args, keyQuery, prefixPattern, limit)
+	args = append(args, keyQuery, prefixPattern, limit+1)
 
 	rows, err := r.db.QueryContext(ctx, q, args...)
 	if err != nil {
-		return nil, err
+		return res, err
 	}
 	defer rows.Close()
 
-	out := []DocumentHit{}
 	for rows.Next() {
 		var h DocumentHit
 		if err := rows.Scan(&h.ID, &h.Kind, &h.Path, &h.Project, &h.Key, &h.Value, &h.Line); err != nil {
-			return nil, err
+			return res, err
 		}
-		out = append(out, h)
+		res.Matches = append(res.Matches, h)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return res, err
+	}
+	if len(res.Matches) > limit {
+		res.Matches = res.Matches[:limit]
+		res.Hints = append(res.Hints, truncationHint(limit))
+	}
+	return res, nil
 }
 
 // trimDocumentValue exists so callers can render preview lines without

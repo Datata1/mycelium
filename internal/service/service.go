@@ -65,10 +65,10 @@ func (s *Service) GetReferences(ctx context.Context, p ipc.GetReferencesParams) 
 	return s.reader.GetReferences(ctx, p.Target, p.Project, p.Limit, paths)
 }
 
-func (s *Service) ListFiles(ctx context.Context, p ipc.ListFilesParams) ([]ipc.FileHit, error) {
+func (s *Service) ListFiles(ctx context.Context, p ipc.ListFilesParams) (ipc.ListFilesResult, error) {
 	paths, err := s.resolveSince(ctx, p.Since)
 	if err != nil {
-		return nil, err
+		return ipc.ListFilesResult{}, err
 	}
 	return s.reader.ListFiles(ctx, p.Language, p.NameContains, p.Project, p.Limit, paths)
 }
@@ -117,7 +117,7 @@ func (s *Service) ReadFocused(ctx context.Context, p ipc.ReadFocusedParams) (ipc
 	return s.reader.ReadFocused(ctx, s.root, p.Path, p.Focus)
 }
 
-func (s *Service) FindDocumentKey(ctx context.Context, p ipc.FindDocumentKeyParams) ([]ipc.DocumentHit, error) {
+func (s *Service) FindDocumentKey(ctx context.Context, p ipc.FindDocumentKeyParams) (ipc.FindDocumentKeyResult, error) {
 	return s.reader.FindDocumentKey(ctx, p.Key, p.Kind, p.Project, p.Limit)
 }
 

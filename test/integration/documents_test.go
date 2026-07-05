@@ -136,7 +136,8 @@ func TestIntegration_DocumentsI18NJSON(t *testing.T) {
 	reader := query.NewReader(ix.DB())
 
 	t.Run("find_document_key_substring", func(t *testing.T) {
-		hits, err := reader.FindDocumentKey(ctx, "navigation", "", "", 10)
+		dkRes, err := reader.FindDocumentKey(ctx, "navigation", "", "", 10)
+		hits := dkRes.Matches
 		if err != nil {
 			t.Fatalf("FindDocumentKey: %v", err)
 		}
@@ -158,7 +159,8 @@ func TestIntegration_DocumentsI18NJSON(t *testing.T) {
 	})
 
 	t.Run("find_document_key_exact_match_wins", func(t *testing.T) {
-		hits, err := reader.FindDocumentKey(ctx, "errors.notFound", "", "", 10)
+		dkRes, err := reader.FindDocumentKey(ctx, "errors.notFound", "", "", 10)
+		hits := dkRes.Matches
 		if err != nil {
 			t.Fatalf("FindDocumentKey: %v", err)
 		}
@@ -175,7 +177,8 @@ func TestIntegration_DocumentsI18NJSON(t *testing.T) {
 
 	t.Run("find_document_key_kind_filter", func(t *testing.T) {
 		// Filter by a kind that doesn't exist in the fixture → 0 hits.
-		hits, err := reader.FindDocumentKey(ctx, "navigation", "package_json_deps", "", 10)
+		dkRes, err := reader.FindDocumentKey(ctx, "navigation", "package_json_deps", "", 10)
+		hits := dkRes.Matches
 		if err != nil {
 			t.Fatalf("FindDocumentKey: %v", err)
 		}
@@ -185,7 +188,8 @@ func TestIntegration_DocumentsI18NJSON(t *testing.T) {
 	})
 
 	t.Run("find_document_key_empty_result", func(t *testing.T) {
-		hits, err := reader.FindDocumentKey(ctx, "xyzNoSuchKey", "", "", 10)
+		dkRes, err := reader.FindDocumentKey(ctx, "xyzNoSuchKey", "", "", 10)
+		hits := dkRes.Matches
 		if err != nil {
 			t.Fatalf("FindDocumentKey: %v", err)
 		}
@@ -199,7 +203,8 @@ func TestIntegration_DocumentsI18NJSON(t *testing.T) {
 
 	// v3.3 B3: package.json deps
 	t.Run("package_json_deps_indexed", func(t *testing.T) {
-		hits, err := reader.FindDocumentKey(ctx, "react", "package_json_deps", "", 10)
+		dkRes, err := reader.FindDocumentKey(ctx, "react", "package_json_deps", "", 10)
+		hits := dkRes.Matches
 		if err != nil {
 			t.Fatalf("FindDocumentKey react: %v", err)
 		}
@@ -220,7 +225,8 @@ func TestIntegration_DocumentsI18NJSON(t *testing.T) {
 	})
 
 	t.Run("package_json_workspace_value", func(t *testing.T) {
-		hits, err := reader.FindDocumentKey(ctx, "@codesphere/utils-common", "package_json_deps", "", 5)
+		dkRes, err := reader.FindDocumentKey(ctx, "@codesphere/utils-common", "package_json_deps", "", 5)
+		hits := dkRes.Matches
 		if err != nil {
 			t.Fatalf("FindDocumentKey scoped pkg: %v", err)
 		}
@@ -230,7 +236,8 @@ func TestIntegration_DocumentsI18NJSON(t *testing.T) {
 	})
 
 	t.Run("package_json_typescript_dev_dep", func(t *testing.T) {
-		hits, err := reader.FindDocumentKey(ctx, "typescript", "package_json_deps", "", 5)
+		dkRes, err := reader.FindDocumentKey(ctx, "typescript", "package_json_deps", "", 5)
+		hits := dkRes.Matches
 		if err != nil {
 			t.Fatalf("FindDocumentKey typescript: %v", err)
 		}
@@ -241,7 +248,8 @@ func TestIntegration_DocumentsI18NJSON(t *testing.T) {
 
 	// v3.3 B3: go.mod requires
 	t.Run("go_mod_requires_indexed", func(t *testing.T) {
-		hits, err := reader.FindDocumentKey(ctx, "github.com/foo/bar", "go_mod_requires", "", 5)
+		dkRes, err := reader.FindDocumentKey(ctx, "github.com/foo/bar", "go_mod_requires", "", 5)
+		hits := dkRes.Matches
 		if err != nil {
 			t.Fatalf("FindDocumentKey: %v", err)
 		}
@@ -254,7 +262,8 @@ func TestIntegration_DocumentsI18NJSON(t *testing.T) {
 	})
 
 	t.Run("go_mod_indirect_marked", func(t *testing.T) {
-		hits, err := reader.FindDocumentKey(ctx, "stretchr/testify", "go_mod_requires", "", 5)
+		dkRes, err := reader.FindDocumentKey(ctx, "stretchr/testify", "go_mod_requires", "", 5)
+		hits := dkRes.Matches
 		if err != nil {
 			t.Fatalf("FindDocumentKey: %v", err)
 		}
