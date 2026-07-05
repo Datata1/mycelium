@@ -6,7 +6,125 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Repo-relative result paths (field-test finding, 2026-07-05)
+### Output-format verdict + truncation transparency + neighborhood render (2026-07-05)
+
+Prompted by generic "LLMs prefer YAML/DOT over JSON" advice, we audited
+the MCP output surface. **Verdict: keep the compact aligned-text
+format** — myco never sent JSON to agents (that's `internal/mcp/render`'s
+whole job, and the v3.1/v4.0 field tests showed the one JSON envelope we
+ever shipped taught agents to avoid the tool). Two real gaps surfaced
+instead, both about *content*, not format:
+
+#### Added — truncation transparency
+
+- List tools used to cut at their SQL LIMIT with no marker, so an agent
+  could not distinguish "these are all the callers" from "the first 100
+  callers". `find_symbol`, `get_references`, `search_lexical`,
+  `list_files`, and `find_document_key` now fetch limit+1 and, when the
+  cap cut the result, say so via the hints block:
+  `showing the first N matches — more exist; pass a larger limit to see them`.
+- `get_references` skips its textual-fallback pass entirely when the
+  resolved pass already overflowed the budget.
+- CLI (`myco files`, `myco dockey`) prints the notice on stderr.
+
+#### Changed — BREAKING wire shape for two methods
+
+- `list_files` and `find_document_key` now return the
+  FindSymbolResult-style envelope (`{"matches": [...], "hints": [...]}`)
+  instead of a bare JSON array — a bare array had nowhere to carry the
+  truncation notice. MCP output is unaffected (rendered text); HTTP/socket
+  clients that indexed into the array must read `.matches`.
+
+#### Changed — get_neighborhood render
+
+- One row per reachable node instead of one per edge: multiple call
+  sites into the same node no longer print duplicate lines.
+- Rows carry the node's discovery depth (`[d=N]`, matching
+  impact_analysis), sorted shallowest-first.
+- Depth≥2 rows keep the near endpoint of their first-seen edge so the
+  topology survives the flat list: `[d=2] session.Mint -> crypto.Sign`.
+
+### critical_path: layered BFS replaces the acyclic-path CTE (2026-07-05)
+
+The stress benchmarks below caught `critical_path` at ~24 s on a dense
+(fanout 8) graph at depth 8: the `WITH RECURSIVE ... UNION ALL` CTE
+enumerated every acyclic path (~fanout^depth rows) before its
+`ORDER BY depth LIMIT k` could apply. An algorithm problem, not a
+storage-engine one — fixed in SQL + Go, no backend change.
+
+#### Changed
+
+- `query.Reader.CriticalPath` now runs a layered BFS in Go: one
+  `SELECT DISTINCT src, dst ... WHERE src IN (frontier)` per layer
+  (chunked at 500 ids for the 999-param limit), a visited set, and a
+  shortest-path parent DAG. Cost is bounded by the reachable edge
+  count, not the path count. Vertex hydration (single `IN` query +
+  stitch) is unchanged.
+- Measured (same fixtures as below): dense 10k **23.8 s → 1.1 ms**;
+  sparse 10k 0.69 ms → 0.28 ms; the previously-infeasible 50k dense
+  cell now measures 1.1 ms. `BenchmarkQueryCriticalPath` extended to
+  the full {10k,50k} × {fanout 2,8} grid.
+- Behavior note: all returned paths now share the minimal hop count
+  (`k` caps how many are listed). Previously, longer paths could pad
+  the result up to `k`; "critical path" semantics only ever promised
+  shortest paths.
+
+### Traversal stress benchmarks — SQLite-vs-graph-DB evidence (2026-07-05)
+
+The "SQLite recursive CTEs handle bounded traversal just fine" claim
+(`neighborhood.go`, docs/limitations.md) was asserted but never
+measured: the only traversal benchmark ran depth 2 on a fixture whose
+call graph was bipartite (methods → constructors), i.e. diameter ~2.
+This entry adds the missing evidence and settles the storage question
+for now: **stay on SQLite, no alternative backend**.
+
+#### Added
+
+- `pipeline.GenerateSyntheticRepoOpts(dir, symbolsTarget, fanout)` —
+  the synthetic fixture now emits one `Chain{i}` function per file
+  calling `fanout` other files' chain functions (step 1 plus prime
+  strides), giving the call graph unbounded diameter and tunable
+  density. `GenerateSyntheticRepo` delegates at fanout 2; existing
+  benchmarks unchanged.
+- `BenchmarkQueryImpactAnalysis` ({10k,50k} × {fanout 2,8} × {depth
+  5,10}), `BenchmarkQueryCriticalPath` ({10k,50k} fanout 2 + 10k
+  fanout 8, depth 8), `BenchmarkQueryNeighborhoodDeep` ({10k,50k} ×
+  {fanout 2,8}, depth 5, both directions). Setup fails loudly if the
+  fixture's chain refs didn't resolve, so a walk over unresolved
+  edges can't masquerade as a fast traversal.
+
+#### Measured (Apple M3, medians of 3 × `-benchtime=1x`)
+
+| Query at depth cap | 50k sparse (fanout 2) | 50k dense (fanout 8) |
+|---|---|---|
+| `impact_analysis` depth 10 | 6.3 ms / 65 rows | 7.6 ms / 395 rows |
+| `get_neighborhood` depth 5, both | 4.9 ms / 41 nodes | 14.8 ms / 221 nodes |
+| `critical_path` depth 8 | 0.75 ms | **~24 s** (10k dense) |
+
+The set-deduped walks (`UNION` CTEs) stay single-digit-ms at the
+depth caps even on dense 50k-symbol graphs — two orders of magnitude
+under the 250 ms revisit threshold. The one blow-up was
+`critical_path` on dense graphs: its `UNION ALL` CTE enumerated all
+acyclic paths (~fanout^depth) before `ORDER BY depth LIMIT k` could
+apply. That was an algorithm problem (naive path enumeration explodes
+identically in a graph DB), not a storage-engine problem — fixed in
+the entry above.
+
+#### Decision rule (recorded for posterity)
+
+Revisit a graph backend (the "v3 GraphStore swap") only if (a) a
+measured traversal at the depth caps on realistic density exceeds
+~250 ms at 50k symbols after adding a covering
+`refs(dst_symbol_id, src_symbol_id)` index, or (b) cross-repo
+federation / whole-graph analytics actually land on the roadmap.
+Neither is close today.
+
+#### Changed
+
+- docs/limitations.md: graph-queries rows now cite measured numbers;
+  the dense `critical_path` blow-up is documented as a known
+  limitation; stale embeddings/sqlite-vec rows are marked
+  **Removed in v5.0**.
 
 Second monorepo session: 9 of 14 grep/Read fallbacks were the agent
 translating myco's project-relative paths back to disk locations

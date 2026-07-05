@@ -16,22 +16,38 @@ to the v2.0 roadmap at `~/.claude/plans/1-everything-you-mentioned-indexed-duckl
 
 ## Graph queries
 
+Traversal cost at the depth caps is **measured**, not assumed (see the
+2026-07-05 CHANGELOG entries; `BenchmarkQueryImpactAnalysis` /
+`CriticalPath` / `NeighborhoodDeep` in `internal/pipeline`). On a
+50k-symbol fixture with fanout-8 density: `impact_analysis` depth 10 ≈
+7.6 ms, `get_neighborhood` depth 5 (both directions) ≈ 14.8 ms,
+`critical_path` depth 8 ≈ 1.1 ms. The SQLite-backed design has two
+orders of magnitude of headroom before the GraphStore revisit
+threshold (~250 ms at the caps).
+
 | Limitation | Cause | Status |
 |---|---|---|
-| `get_neighborhood` silently caps depth at 5 | Recursive CTE perf + exponential fan-out on dense graphs | Now surfaces a visible note; perf/backend revisit deferred to v1.7 or the v3 GraphStore swap |
+| `get_neighborhood` silently caps depth at 5 | Exponential fan-out on dense graphs (result size, not CTE perf — depth 5 dense measures ~15 ms) | Now surfaces a visible note; backend revisit only per the decision rule above |
 | `impact_analysis` (transitive test coverage) | — | **Shipped in v1.6** — flat distance-ranked list with optional `kind` filter; composes with `project` / `since` |
-| `critical_path` (shortest-path between two symbols) | — | **Shipped in v1.6** — bounded BFS via SQL CTE, cycles prevented, depth ≤ 8 |
+| `critical_path` (shortest-path between two symbols) | — | **Shipped in v1.6** — layered BFS in Go over the `refs` table, cycles prevented via visited set, depth ≤ 8. The original all-acyclic-paths CTE degraded to ~24 s on dense graphs (fanout^depth enumeration); rewritten 2026-07-05, now ≈1.1 ms dense at 50k |
+| `critical_path` only returns minimal-length paths | Shortest-path DAG enumeration; longer paths are never materialized | By design since the 2026-07-05 rewrite — `k` caps how many shortest paths are listed, not a mix of lengths |
 | No cross-repo graph (sibling worktrees sharing one logical graph) | Single SQLite file per worktree; federation not designed | **Explicit v3** — not coming to v2 |
 | No `ask(question)` natural-language tool | Violates "no LLM at query time" | **Explicit non-goal** — the calling agent is already an LLM |
 
 ## Indexing + scale
 
+> **Stale rows:** v5.0 removed the embeddings subsystem entirely
+> (migrations 0008/0009 drop `chunks`, `embed_queue`, `vss_chunks`;
+> `internal/index/vss.go` no longer exists). The semantic-search /
+> sqlite-vec rows below describe removed features and are kept only
+> until the next doc sweep.
+
 | Limitation | Cause | Status |
 |---|---|---|
-| Semantic search brute-force is slow past ~10k chunks | Pure-Go cosine scan; no SIMD | **Optional sqlite-vec integration shipped in v1.4** — install the extension + set `index.vector.extension_path` for the KNN fast path. Brute-force stays as fallback (works, just slow — see README benchmark table) |
-| Project-scoped semantic search skips the vec0 fast path | `vec0 MATCH` doesn't compose with arbitrary `WHERE` clauses | By design in v1.5 — brute-force cosine handles the project filter; unfiltered semantic search keeps the vec0 path |
-| `--since`-scoped semantic search skips the vec0 fast path | Same root cause: `vec0 MATCH` + path-IN filter don't compose | By design in v1.6 — brute-force handles the PR-scoped case; unscoped semantic queries keep the vec0 path |
-| Files with no extracted symbols (SQL, Markdown, config) get no embedding | `chunker.FromSymbols` is symbol-level only | Planned post-v1.4 — fallback window chunks |
+| Semantic search brute-force is slow past ~10k chunks | Pure-Go cosine scan; no SIMD | ~~Optional sqlite-vec integration shipped in v1.4~~ — **removed in v5.0** along with all embedding support |
+| Project-scoped semantic search skips the vec0 fast path | `vec0 MATCH` doesn't compose with arbitrary `WHERE` clauses | **Removed in v5.0** |
+| `--since`-scoped semantic search skips the vec0 fast path | Same root cause: `vec0 MATCH` + path-IN filter don't compose | **Removed in v5.0** |
+| Files with no extracted symbols (SQL, Markdown, config) get no embedding | `chunker.FromSymbols` is symbol-level only | **Removed in v5.0** — document parsers (v3.3) cover the structured-file cases instead |
 | Can't index multiple sub-projects with per-project config overrides | Flat `files` table, no `project_id` | **Shipped in v1.5** — `projects:` list in `.mycelium.yml` plus an optional `project` filter on every query tool. One daemon, one SQLite, N sub-projects inside one worktree. Cross-repo federation (N worktrees → one graph) stays **v3** |
 | PR-scoped `--since <ref>` filter on queries | — | **Shipped in v1.6** — resolved via `git diff --name-only <ref>...HEAD` at the transport boundary. Hard-capped at 500 changed files (SQLite 999-param limit); beyond that, the user is told to pick a tighter base ref rather than silently truncate |
 | fsnotify hits inotify limits on 100k+ file repos (default `fs.inotify.max_user_watches = 8192`) | Linux kernel cap | Planned **v1.7** Watchman opt-in backend |
@@ -53,7 +69,7 @@ to the v2.0 roadmap at `~/.claude/plans/1-everything-you-mentioned-indexed-duckl
 
 | Limitation | Cause | Status |
 |---|---|---|
-| `search_semantic` requires an embedder (Ollama or API) | Embeddings cost, provider-neutral surface | By design — returns `embeddings_not_configured` when off |
+| `search_semantic` requires an embedder (Ollama or API) | Embeddings cost, provider-neutral surface | **Removed in v5.0** — the tool no longer exists |
 | Indexing is deterministic and free — no LLM-generated summaries | Explicit architectural rule | By design — revisit as opt-in in v1.1+ if demand |
 | No pre-commit git hook | Blocks commits for indexing = user-hostile | **Explicit non-goal** |
 | No auto-refresh of MCP tool list when new versions ship | MCP spec requires client restart | Client-side, not our problem |
@@ -64,7 +80,7 @@ to the v2.0 roadmap at `~/.claude/plans/1-everything-you-mentioned-indexed-duckl
 |---|---|---|
 | `refs.resolver_version` is set per-write; no lazy daemon-start re-resolution | Simplification for v1.2 | Planned if it becomes a pain |
 | Daemon restart required when switching resolver versions (changes affect new files only) | No re-resolution trigger | Future |
-| Index model-switch invalidates all embeddings (dimensions differ) | No per-model retention | By design |
+| Index model-switch invalidates all embeddings (dimensions differ) | No per-model retention | **Removed in v5.0** — no embeddings to invalidate |
 | `files.project_id` as a queryable scope | Single-project schema pre-v1.5 | **Shipped in v1.5** — nullable `project_id` on `files` with cascade delete; NULL = implicit root project, so v1.4 configs keep working |
 
 ## Planned for v5
