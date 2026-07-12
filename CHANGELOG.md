@@ -6,6 +6,29 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Loop verifier, stage 2: `select_tests` + `myco tests` (WS08, 2026-07-12)
+
+#### Added
+
+- 14th MCP tool `select_tests` and CLI `myco tests [--since] [--depth]
+  [--project] [--dirs] [--json]`: changed files → their symbols → a
+  multi-seed inbound-closure walk (`query.InboundClosureFiles`, seeds
+  chunked, depth default 5/max 10) → the test files that exercise
+  anything touched, distance-ranked. Changed test files rank at
+  distance 0. CLI default output is bare paths (pipe into vitest/
+  pytest); `--dirs` prints unique `./`-prefixed package dirs for
+  `go test $(myco tests --dirs)`. Test-file conventions live in
+  `internal/check.IsTestFile` (`*_test.go`, `.test.`/`.spec.`/
+  `__tests__`, `test_*.py`/`*_test.py`/`tests/`; `testdata/` never).
+- Benchmark `BenchmarkQueryInboundClosureFiles` (multi-seed CTE:
+  3–16ms for ~200 seeds at depth 5 on 10–50k-symbol fixtures).
+
+#### Fixed
+
+- `impact_analysis`'s tool description claimed a `kind="test"` filter
+  answers "what tests cover this?" — no `test` symbol kind exists; the
+  description now points at `select_tests`.
+
 ### Loop verifier, stage 1: `myco check` + `verify_changes` (WS08, 2026-07-12)
 
 myco's first verifier surface, built for agent loops on large codebases:

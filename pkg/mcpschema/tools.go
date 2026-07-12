@@ -51,6 +51,7 @@ var toolTitles = map[string]string{
 	"find_document_key": "Look up document keys (i18n, deps)",
 	"stats":             "Show index status",
 	"verify_changes":    "Verify changes (structural check)",
+	"select_tests":      "Select tests for changed code",
 }
 
 // Tools returns the definitive tool list. Keep this in sync with the
@@ -254,7 +255,7 @@ func toolDefs() []Tool {
 		},
 		{
 			Name:        "impact_analysis",
-			Description: "Transitive inbound closure around a symbol, ranked by distance. Reach for this when answering 'who's impacted if I change X?' — it's the right tool to scope a refactor before touching code. With a `kind` filter (e.g. 'test') it also answers 'what tests cover this?'. Returns a flat distance-sorted list; use `get_neighborhood` instead when you need the graph shape rather than a flat impact set. Each hit's `path` + `project` pass verbatim to `read_focused`.",
+			Description: "Transitive inbound closure around a symbol, ranked by distance. Reach for this when answering 'who's impacted if I change X?' — it's the right tool to scope a refactor before touching code. The `kind` filter narrows the reported callers by symbol kind (function | method | type | class); for 'which tests cover my changes?' use `select_tests` instead. Returns a flat distance-sorted list; use `get_neighborhood` instead when you need the graph shape rather than a flat impact set. Each hit's `path` + `project` pass verbatim to `read_focused`.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -373,6 +374,27 @@ func toolDefs() []Tool {
 					"since": map[string]any{
 						"type":        "string",
 						"description": "Git ref for the diff base (merge-base with HEAD). Default \"HEAD\": verifies exactly the uncommitted work in progress.",
+					},
+				},
+			},
+		},
+		{
+			Name:        "select_tests",
+			Description: "Given your changed files (default: uncommitted vs HEAD; pass `since` for a branch base), walks the reverse call graph and returns the test files that exercise anything you touched — run those instead of the full suite. Distance-ranked; distance 0 = a test file you edited directly. Use after `verify_changes` passes to pick the cheapest meaningful test run.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"since": map[string]any{
+						"type":        "string",
+						"description": "Git ref for the diff base (merge-base with HEAD). Default \"HEAD\".",
+					},
+					"depth": map[string]any{
+						"type":        "integer",
+						"description": "Inbound-closure walk depth (default 5, max 10).",
+					},
+					"project": map[string]any{
+						"type":        "string",
+						"description": "Restrict selected test files to one workspace project.",
 					},
 				},
 			},

@@ -64,3 +64,29 @@ func Verify(raw json.RawMessage) string {
 	sb.WriteByte('\n')
 	return sb.String()
 }
+
+// SelectTests renders the test selection one path per line so shell
+// loops can pipe it straight into a test runner.
+func SelectTests(raw json.RawMessage) string {
+	var r ipc.SelectTestsResult
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return RawJSON(raw)
+	}
+	var sb strings.Builder
+	if len(r.TestFiles) == 0 {
+		sb.WriteString("no test files selected\n")
+	}
+	for _, tf := range r.TestFiles {
+		fmt.Fprintf(&sb, "%s", tf.Path)
+		if tf.Project != "" {
+			fmt.Fprintf(&sb, "  (project: %s)", tf.Project)
+		}
+		fmt.Fprintf(&sb, "  d=%d\n", tf.Distance)
+	}
+	for _, n := range r.Notes {
+		fmt.Fprintf(&sb, "note: %s\n", n)
+	}
+	fmt.Fprintf(&sb, "%d test file(s) for %d changed file(s) (%d seed symbols)\n",
+		len(r.TestFiles), r.ChangedFiles, r.Seeds)
+	return sb.String()
+}

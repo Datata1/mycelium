@@ -360,3 +360,94 @@ func nodeAsVertex(n NeighborNode) PathVertex {
 		Path: n.Path, Project: n.Project, StartLine: n.StartLine,
 	}
 }
+
+// ClosureFileHit is one file reached by the multi-seed inbound walk —
+// the raw material for test selection.
+type ClosureFileHit struct {
+	Path     string // repo-relative (displayPath)
+	Project  string
+	Distance int // 1 = file contains a direct caller of a seed
+}
+
+// InboundClosureFiles walks the inbound ref graph from ALL seed symbols
+// at once (the multi-seed sibling of ImpactAnalysis) and returns the
+// files containing any symbol in the closure, each at its minimum
+// distance. Seeds are chunked to respect SQLite's parameter cap;
+// results merge across chunks by min distance.
+func (r *Reader) InboundClosureFiles(ctx context.Context, seedIDs []int64, depth int) ([]ClosureFileHit, error) {
+	if len(seedIDs) == 0 {
+		return []ClosureFileHit{}, nil
+	}
+	if depth <= 0 {
+		depth = DefaultImpactDepth
+	}
+	if depth > MaxImpactDepth {
+		depth = MaxImpactDepth
+	}
+
+	type key struct{ path, project string }
+	best := map[key]int{}
+	const chunk = 500
+	for start := 0; start < len(seedIDs); start += chunk {
+		end := start + chunk
+		if end > len(seedIDs) {
+			end = len(seedIDs)
+		}
+		part := seedIDs[start:end]
+		placeholders := "?" + strings.Repeat(",?", len(part)-1)
+		args := make([]any, 0, len(part)+1)
+		for _, id := range part {
+			args = append(args, id)
+		}
+		args = append(args, depth)
+
+		rows, err := r.db.QueryContext(ctx, `
+			WITH RECURSIVE walk(symbol_id, depth) AS (
+				SELECT r.src_symbol_id, 1
+				FROM refs r
+				WHERE r.dst_symbol_id IN (`+placeholders+`) AND r.src_symbol_id IS NOT NULL
+			  UNION
+				SELECT r.src_symbol_id, w.depth + 1
+				FROM refs r
+				JOIN walk w ON r.dst_symbol_id = w.symbol_id
+				WHERE r.src_symbol_id IS NOT NULL AND w.depth < ?
+			)
+			SELECT `+displayPath+`, COALESCE(p.name, ''), MIN(w.depth)
+			FROM walk w
+			JOIN symbols s ON s.id = w.symbol_id
+			JOIN files f ON f.id = s.file_id
+			LEFT JOIN projects p ON p.id = f.project_id
+			GROUP BY 1, 2`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("inbound closure: %w", err)
+		}
+		for rows.Next() {
+			var k key
+			var d int
+			if err := rows.Scan(&k.path, &k.project, &d); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			if cur, ok := best[k]; !ok || d < cur {
+				best[k] = d
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+
+	out := make([]ClosureFileHit, 0, len(best))
+	for k, d := range best {
+		out = append(out, ClosureFileHit{Path: k.path, Project: k.project, Distance: d})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Distance != out[j].Distance {
+			return out[i].Distance < out[j].Distance
+		}
+		return out[i].Path < out[j].Path
+	})
+	return out, nil
+}

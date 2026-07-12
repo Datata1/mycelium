@@ -248,3 +248,48 @@ func BenchmarkQueryNeighborhoodDeep(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkQueryInboundClosureFiles measures the multi-seed CTE behind
+// select_tests: many seeds at once (a whole changed-file's symbol set)
+// against the same chain fixtures as ImpactAnalysis.
+func BenchmarkQueryInboundClosureFiles(b *testing.B) {
+	for _, size := range []int{10_000, 50_000} {
+		for _, fanout := range []int{2, 8} {
+			b.Run(fmt.Sprintf("%dk-fan%d", size/1000, fanout), func(b *testing.B) {
+				r := setupChainFixture(b, size, fanout)
+				// Seed with a mid-chain band of symbols, the shape a
+				// multi-file diff produces.
+				syms, err := r.SymbolsInFiles(context.Background(), chainFilePaths(40, 60))
+				if err != nil {
+					b.Fatalf("seeds: %v", err)
+				}
+				seeds := make([]int64, len(syms))
+				for i, s := range syms {
+					seeds[i] = s.ID
+				}
+				if len(seeds) == 0 {
+					b.Fatal("no seeds")
+				}
+				b.ResetTimer()
+				var files int
+				for i := 0; i < b.N; i++ {
+					hits, err := r.InboundClosureFiles(context.Background(), seeds, 5)
+					if err != nil {
+						b.Fatalf("closure: %v", err)
+					}
+					files = len(hits)
+				}
+				b.ReportMetric(float64(files), "files")
+			})
+		}
+	}
+}
+
+// chainFilePaths returns the fixture file names pkg%04d.go for [from,to).
+func chainFilePaths(from, to int) []string {
+	var out []string
+	for i := from; i < to; i++ {
+		out = append(out, fmt.Sprintf("pkg%04d.go", i))
+	}
+	return out
+}

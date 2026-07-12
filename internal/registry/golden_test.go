@@ -569,6 +569,29 @@ func goldenCases() []struct {
 			}(),
 		},
 		{
+			name:   "select_tests",
+			method: "select_tests",
+			result: ipc.SelectTestsResult{
+				ChangedFiles: 2,
+				Seeds:        7,
+				TestFiles: []ipc.TestFileHit{
+					{Path: "internal/auth/session_test.go", Distance: 0},
+					{Path: "internal/http/middleware_test.go", Distance: 1},
+					{Path: "packages/web/src/session.spec.ts", Project: "web", Distance: 3},
+				},
+			},
+		},
+		{
+			name:   "select_tests_empty",
+			method: "select_tests",
+			result: ipc.SelectTestsResult{
+				ChangedFiles: 1,
+				Seeds:        4,
+				TestFiles:    []ipc.TestFileHit{},
+				Notes:        []string{"no test files reach the changed code — consider adding coverage before large edits"},
+			},
+		},
+		{
 			name:   "unknown_method",
 			method: "does_not_exist",
 			result: map[string]any{"answer": 42, "detail": "unrenderable payload"},

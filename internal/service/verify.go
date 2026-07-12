@@ -247,3 +247,73 @@ func truncStrings(in []string, n int) []string {
 	out := append([]string{}, in[:n]...)
 	return append(out, fmt.Sprintf("… and %d more", len(in)-n))
 }
+
+// SelectTests maps the change set onto the test files that exercise it:
+// changed files → symbols defined there → multi-seed inbound closure →
+// files matching test-naming conventions. Changed test files themselves
+// rank at distance 0.
+func (s *Service) SelectTests(ctx context.Context, p ipc.SelectTestsParams) (ipc.SelectTestsResult, error) {
+	ref := p.Since
+	if ref == "" {
+		ref = verifySinceDefault
+	}
+	res := ipc.SelectTestsResult{TestFiles: []ipc.TestFileHit{}}
+
+	_, changed, err := gitref.ChangedSince(ctx, s.root, ref)
+	if err != nil {
+		return res, err
+	}
+	res.ChangedFiles = len(changed)
+	if len(changed) == 0 {
+		res.Notes = append(res.Notes, "clean tree — nothing changed, no tests selected")
+		return res, nil
+	}
+	if len(changed) > query.MaxPathsIn {
+		return res, fmt.Errorf("test-selection scope is %d changed paths (max %d) — pick a tighter base ref", len(changed), query.MaxPathsIn)
+	}
+
+	seen := map[string]struct{}{}
+	// Changed test files are always in the selection, at distance 0.
+	for _, path := range changed {
+		if check.IsTestFile(path) {
+			res.TestFiles = append(res.TestFiles, ipc.TestFileHit{Path: path, Distance: 0})
+			seen[path] = struct{}{}
+		}
+	}
+
+	syms, err := s.reader.SymbolsInFiles(ctx, changed)
+	if err != nil {
+		return res, err
+	}
+	seeds := make([]int64, len(syms))
+	for i, sym := range syms {
+		seeds[i] = sym.ID
+	}
+	res.Seeds = len(seeds)
+	if len(seeds) == 0 {
+		res.Notes = append(res.Notes, "no indexed symbols in the changed files — is the index fresh? (run `myco check`)")
+		return res, nil
+	}
+
+	hits, err := s.reader.InboundClosureFiles(ctx, seeds, p.Depth)
+	if err != nil {
+		return res, err
+	}
+	for _, h := range hits {
+		if p.Project != "" && h.Project != p.Project {
+			continue
+		}
+		if !check.IsTestFile(h.Path) {
+			continue
+		}
+		if _, dup := seen[h.Path]; dup {
+			continue
+		}
+		seen[h.Path] = struct{}{}
+		res.TestFiles = append(res.TestFiles, ipc.TestFileHit{Path: h.Path, Project: h.Project, Distance: h.Distance})
+	}
+	if len(res.TestFiles) == 0 {
+		res.Notes = append(res.Notes, "no test files reach the changed code — consider adding coverage before large edits")
+	}
+	return res, nil
+}

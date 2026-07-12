@@ -232,3 +232,140 @@ func Fresh() {}
 		}
 	})
 }
+
+// Changing a.go must select exactly the test file that reaches the
+// changed code through the call graph (b_test.go → Build → Widget),
+// never the unrelated c_test.go.
+func TestIntegration_SelectTests(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	dir := t.TempDir()
+
+	writeFile(t, dir, "go.mod", "module example.com/demo\n\ngo 1.22\n")
+	writeFile(t, dir, "a.go", `package demo
+
+func Widget() string { return "w" }
+`)
+	writeFile(t, dir, "b.go", `package demo
+
+func Build() string {
+	return Widget()
+}
+`)
+	writeFile(t, dir, "b_test.go", `package demo
+
+import "testing"
+
+func TestBuild(t *testing.T) {
+	if Build() == "" {
+		t.Fatal("empty")
+	}
+}
+`)
+	writeFile(t, dir, "c.go", `package demo
+
+func Unrelated() int { return 1 }
+`)
+	writeFile(t, dir, "c_test.go", `package demo
+
+import "testing"
+
+func TestUnrelated(t *testing.T) {
+	if Unrelated() != 1 {
+		t.Fatal("nope")
+	}
+}
+`)
+	gitIn(t, dir, "init", "-q", "-b", "main")
+	gitIn(t, dir, "config", "user.email", "test@example.com")
+	gitIn(t, dir, "config", "user.name", "Test")
+	gitIn(t, dir, "config", "commit.gpgsign", "false")
+	gitIn(t, dir, "add", ".")
+	gitIn(t, dir, "commit", "-q", "-m", "baseline")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	t.Cleanup(cancel)
+
+	ix := openIndex(t, filepath.Join(dir, ".mycelium", "index.db"))
+	t.Cleanup(func() { ix.Close() })
+
+	reg := parser.NewRegistry()
+	reg.Register(golang.New())
+	gr := goresolver.New(dir)
+	if _, err := gr.Load(); err != nil {
+		t.Fatalf("resolver load: %v", err)
+	}
+
+	walker := repo.NewWalker(dir, []string{"**/*.go"}, nil, 0)
+	p := &pipeline.Pipeline{
+		Index:    ix,
+		Registry: reg,
+		Walker:   walker,
+		Resolvers: map[string]pipeline.Resolver{
+			"go": gr,
+		},
+	}
+	if _, err := p.RunOnce(ctx); err != nil {
+		t.Fatalf("index: %v", err)
+	}
+	svc := newVerifyService(t, ix, dir, reg)
+
+	// Edit a.go (Widget's body) and reindex.
+	writeFile(t, dir, "a.go", `package demo
+
+func Widget() string { return "w2" }
+`)
+	if _, err := p.RunOnce(ctx); err != nil {
+		t.Fatalf("reindex: %v", err)
+	}
+
+	res, err := svc.SelectTests(ctx, ipc.SelectTestsParams{})
+	if err != nil {
+		t.Fatalf("SelectTests: %v", err)
+	}
+	var gotB, gotC bool
+	for _, tf := range res.TestFiles {
+		switch tf.Path {
+		case "b_test.go":
+			gotB = true
+		case "c_test.go":
+			gotC = true
+		}
+	}
+	if !gotB {
+		t.Errorf("expected b_test.go in selection; got %+v", res.TestFiles)
+	}
+	if gotC {
+		t.Errorf("c_test.go must NOT be selected; got %+v", res.TestFiles)
+	}
+
+	// A changed test file itself ranks at distance 0.
+	writeFile(t, dir, "c_test.go", `package demo
+
+import "testing"
+
+func TestUnrelated(t *testing.T) {
+	if Unrelated() != 1 {
+		t.Fatal("changed")
+	}
+}
+`)
+	if _, err := p.RunOnce(ctx); err != nil {
+		t.Fatalf("reindex: %v", err)
+	}
+	res, err = svc.SelectTests(ctx, ipc.SelectTestsParams{})
+	if err != nil {
+		t.Fatalf("SelectTests: %v", err)
+	}
+	var cDist = -1
+	for _, tf := range res.TestFiles {
+		if tf.Path == "c_test.go" {
+			cDist = tf.Distance
+		}
+	}
+	if cDist != 0 {
+		t.Errorf("changed c_test.go should be selected at distance 0; got %d (%+v)", cDist, res.TestFiles)
+	}
+}

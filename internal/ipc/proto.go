@@ -33,6 +33,7 @@ const (
 	MethodReadFocused     Method = "read_focused"
 	MethodFindDocumentKey Method = "find_document_key"
 	MethodVerifyChanges   Method = "verify_changes"
+	MethodSelectTests     Method = "select_tests"
 	MethodPing            Method = "ping"
 )
 
@@ -55,6 +56,7 @@ var AllMethods = []Method{
 	MethodReadFocused,
 	MethodFindDocumentKey,
 	MethodVerifyChanges,
+	MethodSelectTests,
 }
 
 // Request is the wire shape for a client call.
@@ -174,4 +176,13 @@ type FindDocumentKeyParams struct {
 // working tree.
 type VerifyChangesParams struct {
 	Since string `json:"since,omitempty"`
+}
+
+// SelectTestsParams scopes test selection. Same working-tree diff
+// semantics as VerifyChangesParams (empty Since = "HEAD"); Depth caps
+// the inbound-closure walk (default 5, max 10).
+type SelectTestsParams struct {
+	Since   string `json:"since,omitempty"`
+	Depth   int    `json:"depth,omitempty"`
+	Project string `json:"project,omitempty"`
 }

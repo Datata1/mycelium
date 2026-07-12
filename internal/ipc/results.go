@@ -446,3 +446,21 @@ func (r VerifyReport) ExitCode() int {
 		return 0
 	}
 }
+
+// TestFileHit is one test file that exercises something in the change
+// set, ranked by call-graph distance (0 = a test file that was itself
+// changed).
+type TestFileHit struct {
+	Path     string `json:"path"`
+	Project  string `json:"project,omitempty"`
+	Distance int    `json:"distance"`
+}
+
+// SelectTestsResult is the select_tests answer: run these instead of
+// the full suite.
+type SelectTestsResult struct {
+	ChangedFiles int           `json:"changed_files"`
+	Seeds        int           `json:"seeds"`
+	TestFiles    []TestFileHit `json:"test_files"`
+	Notes        []string      `json:"notes,omitempty"`
+}

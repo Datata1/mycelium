@@ -59,6 +59,7 @@ var tools = []Tool{
 	{ipc.MethodReadFocused, bind((*service.Service).ReadFocused), render.FocusedRead},
 	{ipc.MethodFindDocumentKey, bind((*service.Service).FindDocumentKey), render.DocumentKey},
 	{ipc.MethodVerifyChanges, bind((*service.Service).VerifyChanges), render.Verify},
+	{ipc.MethodSelectTests, bind((*service.Service).SelectTests), render.SelectTests},
 }
 
 var byMethod = func() map[ipc.Method]Tool {
