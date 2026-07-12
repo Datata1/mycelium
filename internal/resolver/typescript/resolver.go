@@ -29,6 +29,11 @@ func New() *Resolver { return &Resolver{} }
 
 func (r *Resolver) Ready() bool { return true }
 
+// Version: 2 = inheritance edges (extends/implements/interface-extends)
+// + abstract-class awareness. Bump on any output change for identical
+// source; drives the pipeline's parse_hash freshness mix.
+func (r *Resolver) Version() int { return 2 }
+
 func (r *Resolver) init() {
 	r.langTS = typescript.GetLanguage()
 	r.langTSX = tsx.GetLanguage()
@@ -211,7 +216,7 @@ func buildClassMethods(root *sitter.Node, content []byte, module string) map[str
 			switch c.Type() {
 			case "export_statement":
 				walk(c)
-			case "class_declaration":
+			case "class_declaration", "abstract_class_declaration":
 				collectClass(c, content, module, out)
 			}
 		}
@@ -234,7 +239,7 @@ func collectClass(n *sitter.Node, content []byte, module string, out map[string]
 	}
 	for i := uint32(0); i < body.NamedChildCount(); i++ {
 		m := body.NamedChild(int(i))
-		if m.Type() != "method_definition" && m.Type() != "method_signature" {
+		if m.Type() != "method_definition" && m.Type() != "method_signature" && m.Type() != "abstract_method_signature" {
 			continue
 		}
 		nm := m.ChildByFieldName("name")
@@ -249,7 +254,7 @@ func collectClass(n *sitter.Node, content []byte, module string, out map[string]
 
 func enclosingClass(n *sitter.Node, content []byte) string {
 	for p := n.Parent(); p != nil; p = p.Parent() {
-		if p.Type() == "class_declaration" {
+		if p.Type() == "class_declaration" || p.Type() == "abstract_class_declaration" {
 			if nm := p.ChildByFieldName("name"); nm != nil {
 				return tsutil.Slice(content, nm)
 			}

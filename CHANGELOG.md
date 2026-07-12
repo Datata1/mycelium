@@ -6,6 +6,35 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### TS/Python inheritance edges + abstract classes (field-test finding, 2026-07-12)
+
+"Who extends Pipeline?" forced a grep in the second monorepo session:
+`inherit` refs were Go-only (v2.1's go/types implements check), and —
+worse — TS abstract classes were missing from the index entirely
+because `abstract_class_declaration` is a distinct tree-sitter node
+type the parser never visited.
+
+#### Added
+
+- TS resolver `EmitInheritance`: `class X extends B`,
+  `class X implements I`, `interface A extends B` → `inherit` refs
+  (subclass -> base), qualified through the existing import table.
+  Mixin factories (`extends Mixin(Base)`) are skipped.
+- Python resolver `EmitInheritance`: class bases (`class X(B, m.C)`) →
+  `inherit` refs; `Generic[T]` subscripts and `metaclass=` keyword
+  arguments are skipped. Nested classes qualify as module.Outer.Inner.
+- `get_references` on a base class now lists subclasses as
+  `[inherit/resolved]` rows; `get_neighborhood` inheritance expansion
+  (previously Go-only) works for TS and Python seeds.
+
+#### Fixed
+
+- TS parser indexes `abstract class` declarations and
+  `abstract_method_signature` members; the resolver's `this.method()`
+  and heritage handling recognize abstract classes too. The parse_hash
+  freshness check picks both up on the next full scan — no index wipe
+  needed.
+
 ### Output-format verdict + truncation transparency + neighborhood render (2026-07-05)
 
 Prompted by generic "LLMs prefer YAML/DOT over JSON" advice, we audited

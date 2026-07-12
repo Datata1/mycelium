@@ -123,7 +123,7 @@ func (ex *extractor) walkTopChild(parent, n *sitter.Node) {
 		}
 	case "function_declaration", "generator_function_declaration":
 		ex.emitFunction(parent, n, "", parser.KindFunction)
-	case "class_declaration":
+	case "class_declaration", "abstract_class_declaration":
 		ex.emitClass(parent, n)
 	case "interface_declaration":
 		ex.emitSimpleNamed(parent, n, parser.KindInterface)
@@ -195,7 +195,7 @@ func (ex *extractor) emitClass(parent, n *sitter.Node) {
 	for i := uint32(0); i < classBody.NamedChildCount(); i++ {
 		m := classBody.NamedChild(int(i))
 		switch m.Type() {
-		case "method_definition", "method_signature":
+		case "method_definition", "method_signature", "abstract_method_signature":
 			ex.emitMethod(classBody, m, name)
 		case "public_field_definition":
 			// Field with initializer — emit as a variable binding inside the class.

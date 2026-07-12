@@ -23,6 +23,13 @@ import (
 type Resolver interface {
 	ResolveFile(ctx context.Context, absPath string, pr *parser.ParseResult) (resolved, total int)
 	Ready() bool
+	// Version is the resolver's implementation revision. It is mixed into
+	// the stored parse_hash so that files whose resolver output changed
+	// for identical source (e.g. a newly emitted ref kind) get rewritten
+	// on the next full scan. Bump it whenever ResolveFile or
+	// EmitInheritance output changes; it is unrelated to the per-ref
+	// ResolverVersion stamp.
+	Version() int
 }
 
 // InheritanceEmitter is the optional v2.1 extension: resolvers that compute
@@ -498,6 +505,7 @@ func (p *Pipeline) writeParsed(ctx context.Context, f repo.File, prs parser.Pars
 	// v1.2+: language-specific resolver rewrites call DstNames and stamps
 	// ResolverVersion before refs hit the DB. No-op when no resolver is
 	// registered for this language or when the resolver isn't ready.
+	parseHash := result.ParseHash
 	if res := p.resolverFor(prs.Language()); res != nil && res.Ready() {
 		res.ResolveFile(ctx, f.AbsPath, &result)
 		// v2.1: resolvers that implement InheritanceEmitter additionally
@@ -506,6 +514,14 @@ func (p *Pipeline) writeParsed(ctx context.Context, f repo.File, prs parser.Pars
 		if ie, ok := res.(InheritanceEmitter); ok {
 			ie.EmitInheritance(f.AbsPath, &result)
 		}
+		// Refs stored for this file depend on the resolver revision, not
+		// just the parse output — mix it into the freshness hash so
+		// resolver upgrades rewrite rows on the next scan. This also
+		// covers files first indexed before a slow-loading resolver
+		// (go/packages) became ready: once it is, the hash changes and
+		// their textual refs get re-resolved.
+		parseHash = append(append([]byte{}, parseHash...),
+			[]byte(fmt.Sprintf("|%s/r%d", prs.Language(), res.Version()))...)
 	}
 
 	db := p.Index.DB()
@@ -517,7 +533,7 @@ func (p *Pipeline) writeParsed(ctx context.Context, f repo.File, prs parser.Pars
 		_ = tx.Rollback()
 	}()
 
-	upsert, err := p.Index.UpsertFile(ctx, tx, f.RelPath, prs.Language(), int64(len(content)), f.MTimeNS, result.ContentHash, result.ParseHash, f.ProjectID)
+	upsert, err := p.Index.UpsertFile(ctx, tx, f.RelPath, prs.Language(), int64(len(content)), f.MTimeNS, result.ContentHash, parseHash, f.ProjectID)
 	if err != nil {
 		return false, 0, 0, err
 	}

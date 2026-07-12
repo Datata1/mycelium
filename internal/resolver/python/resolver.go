@@ -30,6 +30,11 @@ func New() *Resolver { return &Resolver{} }
 // Ready is always true — we don't have an up-front load step like go/packages.
 func (r *Resolver) Ready() bool { return true }
 
+// Version: 2 = inheritance edges from class bases. Bump on any output
+// change for identical source; drives the pipeline's parse_hash
+// freshness mix.
+func (r *Resolver) Version() int { return 2 }
+
 func (r *Resolver) init() { r.lang = python.GetLanguage() }
 
 // ResolveFile walks the file a second time, builds scope + import tables,

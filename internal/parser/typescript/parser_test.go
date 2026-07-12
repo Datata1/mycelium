@@ -146,6 +146,22 @@ function makeLocal(): Local {
 				{src: "widget.makeLocal", dst: "Local", kind: parser.RefCall},
 			},
 		},
+		{
+			name: "abstract class and abstract methods",
+			src: `export abstract class Pipeline {
+  public abstract start(): void;
+
+  run(): void {
+    this.start();
+  }
+}
+`,
+			wantSyms: []symWant{
+				{name: "Pipeline", kind: parser.KindClass, vis: parser.VisPublic},
+				{name: "start", kind: parser.KindMethod, parent: "Pipeline", vis: parser.VisPublic},
+				{name: "run", kind: parser.KindMethod, parent: "Pipeline", vis: parser.VisPublic},
+			},
+		},
 	}
 
 	p := New()
