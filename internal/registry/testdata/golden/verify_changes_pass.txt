@@ -1,0 +1,2 @@
+✓ git_scope — clean tree — nothing to verify
+summary: 1 pass · 0 warn · 0 fail

@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/datata1/mycelium/internal/ipc"
+	"github.com/datata1/mycelium/internal/languages"
 	"github.com/datata1/mycelium/internal/query"
 	"github.com/datata1/mycelium/internal/service"
 )
@@ -243,6 +244,7 @@ func callRead[P, R any](ctx context.Context, rc repoCtx, method ipc.Method, para
 	defer ix.Close()
 	svc := service.NewReadOnly(ix, rc.Root, nil)
 	svc.SetProbe(probeFromConfig(rc))
+	svc.SetParsers(languages.Registry(rc.Cfg.Languages))
 	return local(svc, ctx, params)
 }
 

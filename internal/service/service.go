@@ -13,15 +13,17 @@ import (
 	"github.com/datata1/mycelium/internal/gitref"
 	"github.com/datata1/mycelium/internal/index"
 	"github.com/datata1/mycelium/internal/ipc"
+	"github.com/datata1/mycelium/internal/parser"
 	"github.com/datata1/mycelium/internal/query"
 )
 
 // Service executes read requests against the index. It is the only
 // component outside the write path that constructs a query.Reader.
 type Service struct {
-	reader *query.Reader
-	root   string // absolute repo root; lexical search + --since need it
-	log    *slog.Logger
+	reader  *query.Reader
+	root    string // absolute repo root; lexical search + --since need it
+	log     *slog.Logger
+	parsers *parser.Registry // optional; verify_changes parses base-commit blobs
 }
 
 // NewReadOnly builds a Service over an already-open index. The caller
@@ -38,6 +40,13 @@ func NewReadOnly(ix *index.Index, repoRoot string, log *slog.Logger) *Service {
 // excluded, wrong extension, oversize, or stale index. Optional; without
 // it, misses stay explanation-free.
 func (s *Service) SetProbe(p *query.FSProbe) { s.reader.SetProbe(p) }
+
+// SetParsers attaches the language parser registry so verify_changes
+// can extract symbols from base-commit file versions. Parsers only —
+// never resolvers (no go/packages load on the read path). Optional;
+// without it the verifier degrades to freshness checks and warns that
+// removed-symbol detection is off.
+func (s *Service) SetParsers(reg *parser.Registry) { s.parsers = reg }
 
 // resolveSince turns the optional git-ref string into a resolved path
 // list. Empty ref -> nil (unscoped). Git errors surface to the caller

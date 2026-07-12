@@ -522,6 +522,53 @@ func goldenCases() []struct {
 			result: query.Stats{},
 		},
 		{
+			name:   "verify_changes",
+			method: "verify_changes",
+			result: func() ipc.VerifyReport {
+				r := ipc.VerifyReport{
+					Since:        "HEAD",
+					Base:         "ab12cd34ef567890",
+					ChangedFiles: 3,
+					Checks: []ipc.VerifyCheck{
+						{Name: "git_scope", Level: "pass", Message: "3 changed file(s) vs base ab12cd34ef"},
+						{Name: "index_fresh_for_changes", Level: "pass", Message: "index is current for all changed files"},
+						{Name: "parse_old_versions", Level: "pass", Message: "3 old file version(s) parsed"},
+						{Name: "removed_but_referenced", Level: "fail", Message: "1 removed symbol(s) still referenced from outside the change set — fix the call sites or restore the symbol(s)"},
+					},
+					Removed: []ipc.RemovedSymbol{
+						{
+							Qualified: "auth.Session.Refresh",
+							Kind:      "method",
+							OldPath:   "internal/auth/session.go",
+							Danglers: []ipc.VerifyDangler{
+								{Path: "internal/http/middleware.go", Line: 88, Kind: "call", SrcSymbol: "middleware.RequireAuth", Exact: true},
+								{Path: "internal/jobs/cleanup.go", Line: 41, Kind: "call", SrcSymbol: "cleanup.Run", Exact: false},
+							},
+						},
+						{Qualified: "auth.legacyToken", Kind: "function", OldPath: "internal/auth/session.go"},
+					},
+				}
+				r.Summary.Pass = 3
+				r.Summary.Fail = 1
+				return r
+			}(),
+		},
+		{
+			name:   "verify_changes_pass",
+			method: "verify_changes",
+			result: func() ipc.VerifyReport {
+				r := ipc.VerifyReport{
+					Since: "HEAD",
+					Base:  "ab12cd34ef567890",
+					Checks: []ipc.VerifyCheck{
+						{Name: "git_scope", Level: "pass", Message: "clean tree — nothing to verify"},
+					},
+				}
+				r.Summary.Pass = 1
+				return r
+			}(),
+		},
+		{
 			name:   "unknown_method",
 			method: "does_not_exist",
 			result: map[string]any{"answer": 42, "detail": "unrenderable payload"},

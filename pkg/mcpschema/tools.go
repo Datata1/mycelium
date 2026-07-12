@@ -50,6 +50,7 @@ var toolTitles = map[string]string{
 	"read_focused":      "Read a file with focus filter",
 	"find_document_key": "Look up document keys (i18n, deps)",
 	"stats":             "Show index status",
+	"verify_changes":    "Verify changes (structural check)",
 }
 
 // Tools returns the definitive tool list. Keep this in sync with the
@@ -361,6 +362,19 @@ func toolDefs() []Tool {
 			InputSchema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
+			},
+		},
+		{
+			Name:        "verify_changes",
+			Description: "Structural smoke test over your recent edits (default: uncommitted changes vs HEAD; pass `since` for a branch base). Detects symbols you removed or renamed that are still referenced from files you did NOT touch — broken call sites caught in milliseconds, before compiling or running tests. Run it after completing a set of edits and always before declaring a task done. fail = broken references found (fix the listed call sites or restore the symbol); warn = possible breaks (short-name evidence only); an index-freshness gate keeps it from vouching from a stale index. It checks named references only — it complements the compiler/type-checker, it does not replace it.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"since": map[string]any{
+						"type":        "string",
+						"description": "Git ref for the diff base (merge-base with HEAD). Default \"HEAD\": verifies exactly the uncommitted work in progress.",
+					},
+				},
 			},
 		},
 	}

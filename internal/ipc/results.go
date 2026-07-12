@@ -388,3 +388,61 @@ type DocumentHit struct {
 	Value   string `json:"value"`
 	Line    int    `json:"line"`
 }
+
+// VerifyCheck is one named check inside a VerifyReport — same
+// pass/warn/fail scale the doctor uses.
+type VerifyCheck struct {
+	Name    string         `json:"name"`
+	Level   string         `json:"level"`
+	Message string         `json:"message"`
+	Detail  map[string]any `json:"detail,omitempty"`
+}
+
+// VerifyDangler is one reference outside the change set that still
+// points at a removed symbol. Exact = matched the full qualified name
+// (that call site is broken); non-exact matches are short-name evidence.
+type VerifyDangler struct {
+	Path      string `json:"path"`
+	Line      int    `json:"line"`
+	Kind      string `json:"kind"`
+	SrcSymbol string `json:"src_symbol,omitempty"`
+	Exact     bool   `json:"exact"`
+}
+
+// RemovedSymbol is a symbol that existed at the diff base but is no
+// longer defined anywhere in the index.
+type RemovedSymbol struct {
+	Qualified string          `json:"qualified"`
+	Kind      string          `json:"kind"`
+	OldPath   string          `json:"old_path"`
+	Danglers  []VerifyDangler `json:"danglers,omitempty"`
+}
+
+// VerifyReport is the verify_changes result: a doctor-style check list
+// plus the removed-symbol details that drive the fail/warn verdict.
+type VerifyReport struct {
+	Since        string          `json:"since"`
+	Base         string          `json:"base"`
+	ChangedFiles int             `json:"changed_files"`
+	Checks       []VerifyCheck   `json:"checks"`
+	Removed      []RemovedSymbol `json:"removed,omitempty"`
+	Summary      struct {
+		Pass int `json:"pass"`
+		Warn int `json:"warn"`
+		Fail int `json:"fail"`
+	} `json:"summary"`
+	Notes []string `json:"notes,omitempty"`
+}
+
+// ExitCode maps the summary onto the doctor CLI convention:
+// 2 = any fail, 1 = any warn, 0 = clean.
+func (r VerifyReport) ExitCode() int {
+	switch {
+	case r.Summary.Fail > 0:
+		return 2
+	case r.Summary.Warn > 0:
+		return 1
+	default:
+		return 0
+	}
+}

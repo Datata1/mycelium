@@ -32,6 +32,7 @@ const (
 	MethodCriticalPath    Method = "critical_path"
 	MethodReadFocused     Method = "read_focused"
 	MethodFindDocumentKey Method = "find_document_key"
+	MethodVerifyChanges   Method = "verify_changes"
 	MethodPing            Method = "ping"
 )
 
@@ -53,6 +54,7 @@ var AllMethods = []Method{
 	MethodCriticalPath,
 	MethodReadFocused,
 	MethodFindDocumentKey,
+	MethodVerifyChanges,
 }
 
 // Request is the wire shape for a client call.
@@ -164,4 +166,12 @@ type FindDocumentKeyParams struct {
 	Kind    string `json:"kind,omitempty"`
 	Project string `json:"project,omitempty"`
 	Limit   int    `json:"limit,omitempty"`
+}
+
+// VerifyChangesParams scopes the structural verifier. Since is a git
+// ref; empty defaults to "HEAD" server-side (uncommitted changes) —
+// unlike the query-filter `--since`, the verifier's diff includes the
+// working tree.
+type VerifyChangesParams struct {
+	Since string `json:"since,omitempty"`
 }

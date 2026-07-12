@@ -58,6 +58,7 @@ var tools = []Tool{
 	{ipc.MethodCriticalPath, bind((*service.Service).CriticalPath), render.CriticalPath},
 	{ipc.MethodReadFocused, bind((*service.Service).ReadFocused), render.FocusedRead},
 	{ipc.MethodFindDocumentKey, bind((*service.Service).FindDocumentKey), render.DocumentKey},
+	{ipc.MethodVerifyChanges, bind((*service.Service).VerifyChanges), render.Verify},
 }
 
 var byMethod = func() map[ipc.Method]Tool {

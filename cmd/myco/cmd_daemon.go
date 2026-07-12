@@ -155,6 +155,7 @@ func runDaemon(ctx context.Context, backendOverride string) error {
 
 	svc := service.NewReadOnly(ix, rc.Root, dlog)
 	svc.SetProbe(probeFromConfig(rc))
+	svc.SetParsers(languages.Registry(rc.Cfg.Languages))
 	d := &daemon.Daemon{
 		Pipeline:    p,
 		Service:     svc,

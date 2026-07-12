@@ -247,6 +247,21 @@ func (d *Daemon) dispatchInner(ctx context.Context, req ipc.Request) (any, error
 	// registry so the Service can remain read-only by construction.
 	case ipc.MethodReindex:
 		return d.Pipeline.RunOnce(ctx)
+
+	// verify_changes gets a freshness pre-gate: a verifier answering
+	// from a stale index would vouch for broken code (the common case is
+	// the agent checking within the watcher's debounce window). Only the
+	// daemon may write, so the reconcile lives here, not in the Service.
+	case ipc.MethodVerifyChanges:
+		var p ipc.VerifyChangesParams
+		if len(req.Params) > 0 {
+			_ = json.Unmarshal(req.Params, &p)
+		}
+		if stale := d.Service.StalePathsFor(ctx, p.Since); len(stale) > 0 {
+			if _, err := d.Pipeline.RunOnce(ctx); err != nil {
+				return nil, fmt.Errorf("reconcile before verify: %w", err)
+			}
+		}
 	}
 	tool, ok := registry.Lookup(req.Method)
 	if !ok {

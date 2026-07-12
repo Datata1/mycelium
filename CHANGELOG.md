@@ -6,6 +6,35 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Loop verifier, stage 1: `myco check` + `verify_changes` (WS08, 2026-07-12)
+
+myco's first verifier surface, built for agent loops on large codebases:
+a structural smoke test that answers "did my edit break callers I didn't
+touch?" in milliseconds, before compiling or running tests.
+
+#### Added
+
+- `myco check [--since <ref>] [--json]` and the 13th MCP tool
+  `verify_changes`. Diff base is `merge-base(<ref>, HEAD)` with the
+  working tree (uncommitted tracked edits included; default ref HEAD).
+  Old file versions are re-parsed from `git show`; symbols whose
+  qualified names vanished from the index and are still referenced from
+  files outside the change set are reported with `path:line` call
+  sites — exact qualified matches FAIL, short-name-only evidence WARNs,
+  clean deletions pass. Exit codes mirror doctor (0/1/2).
+- Freshness gate: verifying from a stale index is worse than not
+  verifying. Daemon-up, the dispatcher reconciles stale changed paths
+  before answering (covers the watcher-debounce race mid-loop);
+  daemon-down, the check FAILs with remediation.
+- `internal/gitref.ChangedSince`/`ShowAtCommit` (worktree-aware diff
+  helpers), `internal/check` (pure diff/classify + test-file
+  conventions), reader methods `SymbolsInFiles`, `QualifiedExist`,
+  `DanglingRefs`, `FilesFreshness`, and `Service.SetParsers` (parsers
+  only — no resolver load on the read path).
+
+Named references only — it complements the compiler, it does not
+replace it (the TS resolver is heuristic).
+
 ### TS/Python inheritance edges + abstract classes (field-test finding, 2026-07-12)
 
 "Who extends Pipeline?" forced a grep in the second monorepo session:

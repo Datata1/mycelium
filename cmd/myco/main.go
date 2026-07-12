@@ -78,6 +78,7 @@ func main() {
 		newHookCmd(),
 		newStatsCmd(),
 		newDoctorCmd(),
+		newCheckCmd(),
 		newReadCmd(),
 		newSessionCmd(),
 		newBenchCounterfactualCmd(),

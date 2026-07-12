@@ -1,0 +1,8 @@
+✓ git_scope — 3 changed file(s) vs base ab12cd34ef
+✓ index_fresh_for_changes — index is current for all changed files
+✓ parse_old_versions — 3 old file version(s) parsed
+✗ removed_but_referenced — 1 removed symbol(s) still referenced from outside the change set — fix the call sites or restore the symbol(s)
+  removed auth.Session.Refresh [method] (was internal/auth/session.go):
+    internal/http/middleware.go:88  [call] from middleware.RequireAuth (exact)
+    internal/jobs/cleanup.go:41  [call] from cleanup.Run (short-name match)
+summary: 3 pass · 0 warn · 1 fail
