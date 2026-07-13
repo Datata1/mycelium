@@ -20,6 +20,10 @@ myco is a local code knowledge base exposed as MCP tools. Reach for it
 ` + "`get_references`" + ` (callers) · ` + "`read_focused`" + ` (read a file with irrelevant symbols collapsed) ·
 ` + "`get_neighborhood`" + ` (local call graph) · ` + "`impact_analysis`" + ` (what depends on X)
 
+**Verification:** after a set of edits — and always before declaring a task
+done — run ` + "`verify_changes`" + ` (broken call sites in milliseconds), then
+` + "`select_tests`" + ` to pick which tests to run instead of the full suite.
+
 **Rule:** when you have an identifier name, use ` + "`find_symbol`" + ` — not
 ` + "`search_lexical`" + `. ` + "`search_lexical`" + ` is for literal strings and regex patterns
 only (log messages, route paths, magic constants). Using it for symbol names
@@ -28,9 +32,9 @@ misses renames, aliases, and qualified forms.
 **Paths in workspace mode:** every result carries ` + "`path`" + ` (plus ` + "`project`" + ` /
 ` + "`src_project`" + ` in multi-project workspaces). Pass these **verbatim** to
 ` + "`read_focused`" + ` / ` + "`get_file_outline`" + ` / ` + "`get_file_summary`" + ` — do not
-prepend the project root yourself. Indexed paths are project-relative; the
-daemon resolves them to the right file on disk regardless of which form
-(project-relative, repo-relative, or absolute) you pass back.
+prepend or strip directories. Returned paths are repo-relative and work
+with any tool; myco accepts project-relative, repo-relative, and absolute
+forms on the way back in.
 `
 
 // primingMarker is a stable string inside primingSnippet used to detect

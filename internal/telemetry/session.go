@@ -173,6 +173,7 @@ type HookStdinData struct {
 	OutputTokens    int
 	ClaudeSessionID string // Claude Code's UUID for this conversation
 	TranscriptPath  string // absolute path to the conversation JSONL
+	StopHookActive  bool   // Stop hook: true when Claude is already continuing because a Stop hook blocked
 }
 
 // ParseHookStdin extracts all useful fields from the JSON that Claude Code
@@ -196,6 +197,9 @@ func ParseHookStdin(r io.Reader) HookStdinData {
 		// Also try top-level token fields
 		InputTokens  int `json:"input_tokens"`
 		OutputTokens int `json:"output_tokens"`
+		// Stop hook: set when a previous block decision already forced
+		// Claude to continue — blocking again risks a loop.
+		StopHookActive bool `json:"stop_hook_active"`
 	}
 	b, err := io.ReadAll(r)
 	if err != nil || len(b) == 0 {
@@ -206,6 +210,7 @@ func ParseHookStdin(r io.Reader) HookStdinData {
 	var d HookStdinData
 	d.ClaudeSessionID = payload.SessionID
 	d.TranscriptPath = payload.TranscriptPath
+	d.StopHookActive = payload.StopHookActive
 
 	// Build a name hint from the first ~8 words of the prompt text.
 	text := payload.Prompt

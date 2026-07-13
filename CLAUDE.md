@@ -144,7 +144,8 @@ made instead of using myco. Low ratio = myco is covering the use case.
 Available MCP tools (all active):
 `find_symbol`, `get_references`, `get_neighborhood`,
 `search_lexical`, `get_file_outline`, `get_file_summary`, `read_focused`,
-`impact_analysis`, `critical_path`, `stats`, `list_files`, `find_document_key`.
+`impact_analysis`, `critical_path`, `stats`, `list_files`, `find_document_key`,
+`verify_changes`, `select_tests`.
 
 ## Conventions
 
@@ -173,6 +174,9 @@ myco is a local code knowledge base exposed as MCP tools. Reach for it
 **Navigation:** `find_symbol` (definitions) · `get_references` (callers) ·
 `read_focused` (read a file with irrelevant symbols collapsed) ·
 `get_neighborhood` (local call graph) · `impact_analysis` (what depends on X)
+
+**Verification:** after edits and before declaring done → `verify_changes`
+(broken call sites in ms); which tests to run → `select_tests`.
 
 **Rule:** when you have an identifier name, use `find_symbol` — not
 `search_lexical`. `search_lexical` is for literal strings and regex patterns

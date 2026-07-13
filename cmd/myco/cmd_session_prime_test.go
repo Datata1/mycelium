@@ -33,7 +33,9 @@ func TestPrimeContext_Content(t *testing.T) {
 		"Rules: identifier → find_symbol (never search_lexical); " +
 		"callers → get_references; read a file → read_focused(path, focus=...); " +
 		"orientation → get_file_outline / get_file_summary; " +
-		"blast radius → impact_analysis; document keys (i18n, deps) → find_document_key. " +
+		"blast radius → impact_analysis; document keys (i18n, deps) → find_document_key; " +
+		"after edits & before declaring done → verify_changes; " +
+		"which tests to run → select_tests. " +
 		"search_lexical is ONLY for literal strings/regex. " +
 		"Pass returned path+project values verbatim — never prepend the repo root."
 	if text != want {

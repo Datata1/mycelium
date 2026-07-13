@@ -262,6 +262,33 @@ actually exist. A non-zero count means an agent is constructing paths
 instead of passing them through — file an adoption issue with the
 prompt that triggered it.
 
+## The loop-verifier surface (v5.x)
+
+Adoption isn't only about navigation — the biggest per-iteration cost in
+an agent loop is *verification* (compile + full test suite, minutes on a
+large repo). Three tools shortcut that:
+
+- **`verify_changes`** / `myco check`: structural smoke test over the
+  working tree (or `--since <ref>`). Symbols removed or renamed that are
+  still referenced from files outside the change set come back as
+  `path:line` call sites, in milliseconds. It checks named references
+  only — it runs *in front of* the compiler, not instead of it.
+- **`select_tests`** / `myco tests`: walks the reverse call graph from
+  the changed files and returns the test files that exercise anything
+  touched (`--dirs` prints package dirs for `go test $(myco tests
+  --dirs)`).
+- **`myco session verify`** — an opt-in blocking Stop hook
+  (`myco session hooks install --verify-gate`): the session cannot end
+  while `verify_changes` reports broken references. It blocks *only* on
+  that one high-confidence check — never on warnings or a stale index —
+  and is silent on every internal error, so it can't take a session
+  hostage. It honors `stop_hook_active` and Claude Code's block cap.
+
+In telemetry, a healthy loop shows `verify_changes` after edit bursts
+and `select_tests` right before `Bash(go test ...)`/test-runner calls.
+If the agent edits and declares done without either, quote the priming
+rule ("after edits & before declaring done → verify_changes").
+
 ## When telemetry says nothing's wrong but it still feels off
 
 Telemetry can't tell you whether the agent's *answers* improved when

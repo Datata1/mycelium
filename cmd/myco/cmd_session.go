@@ -30,6 +30,7 @@ func newSessionCmd() *cobra.Command {
 		newSessionTranscriptCmd(),
 		newSessionHooksCmd(),
 		newSessionPrimeCmd(),
+		newSessionVerifyCmd(),
 	)
 	return cmd
 }
@@ -373,7 +374,8 @@ func newSessionHooksCmd() *cobra.Command {
 		Use:   "hooks",
 		Short: "Manage Claude Code hook integration for automatic session tracking",
 	}
-	cmd.AddCommand(&cobra.Command{
+	var verifyGate bool
+	install := &cobra.Command{
 		Use:   "install",
 		Short: "Write UserPromptSubmit + Stop hooks to .claude/settings.json",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -385,16 +387,19 @@ func newSessionHooksCmd() *cobra.Command {
 			if err != nil {
 				binary = "myco"
 			}
-			return installSessionHooks(rc.Root, binary)
+			return installSessionHooks(rc.Root, binary, verifyGate)
 		},
-	})
+	}
+	install.Flags().BoolVar(&verifyGate, "verify-gate", false,
+		"additionally install the blocking Stop hook `myco session verify` (blocks ending the session while changes break references)")
+	cmd.AddCommand(install)
 	return cmd
 }
 
 // installSessionHooks reads the project .claude/settings.json (creating it if
 // absent), merges the session hook entries, and writes it back. Uses
 // settings.local.json so agents don't accidentally overwrite it.
-func installSessionHooks(repoRoot, binary string) error {
+func installSessionHooks(repoRoot, binary string, verifyGate bool) error {
 	settingsPath := filepath.Join(repoRoot, ".claude", "settings.local.json")
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
 		return err
@@ -444,6 +449,19 @@ func installSessionHooks(repoRoot, binary string) error {
 	}
 	hooks["UserPromptSubmit"] = mergeHookList(hooks["UserPromptSubmit"], startHook)
 	hooks["PostToolUse"] = mergeHookList(hooks["PostToolUse"], trackHook)
+	if verifyGate {
+		// The gate runs before annotate: verification decides whether the
+		// session may end at all; annotate is metrics-only.
+		verifyHook := map[string]any{
+			"hooks": []any{
+				map[string]any{
+					"type":    "command",
+					"command": binary + " session verify",
+				},
+			},
+		}
+		hooks["Stop"] = mergeHookList(hooks["Stop"], verifyHook)
+	}
 	hooks["Stop"] = mergeHookList(hooks["Stop"], annotateHook)
 	hooks["SessionStart"] = mergeHookList(hooks["SessionStart"], primeHook)
 	raw["hooks"] = hooks
@@ -460,6 +478,9 @@ func installSessionHooks(repoRoot, binary string) error {
 	fmt.Println("  UserPromptSubmit → myco session start --auto    (new session per conversation)")
 	fmt.Println("  PostToolUse      → myco session track            (records fallback grep/Read calls)")
 	fmt.Println("  Stop             → myco session annotate --stdin (captures token counts)")
+	if verifyGate {
+		fmt.Println("  Stop             → myco session verify           (blocks ending the session on broken references)")
+	}
 	fmt.Println()
 	fmt.Println("Note: hooks are in settings.local.json — do not commit this file.")
 	fmt.Println("Restart Claude Code for hooks to take effect.")

@@ -189,7 +189,9 @@ func runWizard(yes, doctorAfter, gitExclude bool) error {
 				fmt.Println("  the agent uses per conversation (UserPromptSubmit /")
 				fmt.Println("  PostToolUse / Stop).")
 				if wizard.YN("  Install session tracking hooks?", true, yes) {
-					if err := installSessionHooks(root, binary); err != nil {
+					// The blocking verify gate stays opt-in via
+					// `myco session hooks install --verify-gate`.
+					if err := installSessionHooks(root, binary, false); err != nil {
 						wizard.Warn("hooks install failed: " + err.Error())
 					} else {
 						wizard.Done("session hooks written to .claude/settings.json")

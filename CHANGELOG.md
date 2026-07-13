@@ -6,6 +6,33 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Loop verifier, stage 3: opt-in Stop-hook gate (WS08, 2026-07-13)
+
+#### Added
+
+- `myco session verify` — a Claude Code Stop hook that blocks the
+  session from ending while `verify_changes{since:HEAD}` reports
+  removed symbols with exact dangling references. It blocks on that
+  one high-confidence check ONLY: warnings and a stale index never
+  block (infra problems aren't the agent's code), `stop_hook_active`
+  short-circuits (plus Claude Code's own 8-block cap), and any
+  internal error is silent exit 0 — the `session prime` contract.
+  Block reason lists up to 5 `symbol — still referenced from
+  path:line` lines.
+- `myco session hooks install --verify-gate` opt-in flag; the default
+  install (and the wizard) stay non-blocking. Idempotent via the
+  existing command-string dedup.
+- Session priming (SessionStart hook + CLAUDE.md snippet) now routes:
+  "after edits & before declaring done → verify_changes; which tests
+  to run → select_tests". docs/adoption.md gained a loop-verifier
+  section.
+
+#### Fixed
+
+- The wizard's CLAUDE.md snippet still claimed returned paths are
+  project-relative; they have been repo-relative since the
+  repo-relative-paths change.
+
 ### Loop verifier, stage 2: `select_tests` + `myco tests` (WS08, 2026-07-12)
 
 #### Added

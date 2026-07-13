@@ -237,6 +237,17 @@ func TestParseHookStdin(t *testing.T) {
 	if d.TranscriptPath != "/tmp/abc.jsonl" {
 		t.Errorf("transcript_path: got %q, want /tmp/abc.jsonl", d.TranscriptPath)
 	}
+	if d.StopHookActive {
+		t.Error("stop_hook_active should default to false")
+	}
+}
+
+func TestParseHookStdin_StopHookActive(t *testing.T) {
+	t.Parallel()
+	d := ParseHookStdin(strings.NewReader(`{"session_id":"abc","stop_hook_active":true}`))
+	if !d.StopHookActive {
+		t.Error("expected StopHookActive=true")
+	}
 }
 
 // TestClassifyTool verifies the exploratory/action classification logic
