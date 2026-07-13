@@ -108,14 +108,20 @@ func (s *Service) VerifyChanges(ctx context.Context, p ipc.VerifyChangesParams) 
 	level := check.LevelPass
 	if len(removed) > 0 {
 		names := make([]query.RemovedName, len(removed))
+		shorts := make([]string, len(removed))
 		for i, rm := range removed {
 			names[i] = query.RemovedName{Qualified: rm.Qualified, Name: rm.Name}
+			shorts[i] = rm.Name
 		}
 		danglers, err := s.reader.DanglingRefs(ctx, names, changed)
 		if err != nil {
 			return rep, err
 		}
-		classified, level = check.Classify(removed, danglers)
+		nameExists, err := s.reader.NamesExist(ctx, shorts)
+		if err != nil {
+			return rep, err
+		}
+		classified, level = check.Classify(removed, danglers, nameExists)
 	}
 
 	danglingSymbols := 0

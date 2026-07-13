@@ -361,11 +361,6 @@ func (r *Resolver) Ready() bool {
 	return r.ready
 }
 
-// Version: 1 = baseline (type-resolved calls, composite literals,
-// inheritance edges). Bump on any output change for identical source;
-// drives the pipeline's parse_hash freshness mix.
-func (r *Resolver) Version() int { return 1 }
-
 // FileCount is the number of Go files we have cached type info for. Doctor
 // surfaces this alongside LoadErrors() so users can tell "loaded nothing"
 // from "loaded 100 files with 5 package errors."

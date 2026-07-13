@@ -399,8 +399,10 @@ type VerifyCheck struct {
 }
 
 // VerifyDangler is one reference outside the change set that still
-// points at a removed symbol. Exact = matched the full qualified name
-// (that call site is broken); non-exact matches are short-name evidence.
+// points at a removed symbol. Exact = high-confidence broken: the ref
+// matched the full qualified name, or it is a bare textual name that no
+// longer exists anywhere in the index. Non-exact matches are ambiguous
+// short-name evidence.
 type VerifyDangler struct {
 	Path      string `json:"path"`
 	Line      int    `json:"line"`

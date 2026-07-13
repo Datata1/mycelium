@@ -69,10 +69,18 @@ type ClassifiedRemoved struct {
 }
 
 // Classify attaches danglers to their removed symbols and derives the
-// overall level: FAIL when any removed symbol has an exact-qualified
-// dangler (that call site is broken), WARN when only short-name
-// evidence exists, PASS when nothing dangles (clean deletions).
-func Classify(removed []Removed, danglers []query.DanglingRef) ([]ClassifiedRemoved, Level) {
+// overall level: FAIL when any removed symbol has a high-confidence
+// dangler, WARN when only ambiguous short-name evidence exists, PASS
+// when nothing dangles (clean deletions).
+//
+// High confidence means either (a) the ref's dst_name equals the
+// removed qualified name, or (b) the ref is a BARE textual name
+// (dst_name == dst_short — e.g. a same-package Go call indexed while
+// the package didn't type-check) and `nameExists` says no symbol of
+// that name survives anywhere: a bare ref to a name that is gone
+// index-wide cannot resolve. Dotted textual refs (pkg.Get) stay
+// warn-grade — their prefix may point at an external package.
+func Classify(removed []Removed, danglers []query.DanglingRef, nameExists map[string]struct{}) ([]ClassifiedRemoved, Level) {
 	byQualified := map[string]int{}
 	byShort := map[string][]int{}
 	out := make([]ClassifiedRemoved, len(removed))
@@ -90,8 +98,19 @@ func Classify(removed []Removed, danglers []query.DanglingRef) ([]ClassifiedRemo
 			}
 			continue
 		}
-		// Short-name evidence can belong to several removed symbols that
-		// share a name; attach to each — the reader has to judge anyway.
+		if d.DstName == d.DstShort {
+			if _, alive := nameExists[d.DstShort]; !alive {
+				d.Exact = true // upgrade: bare name, gone index-wide
+				for _, i := range byShort[d.DstShort] {
+					out[i].Danglers = append(out[i].Danglers, d)
+					out[i].HasExact = true
+				}
+				continue
+			}
+		}
+		// Ambiguous short-name evidence can belong to several removed
+		// symbols that share a name; attach to each — the reader has to
+		// judge anyway.
 		for _, i := range byShort[d.DstShort] {
 			out[i].Danglers = append(out[i].Danglers, d)
 		}

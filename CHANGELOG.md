@@ -32,6 +32,20 @@ to [Semantic Versioning](https://semver.org/).
 - The wizard's CLAUDE.md snippet still claimed returned paths are
   project-relative; they have been repo-relative since the
   repo-relative-paths change.
+- The freshness hash now covers the **post-resolution** symbols and
+  refs (canonicalized), replacing the resolver-version tag. Field
+  finding while testing the gate: a file reindexed while its package
+  didn't compile kept textual refs forever (same content, same parser
+  output ⇒ no rewrite), so `verify_changes` under-classified real
+  breaks as warnings. Hashing what would actually be written makes
+  every resolution change self-heal on the next scan — including
+  package state flipping between broken and compiling.
+- Verifier classification handles the Go chicken-and-egg (a broken
+  package can't type-resolve the very refs that prove the break):
+  a BARE textual ref whose name no longer exists anywhere in the
+  index now counts as high-confidence broken, same as an exact
+  qualified match. Dotted textual refs (possibly external packages)
+  stay warn-grade.
 
 ### Loop verifier, stage 2: `select_tests` + `myco tests` (WS08, 2026-07-12)
 

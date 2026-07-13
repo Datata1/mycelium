@@ -34,7 +34,7 @@ func TestClassify(t *testing.T) {
 		danglers := []query.DanglingRef{
 			{DstName: "pkg.A", DstShort: "A", SrcPath: "x.go", Line: 3, Exact: true},
 		}
-		out, level := Classify(removed, danglers)
+		out, level := Classify(removed, danglers, map[string]struct{}{"A": {}, "B": {}, "C": {}})
 		if level != LevelFail {
 			t.Errorf("level = %s, want fail", level)
 		}
@@ -47,7 +47,7 @@ func TestClassify(t *testing.T) {
 		danglers := []query.DanglingRef{
 			{DstName: "other.B", DstShort: "B", SrcPath: "y.go", Line: 9, Exact: false},
 		}
-		out, level := Classify(removed, danglers)
+		out, level := Classify(removed, danglers, map[string]struct{}{"A": {}, "B": {}, "C": {}})
 		if level != LevelWarn {
 			t.Errorf("level = %s, want warn", level)
 		}
@@ -57,7 +57,7 @@ func TestClassify(t *testing.T) {
 	})
 
 	t.Run("clean_deletion_passes", func(t *testing.T) {
-		out, level := Classify(removed, nil)
+		out, level := Classify(removed, nil, map[string]struct{}{})
 		if level != LevelPass {
 			t.Errorf("level = %s, want pass", level)
 		}
@@ -73,7 +73,7 @@ func TestClassify(t *testing.T) {
 			{DstName: "x.C", DstShort: "C", SrcPath: "a.go", Line: 1, Exact: false},
 			{DstName: "pkg.C", DstShort: "C", SrcPath: "z.go", Line: 5, Exact: true},
 		}
-		out, level := Classify(removed, danglers)
+		out, level := Classify(removed, danglers, map[string]struct{}{"A": {}, "B": {}, "C": {}})
 		if level != LevelFail {
 			t.Errorf("level = %s, want fail", level)
 		}
@@ -107,4 +107,48 @@ func TestIsTestFile(t *testing.T) {
 			t.Errorf("IsTestFile(%q) = %v, want %v", tc.path, got, tc.want)
 		}
 	}
+}
+
+// A bare textual ref (dst_name == dst_short) whose name survives
+// nowhere in the index is as broken as an exact-qualified match — the
+// Go resolver degrades to textual refs while a package doesn't
+// type-check, and that must not soften the verdict.
+func TestClassify_BareNameGoneUpgradesToFail(t *testing.T) {
+	removed := []Removed{{Qualified: "demo.Widget", Name: "Widget"}}
+
+	t.Run("name_gone_everywhere_fails", func(t *testing.T) {
+		danglers := []query.DanglingRef{
+			{DstName: "Widget", DstShort: "Widget", SrcPath: "b.go", Line: 4, Exact: false},
+		}
+		out, level := Classify(removed, danglers, map[string]struct{}{})
+		if level != LevelFail {
+			t.Errorf("level = %s, want fail", level)
+		}
+		if !out[0].HasExact || !out[0].Danglers[0].Exact {
+			t.Errorf("expected upgraded dangler: %+v", out[0])
+		}
+	})
+
+	t.Run("name_alive_elsewhere_stays_warn", func(t *testing.T) {
+		danglers := []query.DanglingRef{
+			{DstName: "Widget", DstShort: "Widget", SrcPath: "b.go", Line: 4, Exact: false},
+		}
+		out, level := Classify(removed, danglers, map[string]struct{}{"Widget": {}})
+		if level != LevelWarn {
+			t.Errorf("level = %s, want warn", level)
+		}
+		if out[0].HasExact {
+			t.Errorf("must not upgrade when the name is still defined: %+v", out[0])
+		}
+	})
+
+	t.Run("dotted_textual_stays_warn", func(t *testing.T) {
+		danglers := []query.DanglingRef{
+			{DstName: "ext.Widget", DstShort: "Widget", SrcPath: "b.go", Line: 4, Exact: false},
+		}
+		_, level := Classify(removed, danglers, map[string]struct{}{})
+		if level != LevelWarn {
+			t.Errorf("level = %s, want warn (dotted prefix may be external)", level)
+		}
+	})
 }

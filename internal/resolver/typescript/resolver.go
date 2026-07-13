@@ -29,11 +29,6 @@ func New() *Resolver { return &Resolver{} }
 
 func (r *Resolver) Ready() bool { return true }
 
-// Version: 2 = inheritance edges (extends/implements/interface-extends)
-// + abstract-class awareness. Bump on any output change for identical
-// source; drives the pipeline's parse_hash freshness mix.
-func (r *Resolver) Version() int { return 2 }
-
 func (r *Resolver) init() {
 	r.langTS = typescript.GetLanguage()
 	r.langTSX = tsx.GetLanguage()

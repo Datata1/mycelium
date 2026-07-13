@@ -2,9 +2,11 @@ package pipeline
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"runtime"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -23,13 +25,6 @@ import (
 type Resolver interface {
 	ResolveFile(ctx context.Context, absPath string, pr *parser.ParseResult) (resolved, total int)
 	Ready() bool
-	// Version is the resolver's implementation revision. It is mixed into
-	// the stored parse_hash so that files whose resolver output changed
-	// for identical source (e.g. a newly emitted ref kind) get rewritten
-	// on the next full scan. Bump it whenever ResolveFile or
-	// EmitInheritance output changes; it is unrelated to the per-ref
-	// ResolverVersion stamp.
-	Version() int
 }
 
 // InheritanceEmitter is the optional v2.1 extension: resolvers that compute
@@ -505,7 +500,6 @@ func (p *Pipeline) writeParsed(ctx context.Context, f repo.File, prs parser.Pars
 	// v1.2+: language-specific resolver rewrites call DstNames and stamps
 	// ResolverVersion before refs hit the DB. No-op when no resolver is
 	// registered for this language or when the resolver isn't ready.
-	parseHash := result.ParseHash
 	if res := p.resolverFor(prs.Language()); res != nil && res.Ready() {
 		res.ResolveFile(ctx, f.AbsPath, &result)
 		// v2.1: resolvers that implement InheritanceEmitter additionally
@@ -514,15 +508,16 @@ func (p *Pipeline) writeParsed(ctx context.Context, f repo.File, prs parser.Pars
 		if ie, ok := res.(InheritanceEmitter); ok {
 			ie.EmitInheritance(f.AbsPath, &result)
 		}
-		// Refs stored for this file depend on the resolver revision, not
-		// just the parse output — mix it into the freshness hash so
-		// resolver upgrades rewrite rows on the next scan. This also
-		// covers files first indexed before a slow-loading resolver
-		// (go/packages) became ready: once it is, the hash changes and
-		// their textual refs get re-resolved.
-		parseHash = append(append([]byte{}, parseHash...),
-			[]byte(fmt.Sprintf("|%s/r%d", prs.Language(), res.Version()))...)
 	}
+	// The freshness hash covers what would actually be WRITTEN — the
+	// post-resolution symbols and refs — not just raw parser output.
+	// Anything that changes resolver output for unchanged source then
+	// self-heals on the next scan: resolver upgrades, a slow-loading
+	// resolver (go/packages) becoming ready, and package state flipping
+	// between compiling and broken (which flips refs between qualified
+	// and textual). Canonicalized so nondeterministic emit order can't
+	// cause rewrite churn.
+	parseHash := stableParseHash(result.Symbols, result.References)
 
 	db := p.Index.DB()
 	tx, err := db.BeginTx(ctx, nil)
@@ -568,4 +563,46 @@ func (p *Pipeline) writeParsed(ctx context.Context, f repo.File, prs parser.Pars
 // textual-only resolution.
 func (p *Pipeline) resolverFor(lang string) Resolver {
 	return p.Resolvers[lang]
+}
+
+// stableParseHash hashes the post-resolution parse output — the exact
+// material writeParsed stores. Copies are sorted first so resolver
+// passes that emit in nondeterministic order (map-driven inheritance
+// edges) hash identically across runs.
+func stableParseHash(symbols []parser.Symbol, refs []parser.Reference) []byte {
+	syms := append([]parser.Symbol{}, symbols...)
+	sort.Slice(syms, func(i, j int) bool {
+		if syms[i].Qualified != syms[j].Qualified {
+			return syms[i].Qualified < syms[j].Qualified
+		}
+		return syms[i].StartLine < syms[j].StartLine
+	})
+	rs := append([]parser.Reference{}, refs...)
+	sort.Slice(rs, func(i, j int) bool {
+		a, b := rs[i], rs[j]
+		if a.Line != b.Line {
+			return a.Line < b.Line
+		}
+		if a.Col != b.Col {
+			return a.Col < b.Col
+		}
+		if a.Kind != b.Kind {
+			return a.Kind < b.Kind
+		}
+		if a.DstName != b.DstName {
+			return a.DstName < b.DstName
+		}
+		return a.SrcSymbolQualified < b.SrcSymbolQualified
+	})
+
+	h := sha256.New()
+	for _, s := range syms {
+		fmt.Fprintf(h, "s|%s|%s|%d:%d-%d:%d|%s|%x\n",
+			s.Qualified, s.Kind, s.StartLine, s.StartCol, s.EndLine, s.EndCol, s.Visibility, s.Hash)
+	}
+	for _, r := range rs {
+		fmt.Fprintf(h, "r|%s|%s|%s|%d:%d|%d\n",
+			r.SrcSymbolQualified, r.DstName, r.Kind, r.Line, r.Col, r.ResolverVersion)
+	}
+	return h.Sum(nil)
 }

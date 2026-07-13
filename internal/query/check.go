@@ -235,3 +235,42 @@ func (r *Reader) FilesFreshness(ctx context.Context, paths []string) ([]FileFres
 	}
 	return out, rows.Err()
 }
+
+// NamesExist reports which of the given short names are still carried
+// by any symbol in the index — the disambiguation input for classifying
+// bare textual references to removed symbols.
+func (r *Reader) NamesExist(ctx context.Context, names []string) (map[string]struct{}, error) {
+	out := map[string]struct{}{}
+	const chunk = 500
+	for start := 0; start < len(names); start += chunk {
+		end := start + chunk
+		if end > len(names) {
+			end = len(names)
+		}
+		part := names[start:end]
+		placeholders := "?" + strings.Repeat(",?", len(part)-1)
+		args := make([]any, len(part))
+		for i, n := range part {
+			args[i] = n
+		}
+		rows, err := r.db.QueryContext(ctx,
+			`SELECT DISTINCT name FROM symbols WHERE name IN (`+placeholders+`)`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("names exist: %w", err)
+		}
+		for rows.Next() {
+			var n string
+			if err := rows.Scan(&n); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[n] = struct{}{}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	return out, nil
+}
